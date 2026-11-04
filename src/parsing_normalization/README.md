@@ -2,6 +2,18 @@
 
 This repository contains the Phase 1 EVTX-to-JSONL converter and the Phase 2 normalization and SQLite code. It excludes the event collection and generated artifacts.
 
+## Project data
+
+The source collection and database are hosted on Google Drive. Access depends on the Drive sharing permissions; links do not grant access by themselves.
+
+- [Source EVTX collection (full_collection)](https://drive.google.com/drive/folders/1W2gd4sIYXnFoPjR9Jq2ZqiuJKiRNf6Qv)
+- [Data folder](https://drive.google.com/drive/folders/1PaOftpJQFeg7F_Sa_W7SFNUaQSEohMaB)
+- [Normalized SQLite database (attack_path.sqlite3, 17,369,427,968 bytes)](https://drive.google.com/file/d/1mYOcXwWmzUUEH0Vre6IO6ZshydbdsHMj/view?usp=sharing)
+
+To query the existing database locally, download it to `data/processed/attack_path.sqlite3` under this project directory and open it with a SQLite client. Keep the downloaded source EVTX collection in a separate input directory.
+
+The linked data folder was observed to contain the SQLite database. The Phase 1 JSONL output, conversion manifest, parse-error file, and normalization profile are not confirmed available at these links; the existing full-import command requires its Phase 1 input and profile, as described below.
+
 ## Setup
 
 Python 3.11 or newer and the `evtx` package are required. On Windows, from this directory:
