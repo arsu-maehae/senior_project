@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.test_tmp/
+.venv/
+*.egg-info/
+build/
+dist/
+data/
+*.evtx
+*.evt
+*.jsonl
+*.sqlite3
+*.sqlite3-*
+*.sqlite3.tmp
+
