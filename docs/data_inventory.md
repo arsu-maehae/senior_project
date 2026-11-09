@@ -7,7 +7,7 @@ Topology comes from handoff §19–21 (findings files unavailable). Cells: `pres
 
 Layout: `data/raw/<scenario>/<trial>/<host>/<channel>.evtx`; scenarios `s01`–`s07`; dry runs are `t00`, real trials `t01`–`t10`.
 
-## S01: RDP EP-01→EP-02 (handoff §21: svc_backup, 4624 Type 10)
+## S01 (**target side only — source EP-01 and DC01 files are S02 exports filed under S01**; excluded from the development set): RDP EP-01→EP-02 (handoff §21: svc_backup, 4624 Type 10)
 
 | host | security | sysmon | system | winrm | powershell | psclassic |
 |---|---|---|---|---|---|---|
@@ -84,12 +84,12 @@ Layout: `data/raw/<scenario>/<trial>/<host>/<channel>.evtx`; scenarios `s01`–`
 - First/last event times in the manifest are file bounds, not run windows. The manifest `date` column is file mtime and is **unreliable** (earlier than the last event in most files); do not use it as export time.
 - `s01/t00/ep-03` System and WinRM carry computer name `WIN-V4KV8HLJS0B` (pre-rename default name).
 
-- S06 hosts are not stated in the handoff; no gap can be judged, all cells unconfirmed.
+- S06 (benign baseline): expected hosts are **unconfirmed — settle in T5 answer keys**. This is not a gap.
 
 ## Time coverage (added after fact-check; the presence rule alone is not enough)
 | scenario | host | file window (UTC, 2026-09-24) | status |
 |---|---|---|---|
-| s01 | dc01, ep-01 | 04:54 → 05:50 | **real gap (time):** byte-identical to s02, ends before the S01 hop |
+| s01 | dc01, ep-01 | 04:54 → 05:50 | **explained:** byte-identical to s02, ends before the S01 hop (S02 exports filed under S01) |
 | s01 | ep-02 | 06:06 → 08:17 | target side present: 7 remote Type 3 logons from 192.168.50.21 at 07:44–08:07 |
 | s01 | ep-01 Sysmon | 04:54 → 05:50 | 0 connections to port 3389, so the source side of the RDP hop is **missing** |
 
@@ -97,5 +97,5 @@ Not yet checked: time overlap for s02–s07 (to do in T4 with `/log-check`).
 
 ## Gap summary
 
-- **Real gap (time window): S01 ep-01 and dc01.** The S01 exports end at 05:50, 16 minutes before EP-02's window starts, and match S02 byte for byte. Needs a correct EP-01 + DC01 export of the S01 window, or an explicit decision to accept S01 t00 as target-side only.
-- No presence gaps against the rule for S02–S05 and S07. S06 cannot be judged (topology unconfirmed).
+- **S01 t00 ep-01 and dc01: explained, not fixed (decision 001).** The files end at 05:50, 16 minutes before EP-02's window starts, and match S02 byte for byte. User verdict: target side only — source EP-01 and DC01 files are S02 exports filed under S01. S01 t00 is excluded from the development set; S01 t01 replaces it.
+- No presence gaps against the rule for S02–S05 and S07. S06 expectations are "unconfirmed — settle in T5 answer keys", not a gap.

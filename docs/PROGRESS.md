@@ -23,3 +23,11 @@ A summary block at the end of each big task. Newest at the bottom.
 2026-11-09 · T1 1.3 decisions · 001 S01 EP-02 export, 002 .evt is EVTX, 003 non-event and identical files · a41edad · 001–003
 2026-11-09 · T1 1.1/1.2/1.4/1.6 data_layout · map/copy/manifest CLI; 22 tests; 80 files copied to data/raw (t00), 6 ignored, incoming hashes unchanged, manifest 80 rows · bdd4755 · none
 2026-11-09 · T1 1.7 inventory · docs/data_inventory.md; fact-check found S01 dc01/ep-01 are S02 exports (end 05:50, EP-02 window 06:06–08:17) → real gap, T1 NOT done · f0c0eae + next commit · 001, 003 amended
+2026-11-09 · T1 close · S01 t00 labelled "target side only", excluded from development set (user verdict, decision 001); S06 expectations "unconfirmed — settle in T5"; hook uses $CLAUDE_PROJECT_DIR (tested from /tmp in Git Bash, exit 0) · see commit · 001
+
+### T1 summary (2026-11-09)
+- **Built:** `src/data_layout/` (map, copy, manifest; reusable for `/ingest-trial`), 22 unit tests; 80 dry-run files in `data/raw/*/t00/`, 6 ignored; `data/manifest.csv` (80 rows); `docs/data_inventory.md`.
+- **Decisions:** [001](decisions/001-s01-ep02-export.md), [002](decisions/002-evt-file-s06.md), [003](decisions/003-non-event-and-duplicate-files.md).
+- **Tests:** 29 passed (7 parser + 22 data_layout). Incoming hashes unchanged before/after copy.
+- **Open:** 1.5 waits for the real trials. Time overlap for S02–S07 is not checked yet (T4 `/log-check`). Manifest `date` is file mtime and unreliable.
+- **Check by hand:** ten rows of `data/manifest.csv` (especially s01 and s06), and the "Time coverage" section of the inventory.

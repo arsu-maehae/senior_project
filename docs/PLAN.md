@@ -3,7 +3,7 @@
 Status marks: `[ ]` todo · `[~]` in progress · `[x]` done. The coordinator (`/next`) updates this file.
 Critical path: T1 → T3 → T4 → T6 → **T7** → T9 → T10. T2, T5, T8 run alongside.
 
-Data split: **development** = cleaned dry runs + trial 1 of each scenario · **test** = trials 2–10 (locked answer keys).
+Data split: **development** = t00 (dry run) for S02–S07 + t01 for S01 once collected (S01 t00 is excluded: target side only — source EP-01 and DC01 files are S02 exports filed under S01) · **test** = trials 2–10 (locked answer keys).
 Never tune code or weights on the test set.
 
 ## T0. Setup — depends on: nothing  (DONE 2026-11-09)
@@ -13,7 +13,7 @@ Never tune code or weights on the test set.
 - [x] 0.4 Papers in docs/papers/
 **Done when:** a first `/next` run produces a plan for T1.
 
-## T1. Standardise the data — depends on: T0  (IN PROGRESS: S01 time-window gap, see data_inventory.md)
+## T1. Standardise the data — depends on: T0  (DONE 2026-11-09; 1.5 stays open for the real trials)
 - [x] 1.1 Layout `data/raw/<scenario>/<trial>/<host>/<channel>.evtx`
 - [x] 1.2 Mapping CSV for the dry runs (old path → new path)
 - [x] 1.3 Resolve: S01 EP-02 exported twice, the `.evt` file in S06, non-log files
@@ -21,7 +21,7 @@ Never tune code or weights on the test set.
 - [ ] 1.5 Same for the ×10 trials as they arrive (`/ingest-trial`) — scripts ready, no trials yet
 - [x] 1.6 `data/manifest.csv` (path, hash, size, scenario, trial, host, channel)
 - [x] 1.7 `docs/data_inventory.md`: expected vs present hosts/channels per scenario
-**Done when:** every gap in the inventory is fixed or explained.
+**Done when:** every gap in the inventory is fixed or explained. (S01 t00 gap explained, decision 001; S06 expectations settled in T5.)
 
 ## T2. Collect S01 ×10 — owner: user (manual RDP)
 - [ ] 2.1 Checklist for one trial (revert → run → export)

@@ -17,6 +17,8 @@ Also: the WinRM and System files in `ep-02/dryrun_s01` carry the computer name `
 - The S01 EP-01 and DC01 exports end at 05:50 and are byte-identical to the S02 exports. EP-01 Sysmon has **no** connection to port 3389. So the **source side** of the S01 hop (Sysmon 3, ProcessGuid, session) and the DC Kerberos events are **not in the data**.
 - Choosing the right EP-02 file is still correct (the other one has no event on 2026-09-24). It does not fix the missing source side. See the inventory, "Time coverage".
 
+**Verdict (user, 2026-11-09): S01 t00 is "target side only — source EP-01 and DC01 files are S02 exports filed under S01".** It is excluded from the development set. S01 t01 (manual RDP, to be collected) becomes the S01 development trial.
+
 ## Options considered
 | Option | Pros | Cons |
 |---|---|---|
