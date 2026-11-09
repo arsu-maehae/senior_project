@@ -9,7 +9,9 @@
       "PowerShell(python *)",
       "PowerShell(pytest *)",
       "PowerShell(git add *)",
-      "PowerShell(git commit *)"
+      "PowerShell(git commit *)",
+      "Bash(python -m pytest *)",
+      "PowerShell(python -m pytest *)"
     ],
     "deny": [
       "Bash(git push *)",
@@ -26,7 +28,10 @@
       {
         "matcher": "Edit|Write",
         "hooks": [
-          { "type": "command", "command": "python .claude/hooks/run_unit_tests.py" }
+          {
+            "type": "command",
+            "command": "python .claude/hooks/run_unit_tests.py"
+          }
         ]
       }
     ]
