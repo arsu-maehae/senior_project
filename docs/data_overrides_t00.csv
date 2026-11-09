@@ -1,0 +1,6 @@
+source_path,action,reason
+ep-02/dryrun_s01/Microsoft-Windows-PowerShell_Operational.evtx,ignore,"export ends 2026-09-15, predates S01 run of 2026-09-24; superseded by ep-01/Dryrun_S01/EP-02"
+ep-02/dryrun_s01/Microsoft-Windows-Sysmon_Operational.evtx,ignore,"export ends 2026-09-15, predates S01 run of 2026-09-24; superseded by ep-01/Dryrun_S01/EP-02"
+ep-02/dryrun_s01/Microsoft-Windows-WinRM_Operational.evtx,ignore,"export ends 2026-09-15, predates S01 run of 2026-09-24; superseded by ep-01/Dryrun_S01/EP-02"
+ep-02/dryrun_s01/Security.evtx,ignore,"export ends 2026-09-15, predates S01 run of 2026-09-24; superseded by ep-01/Dryrun_S01/EP-02"
+ep-02/dryrun_s01/System.evtx,ignore,"export ends 2026-09-15, predates S01 run of 2026-09-24; superseded by ep-01/Dryrun_S01/EP-02"
