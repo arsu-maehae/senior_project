@@ -23,7 +23,8 @@ EVTX → JSONL → normalise → SQLite (one DB per trial) → gate → stitch �
 - **Wording**: never claim "reduces false positives", "detects stolen accounts" or "identifies the attacker". Say "ranks", "exposed", "expected, to be measured".
 
 ## Data rules
-- Never modify files under `data/` (raw EVTX, JSONL, SQLite) or `ground_truth/approved/`. Claude writes answer-key drafts only to `ground_truth/drafts/`; the user approves and moves them. Write outputs to `out/<stage>/<trial_id>/`.
+- `data/incoming/` = untouched original copies, never modify. `data/raw/` = written only by the copy/ingest scripts, never edited afterwards. `data/processed/`, `data/sample/` and `out/` = pipeline outputs. `data/manifest.csv` is maintained by the scripts.
+- Never modify `ground_truth/approved/` or `docs/papers/`. Claude writes answer-key drafts only to `ground_truth/drafts/`; the user approves and moves them. Write outputs to `out/<stage>/<trial_id>/`.
 - Work on `data/sample/` (S02 t01, S04 t01, S05 t01) first; run all 70 trials only after a stage passes review.
 - Use the deduplicated view `events_dedup`, not `events`, for analysis.
 

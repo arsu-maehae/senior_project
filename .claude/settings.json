@@ -16,8 +16,8 @@
     "deny": [
       "Bash(git push *)",
       "PowerShell(git push *)",
-      "Edit(./data/**)",
-      "Write(./data/**)",
+      "Edit(./data/incoming/**)",
+      "Write(./data/incoming/**)",
       "Edit(./ground_truth/approved/**)",
       "Write(./ground_truth/approved/**)",
       "Edit(./docs/papers/**)"
