@@ -36,8 +36,22 @@ def main(argv: list[str] | None = None) -> int:
     profile.add_argument("--output", required=True, type=Path)
     profile.add_argument("--test-summary", default="Not recorded")
     profile.add_argument("--overwrite", action="store_true", help="Replace only existing Phase 2B profile outputs")
+    trial = sub.add_parser("import-trial", help="Import one trial's Phase 1 JSONL into a per-trial SQLite file")
+    trial.add_argument("--jsonl", required=True, type=Path)
+    trial.add_argument("--scenario", required=True)
+    trial.add_argument("--trial", required=True)
+    trial.add_argument("--database", required=True, type=Path)
+    trial.add_argument("--report-dir", type=Path, default=Path("out/normalise"))
     args = parser.parse_args(argv)
     try:
+        if args.operation == "import-trial":
+            from .trial_import import run_trial_import
+            result = run_trial_import(args.jsonl, args.scenario, args.trial, args.database, args.report_dir)
+            print(f"import-trial PASS: {result['events']:,} events; {result['events_dedup']:,} in events_dedup; "
+                  f"{result['duplicates_exact']:,} exact / {result['duplicates_near']:,} near duplicates; "
+                  f"{result['duration_seconds']}s ({result['events_per_second']} events/s)")
+            print(f"Database: {result['database']}")
+            return 0
         if args.operation == "inventory":
             reject_overlap(args.input, args.output.parent)
             data = inventory_json(args.input)
