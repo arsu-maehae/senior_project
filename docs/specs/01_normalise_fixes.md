@@ -44,6 +44,18 @@ One SQLite file per trial: `data/processed/<scenario>_<trial>.sqlite3` (e.g. `s0
 
 Not done in this stage: clock-skew offsets, port-reuse handling (stitching tests). Known gaps (fact-check): `session_id` is NULL for 4625, 4697, 4776, 4778/4779 (their ids stay in `subject_logon_id`/`target_logon_id` or `field_values_json`); for 4648 `account_name` is the account whose credentials were used, the process owner is in `subject_account`; for 4688 `process_id` is the creator's PID (`NewProcessId` is not in `process_id`).
 
+## 4c. Rules added after the stage review (attacker re-check, 2026-11-10; additions only, no owner rule changed)
+| ID | Rule | Source |
+|---|---|---|
+| NF-21 | WinRM 91: parse `resourceUri` of the form `... (DOMAIN\user clientIP: a.b.c.d)` into `account_name`, `domain`, `domain_short` and `source_ip` (the original string stays in `field_values_json`) | Review N2; s05_t00 ep-02 winrm line 1525 |
+| NF-22 | Security 5145: new column `relative_target_name` (RelativeTargetName); `share_path` stays ShareLocalPath | Review N3; s04_t00 ep-02 security line 5839 |
+| NF-23 | New column `event_utc` = Sysmon `UtcTime` (normalised like `timestamp_utc`) for Sysmon rows, equal to `timestamp_utc` for every other row. `timestamp_utc` stays the EVTX record time (ordering, dedup). Sysmon record time is 2 to 7 s later than `UtcTime` in the samples | Review N4; s02_t00 ep-02 sysmon line 214 (1.96 s), s05_t00 ep-02 sysmon line 107 (6.8 s) |
+| NF-24 | Security 4688: `process_id` = NewProcessId (the new process), `parent_process_id` = ProcessId (the creator). Other events keep today's meaning | Review N5; s02_t00 ep-02 security line 8 (new 0x700, creator 0x27d8) |
+| NF-25 | Security 4778/4779: `session_id` from `LogonID` | Review N9 |
+| NF-26 | Publish: after the rename, `PRAGMA journal_mode` of the published file must be `delete` (else fail and remove it); `trial_run.status = 'complete'` is the readiness flag; the JSON report is written before the rename | Review N10 |
+
+Recorded, not done in this stage: (N1) each DB holds the whole campaign history of its hosts, so the trial window must be applied in the stitch stage from answer-key start/end times (T5/T6); (N7) the importer cannot tell that an expected host/channel file is missing, `docs/data_inventory.md` is the expectation list; (N8) `normalization_issues` are not written to `normalization_errors`; (N6) see known gaps above.
+
 ## 5. Parameters
 None. CLI: `python -m evtx_pipeline.cli import-trial --jsonl <dir> --scenario s02 --trial t00 --database <path>`.
 
