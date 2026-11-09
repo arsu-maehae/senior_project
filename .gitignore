@@ -1,0 +1,9 @@
+# --- added for Claude Code setup ---
+data/
+out/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+.venv/
+.unit_test.log
+.claude/settings.local.json

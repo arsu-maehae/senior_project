@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python *)",
+      "Bash(pytest *)",
+      "Bash(sqlite3 *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "PowerShell(python *)",
+      "PowerShell(pytest *)",
+      "PowerShell(git add *)",
+      "PowerShell(git commit *)"
+    ],
+    "deny": [
+      "Bash(git push *)",
+      "PowerShell(git push *)",
+      "Edit(./data/**)",
+      "Write(./data/**)",
+      "Edit(./ground_truth/approved/**)",
+      "Write(./ground_truth/approved/**)",
+      "Edit(./docs/papers/**)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          { "type": "command", "command": "python .claude/hooks/run_unit_tests.py" }
+        ]
+      }
+    ]
+  }
+}
