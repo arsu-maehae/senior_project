@@ -11,8 +11,8 @@ Layout: `data/raw/<scenario>/<trial>/<host>/<channel>.evtx`; scenarios `s01`–`
 
 | host | security | sysmon | system | winrm | powershell | psclassic |
 |---|---|---|---|---|---|---|
-| dc01 | present (14823) | present (343) | present (241) | optional | optional | optional |
-| ep-01 | present (19301) | present (1806) | present (132) | optional | optional | optional |
+| dc01 | present but S02 copy — not usable for S01 (14823) | present but S02 copy — not usable for S01 (343) | present but S02 copy — not usable for S01 (241) | optional | optional | optional |
+| ep-01 | present but S02 copy — not usable for S01 (19301) | present but S02 copy — not usable for S01 (1806) | present but S02 copy — not usable for S01 (132) | optional | optional | optional |
 | ep-02 | present (20346) | present (1857) | present (223) | optional | optional | optional |
 | ep-03 | present (21582) **extra host** | present (86444) **extra host** | present (2490) **extra host** | present (1895) **extra host** | present (2207) **extra host** | not involved |
 
@@ -52,7 +52,7 @@ Layout: `data/raw/<scenario>/<trial>/<host>/<channel>.evtx`; scenarios `s01`–`
 | ep-02 | present (46604) | present (992) | present (169) | present (2304) | present (3943) | present (5859) |
 | ep-03 | present (774962) | present (13252) | present (1487) | present (2276) | present (2585) | present (5430) |
 
-## S06: benign WinRM + SMB; hosts NOT stated in handoff
+## S06: benign baseline — hosts unconfirmed, settle in T5
 
 | host | security | sysmon | system | winrm | powershell | psclassic |
 |---|---|---|---|---|---|---|
