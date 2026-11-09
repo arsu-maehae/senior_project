@@ -31,3 +31,13 @@ A summary block at the end of each big task. Newest at the bottom.
 - **Tests:** 29 passed (7 parser + 22 data_layout). Incoming hashes unchanged before/after copy.
 - **Open:** 1.5 waits for the real trials. Time overlap for S02–S07 is not checked yet (T4 `/log-check`). Manifest `date` is file mtime and unreliable.
 - **Check by hand:** ten rows of `data/manifest.csv` (especially s01 and s06), and the "Time coverage" section of the inventory.
+
+2026-11-10 · T3 spec + records · spec 01 revised (NF-11..NF-20, then NF-21..NF-26); decisions 004–010; attacker/fact-checker/data-checker reviews · 41520fb, 7dae15f · 004–010
+2026-11-10 · T3 code · trial_normalize.py (57dec16), trial_import.py + import-trial CLI (f8340fe), NF-21..26 (0e8ccc8); 261 tests pass, 1 strict xfail; 7 t00 DBs imported, counts reconcile with manifests; S02/S04/S05 in data/sample · see commits · 004–010
+
+### T3 summary (2026-11-10)
+- **Built:** `trial_normalize.py` (per-event rules), `trial_import.py` + `import-trial` CLI (per-trial DB, views `events_dedup`/`events_display`, independent accounting), unchanged `normalize.py`/`full_import.py` and their 7 tests. JSONL for 7 t00 trials in `data/processed/jsonl/`, DBs in `data/processed/s0N_t00.sqlite3`, samples in `data/sample/`. Review: `docs/reviews/01_normalise_fixes-2026-11-10.md`.
+- **Decisions:** [004](decisions/004-log-state-events.md) log-state events, [005](decisions/005-zero-logon-id-vs-port-zero.md) logon-ID 0 vs port 0, [006](decisions/006-trial-import-beside-full-import.md) new importer beside the old one, [007](decisions/007-raw-event-null.md) raw_event NULL, [008](decisions/008-account-name-and-domain.md) account_name/domain, [009](decisions/009-keep-4688.md) keep 4688, [010](decisions/010-event-utc-and-process-ids.md) event_utc and 4688 PIDs.
+- **Tests:** 261 passed, 1 xfailed (dedup ignores the host folder when Computer and payload are identical, accepted). Row accounting per file equals each manifest.
+- **Open:** (1) S02, S04, S07 have no SMB/RDP/WinRM Sysmon 3, so Correction I cannot link their hops from Sysmon 3: decide in T4 before T6/T7. (2) Sysmon clock outliers on ep-02/ep-03. (3) Trial windows must come from answer keys (T5/T6). (4) Importer cannot detect a missing expected file. Details in `docs/research/t3_data_findings.md`.
+- **Check by hand:** 10 rows of 4624 and 4769 (shown in the report) and 10 rows of `events_display` for 4688/Sysmon 3 in `data/sample/s02_t00.sqlite3`.

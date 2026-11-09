@@ -25,7 +25,7 @@ Hosts hold events from several days (09-17, 09-21, 09-22, and the previous trial
 - `session_id` is non-NULL on every Sysmon 1 and 4688 row; no zero logon ids in any DB.
 
 ## 5. Sysmon record time vs event time (measured 2026-11-10, `events.timestamp_utc - events.event_utc`)
-- dc01, ep-01 (all trials), ep-02 (s01, s02, s04, s05), s04/s05/s07 ep-01: gap 0 to 60 s (max 28.2 s). Normal.
-- ep-03 (s01, s03, s05, s06): 46 rows with a negative gap (min -11.5 s; s01 184 rows, min -26.3 s) and 114 rows over 60 s (max 59,944.6 s = 16.6 h, e.g. Sysmon 1 with UtcTime 2026-09-21T12:56:23Z and record time 2026-09-22T05:35:28Z).
+- dc01 and ep-01 (all trials): gap 0 to 60 s (max 28.2 s). ep-02 in s01, s02, s04, s05: 0 to 60 s (max 13.8 s). Normal.
+- ep-03: negative gaps in s01 (184 rows, min -26.3 s) and in s03, s05, s06 (46 rows each, min -11.5 s); 114 rows over 60 s in s03, s05, s06 only (max 59,944.6 s = 16.6 h, e.g. Sysmon 1 with UtcTime 2026-09-21T12:56:23Z and record time 2026-09-22T05:35:28Z).
 - ep-02 in s06 and s07: 12 and 14 rows over 60 s (max 6,638 s and 7,341 s).
-- Reading: clock steps or snapshot resume on the VMs hosted on VMware (host C). Not a code defect. Effect: time-window and time-delta rules in stitching must use a tolerance and flag rows from ep-02/ep-03 whose gap exceeds 60 s. T4 to check clock offsets against the DC.
+- Expected reading, to be measured in T4: clock steps or snapshot resume on the VMs hosted on VMware (host C). Not a code defect. Effect: time-window and time-delta rules in stitching must use a tolerance and flag rows from ep-02/ep-03 whose gap exceeds 60 s. T4 to check clock offsets against the DC.

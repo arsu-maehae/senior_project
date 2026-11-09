@@ -27,16 +27,16 @@ Never tune code or weights on the test set.
 - [ ] 2.1 Checklist for one trial (revert → run → export)
 - [ ] 2.2 Ten trials collected → `/ingest-trial`
 
-## T3. Normaliser fixes — depends on: T1 — spec: docs/specs/01_normalise_fixes.md
-- [ ] 3.1 trial_id; no hard-coded counts/paths (NF-01, NF-02)
-- [ ] 3.2 IpPort → source_port (NF-03)
-- [ ] 3.3 account_name; Sysmon 10 SourceUser (NF-04, NF-05)
-- [ ] 3.4 No Execution ProcessID fallback for Security/System/WinRM (NF-06)
-- [ ] 3.5 Views events_display (hex) and events_dedup (NF-07, NF-08)
-- [ ] 3.6 One DB per trial, relevant events + logoffs, raw pointer (NF-09)
-- [ ] 3.7 Host names one style (NF-10)
-- [ ] 3.8 Unit tests with one real example per event type
-- [ ] 3.9 Import all available trials; counts match manifests
+## T3. Normaliser fixes — depends on: T1 — spec: docs/specs/01_normalise_fixes.md  (DONE 2026-11-10)
+- [x] 3.1 trial_id; no hard-coded counts/paths (NF-01, NF-02)
+- [x] 3.2 IpPort → source_port (NF-03)
+- [x] 3.3 account_name; Sysmon 10 SourceUser (NF-04, NF-05)
+- [x] 3.4 No Execution ProcessID fallback for Security/System/WinRM (NF-06)
+- [x] 3.5 Views events_display (hex) and events_dedup (NF-07, NF-08)
+- [x] 3.6 One DB per trial, relevant events + logoffs, raw pointer (NF-09)
+- [x] 3.7 Host names one style (NF-10)
+- [x] 3.8 Unit tests with one real example per event type
+- [x] 3.9 Import all available trials; counts match manifests
 **Done when:** tests pass and counts match.
 
 ## T4. Data reality check — depends on: T3
