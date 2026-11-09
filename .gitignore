@@ -9,3 +9,5 @@ out/
 .claude/settings.local.json
 desktop.ini
 .pytest_cache/
+__pycache__/
+*.pyc
