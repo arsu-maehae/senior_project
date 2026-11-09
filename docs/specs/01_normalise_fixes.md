@@ -23,7 +23,7 @@ One SQLite file per trial: `data/processed/<scenario>_<trial>.sqlite3` (e.g. `s0
 | NF-05 | Read Sysmon 10 `SourceUser` (and `TargetUser`) into subject/target account | Review fix 3 |
 | NF-06 | Do not fall back to the XML `Execution ProcessID` for Security, System and WinRM channels | Review fix 6 (`normalize.py:322`) |
 | NF-07 | View `events_display` adds `printf('0x%x', …)` hex for subject_logon_id, target_logon_id, session_id | D1 |
-| NF-08 | View `events_dedup` keeps one row per `duplicate_content_sha256` (lowest event_uid) | Review fix 5 |
+| NF-08 | View `events_dedup` keeps one row per `duplicate_content_sha256`; the survivor is chosen by NF-19 (lowest `source_relative_path`, `source_line`), not by event_uid. The digest covers `system` + `event_data` + `user_data` (so it includes `Computer`) and not the host folder: identical payload with the same Computer in two folders counts as one event (accepted; strict xfail in `test_trial_import.py`) | Review fix 5 |
 | NF-09 | Analysis DB keeps only `RELEVANT_EVENT_IDS` plus Security 4634/4647 logoffs (session end) and 4688 if present; plus the **log-state events** Security 1102 and System 104 (log cleared) and System 6005, 6006, 6008, 41, 1074 (start, stop, unexpected shutdown, restart), decision 004. `raw_event` is stored as **NULL**; raw stays in the JSONL; new column `source_line` (1-based line in the JSONL file) plus `source_relative_path` is the pointer; `raw_event_sha256` stays | SQLite size (17.4 GB for 85 files) |
 | NF-10 | Host names in one style, all lowercase: `dc01`, `ep-01`, `ep-02`, `ep-03`. The host set lives in one constant | Review fix 8; T1 layout |
 
@@ -42,7 +42,7 @@ One SQLite file per trial: `data/processed/<scenario>_<trial>.sqlite3` (e.g. `s0
 | NF-19 | `events_dedup` survivor = lowest (`source_relative_path`, `source_line`); near-duplicates (same host/channel/event_id/record_id, different payload) are listed in `duplicate_events` but kept in the view; the dedup count is not part of the accounting | Attacker 10 |
 | NF-20 | `events_display` shows NULL for NULL ids (no `0x0`); readers of `source_line` iterate lines by `\n` only | Attacker 11 |
 
-Not done in this stage: clock-skew offsets, port-reuse handling (stitching tests).
+Not done in this stage: clock-skew offsets, port-reuse handling (stitching tests). Known gaps (fact-check): `session_id` is NULL for 4625, 4697, 4776, 4778/4779 (their ids stay in `subject_logon_id`/`target_logon_id` or `field_values_json`); for 4648 `account_name` is the account whose credentials were used, the process owner is in `subject_account`; for 4688 `process_id` is the creator's PID (`NewProcessId` is not in `process_id`).
 
 ## 5. Parameters
 None. CLI: `python -m evtx_pipeline.cli import-trial --jsonl <dir> --scenario s02 --trial t00 --database <path>`.

@@ -12,7 +12,7 @@
 | B. Add `trial_import.py`, reuse helpers | Old code and tests untouched; per-trial rules in one new module | Some duplicated glue |
 
 ## Decision
-Option B (owner, 2026-11-09). `full_import.py` and its tests stay untouched; `trial_import.py` reuses `normalize_event`, `_row_values`, `_insert_batch` and the duplicate-ledger code where they fit.
+Option B (owner, 2026-11-09). `full_import.py` and its tests stay untouched; `trial_import.py` calls the reviewed `normalize_event` (through `normalize_trial_event`) and the `normalize` and `schema` helpers; it has its own row insert and duplicate-ledger code (fact-check 2026-11-10: nothing is imported from `full_import.py`).
 
 ## Consequences
 The old command keeps working on the original run. Trial imports get their own checks (NF-17).
