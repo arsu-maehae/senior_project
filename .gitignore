@@ -7,3 +7,4 @@ out/
 .venv/
 .unit_test.log
 .claude/settings.local.json
+desktop.ini
