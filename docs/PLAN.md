@@ -13,14 +13,14 @@ Never tune code or weights on the test set.
 - [x] 0.4 Papers in docs/papers/
 **Done when:** a first `/next` run produces a plan for T1.
 
-## T1. Standardise the data — depends on: T0
-- [ ] 1.1 Layout `data/raw/<scenario>/<trial>/<host>/<channel>.evtx`
-- [ ] 1.2 Mapping CSV for the dry runs (old path → new path)
-- [ ] 1.3 Resolve: S01 EP-02 exported twice, the `.evt` file in S06, non-log files
-- [ ] 1.4 Copy script using the mapping (never move originals)
-- [ ] 1.5 Same for the ×10 trials as they arrive (`/ingest-trial`)
-- [ ] 1.6 `data/manifest.csv` (path, hash, size, scenario, trial, host, channel)
-- [ ] 1.7 `docs/data_inventory.md`: expected vs present hosts/channels per scenario
+## T1. Standardise the data — depends on: T0  (IN PROGRESS: S01 time-window gap, see data_inventory.md)
+- [x] 1.1 Layout `data/raw/<scenario>/<trial>/<host>/<channel>.evtx`
+- [x] 1.2 Mapping CSV for the dry runs (old path → new path)
+- [x] 1.3 Resolve: S01 EP-02 exported twice, the `.evt` file in S06, non-log files
+- [x] 1.4 Copy script using the mapping (never move originals)
+- [ ] 1.5 Same for the ×10 trials as they arrive (`/ingest-trial`) — scripts ready, no trials yet
+- [x] 1.6 `data/manifest.csv` (path, hash, size, scenario, trial, host, channel)
+- [x] 1.7 `docs/data_inventory.md`: expected vs present hosts/channels per scenario
 **Done when:** every gap in the inventory is fixed or explained.
 
 ## T2. Collect S01 ×10 — owner: user (manual RDP)

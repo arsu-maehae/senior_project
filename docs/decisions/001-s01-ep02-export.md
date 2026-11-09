@@ -12,6 +12,11 @@ EP-02 for the S01 dry run exists twice in `data/incoming/dryrun`. They are not b
 
 Also: the WinRM and System files in `ep-02/dryrun_s01` carry the computer name `WIN-B395B3RKK73`, a default Windows name, not `Endpoint-02`. The same pattern appears in `ep-03/dryrun_s01` (`WIN-V4KV8HLJS0B`).
 
+## Added after the fact-check (same day): the time windows do not line up
+- The kept EP-02 export (06:06 → 08:17) holds the target side of the hop: seven remote Type 3 logons from 192.168.50.21 between 07:44 and 08:07 (`admin_it` and `svc_backup`).
+- The S01 EP-01 and DC01 exports end at 05:50 and are byte-identical to the S02 exports. EP-01 Sysmon has **no** connection to port 3389. So the **source side** of the S01 hop (Sysmon 3, ProcessGuid, session) and the DC Kerberos events are **not in the data**.
+- Choosing the right EP-02 file is still correct (the other one has no event on 2026-09-24). It does not fix the missing source side. See the inventory, "Time coverage".
+
 ## Options considered
 | Option | Pros | Cons |
 |---|---|---|
@@ -30,7 +35,7 @@ Option A. `ep-01/Dryrun_S01/EP-02/*` becomes `s01/t00/ep-02/{security,sysmon,sys
 - Limitation for the report: some dry-run logs are cumulative from the VM snapshot, not trimmed to the run window.
 
 ## Kill criteria
-If the S01 answer key or Caldera/operator notes place the S01 run before 2026-09-15, switch to option B.
+If the S01 answer key or Caldera/operator notes place the S01 run before 2026-09-15, switch to option B. If a correct EP-01 and DC01 export for the S01 window (about 07:40–08:10 on 2026-09-24) is supplied, replace the copied S01 files.
 
 ## Committee answer
 **EN:** We kept the EP-02 export whose timestamps cover the S01 run (2026-09-24); the other one ends nine days earlier, so it cannot contain the attack.

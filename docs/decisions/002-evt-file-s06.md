@@ -3,7 +3,7 @@
 **Date:** 2026-11-09 · **Status:** accepted · **Task:** T1 / 1.3
 
 ## Context
-`ep-01/Dryrun_S06/EP01_PowerShell.evt` has an `.evt` extension. Legacy EVT files start with `LfLe`; EVTX files start with `ElfFile\0`.
+`ep-01/Dryrun_S06/EP01_PowerShell.evt` has an `.evt` extension. Legacy EVT files carry the signature `LfLe` (at byte offset 4); EVTX files start with `ElfFile\0` at byte 0.
 - Header bytes: `45 6c 66 46 69 6c 65 00` = `ElfFile\0` (EVTX).
 - Size 1,118,208 bytes. The `evtx` parser reads 151 records (id 1–151), 2026-09-24 09:26 → 2026-10-12 09:07 UTC, with no error.
 - First record: Channel `Microsoft-Windows-PowerShell/Operational`, Computer `Endpoint-01.lab.local`.

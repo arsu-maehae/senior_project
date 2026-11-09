@@ -20,7 +20,8 @@
 3. Dry runs get trial id `t00`; real trials are `t01`–`t10`. The word "dryrun" is not used under `data/raw`.
 
 ## Consequences
-Cross-scenario analysis must not merge s01 and s02 dry-run logs. Dry-run scenarios share cumulative logs, so event-time windows must come from the answer key, not from the file bounds.
+Cross-scenario analysis must not merge s01 and s02 dry-run logs.
+**Correction after the fact-check:** these pairs are not "cumulative logs". They end at 2026-09-24 05:50, which is the S02 window. The S01 DC01 and EP-01 files are most likely S02 exports filed under S01, so they probably hold no S01 events. Event-time windows must come from the answer key, not from file bounds. The manifest `date` column (file mtime) is also unreliable: it is earlier than the last event in most files, so it is not the export time.
 
 ## Kill criteria
 If T4 finds the S01 and S02 windows cannot be separated at all, mark one of them unusable as a development trial.

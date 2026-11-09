@@ -20,3 +20,6 @@ A summary block at the end of each big task. Newest at the bottom.
 - **Tests:** `.venv\Scripts\python.exe -m pytest` → 7 passed (src/parsing_normalization/tests). tests/unit is still empty.
 - **Open questions:** S02–S07 x10 trials are "not copied yet", so T1 starts with the dry runs in data/incoming/dryrun. The hook command in settings.json uses a relative `.venv/` path, so Claude Code must start from the repo root.
 - **Check by hand:** `/agents` is gone in this Claude Code version; the 6 agents were confirmed by listing them.
+2026-11-09 · T1 1.3 decisions · 001 S01 EP-02 export, 002 .evt is EVTX, 003 non-event and identical files · a41edad · 001–003
+2026-11-09 · T1 1.1/1.2/1.4/1.6 data_layout · map/copy/manifest CLI; 22 tests; 80 files copied to data/raw (t00), 6 ignored, incoming hashes unchanged, manifest 80 rows · bdd4755 · none
+2026-11-09 · T1 1.7 inventory · docs/data_inventory.md; fact-check found S01 dc01/ep-01 are S02 exports (end 05:50, EP-02 window 06:06–08:17) → real gap, T1 NOT done · f0c0eae + next commit · 001, 003 amended
