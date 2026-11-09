@@ -1,0 +1,2 @@
+trial_id,start_utc,end_utc,status,anchors,note
+s01_t00,2026-09-24T06:06:00Z,2026-09-24T08:17:30Z,PROVISIONAL_OVERRIDE,ep-02 remote logons 07:44-08:07,EP-01 and DC01 files are S02 exports (decision 001); window = span of the S01 ep-02 export; reference only
