@@ -1,6 +1,6 @@
 # Stage spec: 01_normalise_fixes
 
-**Owner:** stage owner (the user) · **Status:** revised 2026-11-09, approved in advance by the owner; attacker review pending · Builds on `src/parsing_normalization` (reviewed 2026-11-09). Old `full_import.py` and its 7 tests stay untouched; the new code is `evtx_pipeline/trial_import.py` beside them.
+**Owner:** stage owner (the user) · **Status:** revised 2026-11-10; owner approved the attacker findings (NF-11 to NF-20) · Builds on `src/parsing_normalization` (reviewed 2026-11-09). Old `full_import.py` and its 7 tests stay untouched; the new code is `evtx_pipeline/trial_import.py` beside them.
 
 ## 1. Purpose
 Make the existing parser/normaliser work for all 70 trials and for cross-host linking. Not a rewrite.
@@ -24,8 +24,25 @@ One SQLite file per trial: `data/processed/<scenario>_<trial>.sqlite3` (e.g. `s0
 | NF-06 | Do not fall back to the XML `Execution ProcessID` for Security, System and WinRM channels | Review fix 6 (`normalize.py:322`) |
 | NF-07 | View `events_display` adds `printf('0x%x', …)` hex for subject_logon_id, target_logon_id, session_id | D1 |
 | NF-08 | View `events_dedup` keeps one row per `duplicate_content_sha256` (lowest event_uid) | Review fix 5 |
-| NF-09 | Analysis DB keeps only `RELEVANT_EVENT_IDS` plus 4634/4647 logoffs (session end); 4688 is kept if present in Security. `raw_event` is stored as **NULL**; raw stays in the JSONL; new column `source_line` (1-based line in the JSONL file) plus `source_relative_path` is the pointer; `raw_event_sha256` stays | SQLite size (17.4 GB for 85 files) |
+| NF-09 | Analysis DB keeps only `RELEVANT_EVENT_IDS` plus Security 4634/4647 logoffs (session end) and 4688 if present; plus the **log-state events** Security 1102 and System 104 (log cleared) and System 6005, 6006, 6008, 41, 1074 (start, stop, unexpected shutdown, restart), decision 004. `raw_event` is stored as **NULL**; raw stays in the JSONL; new column `source_line` (1-based line in the JSONL file) plus `source_relative_path` is the pointer; `raw_event_sha256` stays | SQLite size (17.4 GB for 85 files) |
 | NF-10 | Host names in one style, all lowercase: `dc01`, `ep-01`, `ep-02`, `ep-03`. The host set lives in one constant | Review fix 8; T1 layout |
+
+
+## 4b. Rules added after the attacker review (owner approved 2026-11-10)
+| ID | Rule | Source |
+|---|---|---|
+| NF-11 | **Logon-ID column chosen by event ID**: `session_id` = TargetLogonId for 4624/4634; SubjectLogonId for 4647/4648/4672/4688/5140/5145; LogonId for Sysmon 1; NULL for events with no session. A logon id of `0x0` is stored as **NULL** in `session_id`, `subject_logon_id`, `target_logon_id`, `target_linked_logon_id`. (Ports differ: decision 005) | Attacker 1; JSONL s01_t00 dc01 line 2 (4688: Subject 0x5f3f3, Target 0x0) |
+| NF-12 | New column `target_linked_logon_id` (integer) from 4624 `TargetLinkedLogonId` (elevated twin session) | Attacker 3 |
+| NF-13 | `predefined_session` is set only for 4624/4634/4647/4648/4672, from the logon id (996 to 999) or a predefined account name (incl. `nt authority\anonymous logon`); never from the process owner of Sysmon 1/3/10/11 | Attacker 2 |
+| NF-14 | New typed columns: Sysmon 3 `initiated` (1/0); Sysmon 10 `source_image`, `granted_access`, `target_process_guid`. Sysmon `LogonGuid` goes to new column `sysmon_logon_guid`, NOT to `logon_guid` (`logon_guid` = Security 4624/4769 only). Sysmon 1/3/11 `User` fills `subject_account` and `account_name` | Attacker 4; Correction I |
+| NF-15 | Host rules: host = `<host>` folder (must be in the host set, else the import fails); `Computer` goes to `export_host`; `source_host` and `destination_host` are lowercased by the same function; a CLI scenario or trial that disagrees with the folder fails the import | Attacker 5 |
+| NF-16 | `raw_event` is NULL: the new trial schema relaxes the `NOT NULL`/`json_valid` constraint (old schema untouched). `raw_event_sha256` = sha256 of the canonical (sort_keys, compact) JSON of the Phase 1 line. `source_files` stores the JSONL path and its sha256. `source_line` counts physical lines split on `\n` only. `field_values_json` stays | Attacker 6, 11 |
+| NF-17 | Accounting is **counted independently, never subtracted**: per source file store emitted (from the manifest), lines read, kept, excluded_not_relevant, excluded_bad_event_id, blank_lines; abort if sums differ from the manifest or if `parse_errors.jsonl` is non-empty; a kept row with NULL `timestamp_utc` fails the import | Attacker 7, 11 |
+| NF-18 | `domain` as given; new `domain_short` = first label before `.`, lowercase (`LAB.LOCAL` gives `lab`); for Sysmon `User`/`SourceUser` the `DOMAIN\` prefix fills `domain`/`domain_short` before it is stripped; `machine_account` is derived from `account_name` ending in `$` | Attacker 8 |
+| NF-19 | `events_dedup` survivor = lowest (`source_relative_path`, `source_line`); near-duplicates (same host/channel/event_id/record_id, different payload) are listed in `duplicate_events` but kept in the view; the dedup count is not part of the accounting | Attacker 10 |
+| NF-20 | `events_display` shows NULL for NULL ids (no `0x0`); readers of `source_line` iterate lines by `\n` only | Attacker 11 |
+
+Not done in this stage: clock-skew offsets, port-reuse handling (stitching tests).
 
 ## 5. Parameters
 None. CLI: `python -m evtx_pipeline.cli import-trial --jsonl <dir> --scenario s02 --trial t00 --database <path>`.
@@ -34,7 +51,7 @@ None. CLI: `python -m evtx_pipeline.cli import-trial --jsonl <dir> --scenario s0
 | Case | Where | Expected | Test |
 |---|---|---|---|
 | 4769 TargetUserName `svc_backup@LAB.LOCAL` vs 4624 `svc_backup` + `LAB` | all Kerberos hops | same `account_name` = `svc_backup` | NF-T04 |
-| Machine accounts `EP-02$` | 4769 ServiceName, 4624 | `machine_account = 1`, `account_name = ep-02$` | NF-T05 |
+| Machine accounts `EP-02$` | 4624 TargetUserName; 4769 TargetUserName `ep-02$@LAB.LOCAL` | `machine_account = 1`, `account_name = ep-02$`. For 4769 the flag follows the requesting account; the service is in `service_name` | NF-T05 |
 | Duplicate export files | trial 1 (§21.8) | appear once in `events_dedup` | NF-T08 |
 | 4624 with IpPort `0` | Kerberos logons | `source_port = 0`; never used as a join key | NF-T03 |
 | Host from `<host>` folder vs `Computer` field (`WIN-…` default names) | s01 ep-03 System/WinRM | host = folder name; the raw computer name stays in `export_host` | NF-T10 |
@@ -45,6 +62,7 @@ None. CLI: `python -m evtx_pipeline.cli import-trial --jsonl <dir> --scenario s0
 - Sample: S02, S04 and S05 **t00** import with row counts equal to their manifests (kept + excluded = emitted); `log-check s02_t00` items 2 and 4 show IpPort populated and SMB port matches.
 - Logoff events 4634/4647 must be kept: they are needed to know when a session ended (identity, Correction K).
 - `events_dedup` row count ≤ `events` row count; `raw_event` is NULL in every row and every row has a `source_line`.
+- NF-11: the 4688 on s01_t00 dc01 JSONL line 2 gives `session_id = 0x5f3f3`; a Kerberos 4624 gives `subject_logon_id` NULL; no row has 0 in any logon-id column. NF-13: a Sysmon 3 SMB row with `User = NT AUTHORITY\SYSTEM` gives `predefined_session = 0`; a 4624 with TargetLogonId 0x3e7 gives 1. NF-15: a record with Computer EP-01 in folder ep-02 gives host ep-02. NF-17: a JSONL with one bad event id, one blank line and one irrelevant id reconciles, and the import exits non-zero if totals differ.
 
 ## 8. Settled questions
 | Question | Answer |
