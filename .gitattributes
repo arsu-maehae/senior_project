@@ -1,0 +1,2 @@
+# Evidence files: store byte-for-byte (their hashes are cited in docs/research and decisions)
+docs/lab/** -text
