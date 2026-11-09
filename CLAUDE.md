@@ -17,7 +17,7 @@ EVTX → JSONL → normalise → SQLite (one DB per trial) → gate → stitch �
 - **NodeScore** = mean Sigma rule level of labelled nodes (informational 0 … critical 4, /4) — substitution for TPPR's GNN score (Correction G).
 - **Merge** paths that share nodes; **never drop an isolated path** (Correction G.4).
 - **Identity** (Correction K): a cross-host hop = 1 if the moving account had a logon session **open on the SOURCE host** when LSASS was read there (Sysmon 10, T1003.001), and the move happened after that. Path value = fraction of hops = 1. Exposed ≠ stolen.
-- **Cross-host link** (Correction I): target 4624 (IpAddress, IpPort, account, time) ↔ source Sysmon 3 (SourceIp/Port, DestinationIp/Port) → ProcessGuid → Sysmon 1 → LogonId session. LogonGuid only **confirms** Kerberos hops (DC 4769 ↔ 4624). SMB connections show `Image = System`: anchor on the command process in the session.
+- **Cross-host link** (Correction I) — **UNDER REVIEW — council in T4** (decision 011: SMB was not logged by Sysmon): target 4624 (IpAddress, IpPort, account, time) ↔ source Sysmon 3 (SourceIp/Port, DestinationIp/Port) → ProcessGuid → Sysmon 1 → LogonId session. LogonGuid only **confirms** Kerberos hops (DC 4769 ↔ 4624). SMB connections show `Image = System`: anchor on the command process in the session.
 - **Gate**: primary triggers R4 SMB, R5 RDP (also remote Type 3 + port 3389), R6 service, R8 WinRM; suppression first (Type 2/11, system logon IDs 0x3e4/0x3e5/0x3e7, loopback). R1/R2/R3/R7 are supporting signals only (handoff §7.2).
 - **Logon IDs**: integer for joins, original hex for display (D1).
 - **Wording**: never claim "reduces false positives", "detects stolen accounts" or "identifies the attacker". Say "ranks", "exposed", "expected, to be measured".
