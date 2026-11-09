@@ -6,11 +6,11 @@ Critical path: T1 → T3 → T4 → T6 → **T7** → T9 → T10. T2, T5, T8 run
 Data split: **development** = cleaned dry runs + trial 1 of each scenario · **test** = trials 2–10 (locked answer keys).
 Never tune code or weights on the test set.
 
-## T0. Setup — depends on: nothing
-- [ ] 0.1 Repo layout (src/, tests/unit, tests/sample, docs/, data/, out/, ground_truth/drafts, ground_truth/approved)
-- [ ] 0.2 Kit installed; `/agents` shows 6 agents; skills listed
-- [ ] 0.3 Python venv works; existing parser tests run
-- [ ] 0.4 Papers in docs/papers/
+## T0. Setup — depends on: nothing  (DONE 2026-11-09)
+- [x] 0.1 Repo layout (src/, tests/unit, tests/sample, docs/, data/, out/, ground_truth/drafts, ground_truth/approved)
+- [x] 0.2 Kit installed; `/agents` shows 6 agents; skills listed
+- [x] 0.3 Python venv works; existing parser tests run
+- [x] 0.4 Papers in docs/papers/
 **Done when:** a first `/next` run produces a plan for T1.
 
 ## T1. Standardise the data — depends on: T0

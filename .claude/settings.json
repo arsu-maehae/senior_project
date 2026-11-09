@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python .claude/hooks/run_unit_tests.py"
+            "command": ".venv/Scripts/python.exe .claude/hooks/run_unit_tests.py"
           }
         ]
       }
