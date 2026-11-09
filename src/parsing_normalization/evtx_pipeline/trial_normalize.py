@@ -7,6 +7,7 @@ stay untouched (decision 006).  Everything here is pure: no DB, no file I/O.
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -19,6 +20,8 @@ from .normalize import (
     exact_duplicate_digest_from_event,
     normalize_event,
     normalize_guid,
+    normalize_ip,
+    normalize_timestamp,
     to_int,
 )
 
@@ -39,6 +42,7 @@ _SESSION_SUBJECT_EVENTS = {4648, 4672, 4688, 5140, 5145}
 # NF-13: events for which a "predefined session" flag has any meaning.
 _PREDEFINED_EVENTS = {4624, 4634, 4647, 4648, 4672}
 _PREDEFINED_LOGON_IDS = {996, 997, 998, 999}
+_WINRM_RESOURCE_RE = re.compile(r"\(\s*([^\\\s()]+)\\([^\s()]+)\s+clientIP:\s*([0-9a-fA-F:.]+(?:%[^\s()]+)?)\s*\)")
 _PREDEFINED_NAMES = {"system", "local service", "network service", "anonymous logon"}
 
 
@@ -131,6 +135,8 @@ def _pick_session_id(channel: str | None, event_id: int | None, fields: dict[str
                     or logon_id_or_none(_first(fields, "SubjectLogonId", "SubjectLogonID")))
         if event_id in _SESSION_SUBJECT_EVENTS:
             return logon_id_or_none(_first(fields, "SubjectLogonId", "SubjectLogonID"))
+        if event_id in {4778, 4779}:  # NF-25: reconnect/disconnect carry LogonID
+            return logon_id_or_none(_first(fields, "LogonID", "LogonId"))
     elif channel == "Sysmon" and event_id == 1:
         return logon_id_or_none(_first(fields, "LogonId", "LogonID"))
     return None
@@ -146,6 +152,34 @@ def _predefined_session(channel: str | None, event_id: int | None, session_id: i
     if channel != "Security" or event_id not in _PREDEFINED_EVENTS:
         return 0
     return int(session_id in _PREDEFINED_LOGON_IDS or owner_name in _PREDEFINED_NAMES)
+
+
+def parse_winrm_resource_uri(value: Any) -> tuple[str, str, str | None] | None:
+    """NF-21: (domain, user, client_ip) from a resourceUri ending in "(DOMAIN-slash-user clientIP: a.b.c.d)", else None.
+
+    WHY: WinRM 91 carries the remote account and client address only inside
+    this one string; without parsing, those rows cannot join to 4624.
+    """
+    text = _clean(value)
+    match = _WINRM_RESOURCE_RE.search(text) if text else None
+    if not match:
+        return None
+    # Strip an IPv6 zone id ('%4'); an address that still fails to parse gives None, account kept.
+    return match.group(1), match.group(2), normalize_ip(match.group(3).split("%", 1)[0])
+
+
+def parse_sysmon_utc_time(value: Any) -> str | None:
+    """NF-23: Sysmon UtcTime ('2026-09-24 05:38:02.691', no zone) as UTC ISO text.
+
+    WHY: Sysmon's UtcTime is UTC by definition; normalize_timestamp rejects
+    zone-less text, so the zone is added here.
+    """
+    text = _clean(value)
+    if text is None:
+        return None
+    if not re.search(r"(Z|[+-]\d\d:?\d\d)$", text):
+        text = text.replace(" ", "T") + "+00:00"
+    return normalize_timestamp(text)[0]
 
 
 def _sysmon_identity(event_id: int | None, fields: dict[str, list[Any]]) -> dict[str, Any]:
@@ -226,6 +260,28 @@ def normalize_trial_event(event: dict[str, Any], *, scenario_id: str, trial_id: 
         elif event_id == 3:
             flag = (_clean(_first(fields, "Initiated")) or "").casefold()
             row["initiated"] = 1 if flag == "true" else 0 if flag == "false" else None
+
+    # NF-21: WinRM 91 account and client IP from resourceUri.
+    if channel == "WinRM" and event_id == 91:
+        parsed = parse_winrm_resource_uri(_first(fields, "resourceUri"))
+        if parsed:
+            dom, user, ip = parsed
+            sysmon_dom, name_source = dom, user
+            row["domain"] = dom
+            row["account"] = row["account"] or (dom + "\\" + user).casefold()
+            row["source_ip"] = row["source_ip"] or ip
+
+    # NF-22: 5145 relative target name (share_path unchanged).
+    row["relative_target_name"] = (_clean(_first(fields, "RelativeTargetName"))
+                                   if channel == "Security" and event_id == 5145 else None)
+
+    # NF-23: event_utc = Sysmon UtcTime, else the record time.
+    row["event_utc"] = (parse_sysmon_utc_time(_first(fields, "UtcTime")) if channel == "Sysmon" else None)         or row["timestamp_utc"]
+
+    # NF-24: 4688 process ids (new process / creator).
+    if channel == "Security" and event_id == 4688:
+        row["process_id"] = to_int(_first(fields, "NewProcessId"))
+        row["parent_process_id"] = to_int(_first(fields, "ProcessId"))
 
     # NF-04/NF-18: bare name, domain, short domain, machine flag.
     if sysmon_dom is not None:

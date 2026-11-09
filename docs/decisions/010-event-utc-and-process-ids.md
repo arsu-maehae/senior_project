@@ -3,7 +3,7 @@
 **Date:** 2026-11-10 · **Status:** accepted · **Task:** T3
 
 ## Context
-The attacker's re-check found two columns whose meaning would mislead the stitcher. (1) `timestamp_utc` is the EVTX record time; for Sysmon the record time is later than the event's own `UtcTime`: s02_t00 ep-02 sysmon line 214 differs by 1.96 s, s05_t00 ep-02 sysmon line 107 by 6.8 s. A 4624 to Sysmon 3 time delta (Correction I) would be off by that much. (2) For Security 4688, `process_id` holds the creator's PID (0x27d8 in s02_t00 ep-02 security line 8) next to `image` = wevtutil.exe, whose new PID 0x700 is dropped.
+The attacker's re-check found two columns whose meaning would mislead the stitcher. (1) `timestamp_utc` is the EVTX record time; for Sysmon the record time differs from the event's own `UtcTime`: s02_t00 ep-02 sysmon line 214 by 1.96 s, s05_t00 ep-02 sysmon line 107 by 6.8 s. Measured over all Sysmon rows of the seven t00 DBs: on dc01 and ep-01 the record is 0 to 28 s later; on ep-02 and ep-03 gaps go from -26.3 s to +59,944 s (s03/s05/s06 ep-03: 46 negative and 114 over 60 s; s06/s07 ep-02: 12 and 14 rows over 60 s, up to 7,341 s), most likely clock steps on the VMware-host VMs. A 4624 to Sysmon 3 time delta (Correction I) would be off by that much. (2) For Security 4688, `process_id` holds the creator's PID (0x27d8 in s02_t00 ep-02 security line 8) next to `image` = wevtutil.exe, whose new PID 0x700 is dropped.
 
 ## Options considered
 | Option | Pros | Cons |
@@ -17,10 +17,10 @@ The attacker's re-check found two columns whose meaning would mislead the stitch
 A for time (NF-23) and D for 4688 (NF-24). Owner rules are untouched; both are additions or a corrected meaning of a column the owner had not specified.
 
 ## Consequences
-Stitching uses `event_utc` for time windows and deltas, and records which column it used. The report states that Sysmon `timestamp_utc` is record time.
+Stitching uses `event_utc` for Sysmon time windows and deltas, and records which column it used. The report states that Sysmon `timestamp_utc` is record time. Limitation: Security events have no second clock reading, so a clock step on ep-02 or ep-03 shifts them with no way to detect it from one event; T4 and T7 must check host clocks against the DC 4769/4624 pairs.
 
 ## Kill criteria
-If the maximum gap between `event_utc` and `timestamp_utc` is under 100 ms on all trials, drop `event_utc`.
+If the gap is under 100 ms on all trials, drop `event_utc`. Measured: not met (typical 0 to 60 s, outliers up to 16.6 h), so the column stays.
 
 ## Committee answer
 **EN:** Sysmon logs when it wrote the record and when the event happened; we keep both and use the event time for linking.

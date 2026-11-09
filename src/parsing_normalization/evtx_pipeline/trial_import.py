@@ -29,7 +29,7 @@ TRIAL_EVENT_COLUMNS: dict[str, str] = {
     "trial_id": "TEXT NOT NULL", "source_line": "INTEGER NOT NULL", "account_name": "TEXT",
     "domain_short": "TEXT", "target_linked_logon_id": "INTEGER", "source_image": "TEXT",
     "granted_access": "TEXT", "target_process_guid": "TEXT", "initiated": "INTEGER",
-    "sysmon_logon_guid": "TEXT",
+    "sysmon_logon_guid": "TEXT", "relative_target_name": "TEXT", "event_utc": "TEXT",
 }
 COLUMN_NAMES: tuple[str, ...] = tuple(TRIAL_EVENT_COLUMNS)
 _LOGON_ID_COLUMNS = ("session_id", "subject_logon_id", "target_logon_id", "target_linked_logon_id")
@@ -79,6 +79,7 @@ CREATE INDEX idx_events_target_logon_guid ON events(target_logon_guid);
 CREATE INDEX idx_events_account_time ON events(account_name, timestamp_utc);
 CREATE INDEX idx_events_eventid_channel ON events(event_id, channel);
 CREATE INDEX idx_events_trial_host_time ON events(scenario_id, trial_id, host, timestamp_utc);
+CREATE INDEX idx_events_eventid_host_eventutc ON events(event_id, host, event_utc);
 CREATE INDEX idx_events_source_line ON events(source_relative_path, source_line);
 """
 
@@ -298,6 +299,39 @@ def cleanup_temp(temp_path: Path) -> None:
         Path(str(temp_path) + suffix).unlink(missing_ok=True)
 
 
+def build_report(scenario: str, trial: str, database: Path, events: int, dedup: int, exact: int, near: int,
+                 accounting: list[dict[str, Any]], checks: list[tuple[str, bool, int, int]],
+                 started: float) -> dict[str, Any]:
+    """Assemble the JSON report (pure; duration is measured up to this call)."""
+    duration = time.perf_counter() - started
+    return {"scenario": scenario, "trial": trial, "database": str(database), "events": events,
+            "events_dedup": dedup, "duplicates_exact": exact, "duplicates_near": near,
+            "duration_seconds": round(duration, 2), "events_per_second": round(events / max(duration, 1e-9), 1),
+            "per_file": accounting, "checks": {name: passed for name, passed, _, _ in checks}}
+
+
+def write_report(report_dir: Path, report: dict[str, Any]) -> Path:
+    """Write out/normalise/<scenario>_<trial>/import_report.json."""
+    out_dir = report_dir / f"{report['scenario']}_{report['trial']}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / "import_report.json"
+    path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def verify_published_journal_mode(database: Path) -> None:
+    """NF-26: a published DB must be in journal_mode 'delete' (no -wal/-shm sidecars); else remove and fail."""
+    connection = sqlite3.connect(database)
+    try:
+        mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
+    finally:
+        connection.close()
+    if str(mode).lower() != "delete":
+        for suffix in ("", "-wal", "-shm"):
+            Path(str(database) + suffix).unlink(missing_ok=True)
+        raise TrialImportError(f"published database journal_mode is {mode!r}, expected 'delete'; file removed")
+
+
 def run_trial_import(jsonl_dir: Path, scenario: str, trial: str, database: Path,
                      report_dir: Path = Path("out/normalise")) -> dict[str, Any]:
     """Import one trial. Any failure removes the temp DB and raises; the target is never overwritten (NF-02/NF-17)."""
@@ -331,16 +365,23 @@ def run_trial_import(jsonl_dir: Path, scenario: str, trial: str, database: Path,
         for name, passed, num, den in checks:
             connection.execute("INSERT INTO validation_results(check_name,result_status,numerator,denominator,details_json,created_utc)"
                                " VALUES(?,?,?,?,?,?)", (name, "PASS" if passed else "FAIL", num, den, "{}", utc_now()))
-        failed = [name for name, passed, _, _ in checks if not passed]
-        if failed:
-            raise TrialImportError(f"validation failed: {failed}")
         events = connection.execute("SELECT COUNT(*) FROM events").fetchone()[0]
         dedup = connection.execute("SELECT COUNT(*) FROM events_dedup").fetchone()[0]
+        report = build_report(scenario, trial, database, events, dedup, exact, near, accounting, checks, started)
+        failed = [name for name, passed, _, _ in checks if not passed]
+        if failed:
+            # NF-26: the report with the FAIL rows must survive the temp-DB cleanup.
+            report["status"] = "FAIL"
+            write_report(report_dir, report)
+            raise TrialImportError(f"validation failed: {failed}")
         connection.execute("UPDATE trial_run SET completed_utc=?, status='complete'", (utc_now(),))
         connection.commit()
         connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         connection.execute("PRAGMA journal_mode=DELETE")
         connection.close()
+        # NF-26: report is written BEFORE the rename, so a report failure never leaves a published DB.
+        report["status"] = "PASS"
+        write_report(report_dir, report)
     except BaseException:
         try:
             connection.close()
@@ -351,12 +392,5 @@ def run_trial_import(jsonl_dir: Path, scenario: str, trial: str, database: Path,
         cleanup_temp(temp_path)
         raise FileExistsError(f"database appeared during import: {database}")
     temp_path.rename(database)
-    duration = time.perf_counter() - started
-    report = {"scenario": scenario, "trial": trial, "database": str(database), "events": events,
-              "events_dedup": dedup, "duplicates_exact": exact, "duplicates_near": near,
-              "duration_seconds": round(duration, 2), "events_per_second": round(events / max(duration, 1e-9), 1),
-              "per_file": accounting, "checks": {name: passed for name, passed, _, _ in checks}}
-    out_dir = report_dir / f"{scenario}_{trial}"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "import_report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    verify_published_journal_mode(database)
     return report
