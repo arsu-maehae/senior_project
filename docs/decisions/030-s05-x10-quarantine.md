@@ -20,3 +20,6 @@ If the validation shows the S05 trials match the design, the owner may lift the 
 ## Committee answer
 **EN:** The S05 repeats were run with the wrong design, so we keep them apart, use them only to confirm that, and never score them.
 **TH:** การรันซ้ำของ S05 ใช้การออกแบบผิด เราจึงแยกเก็บไว้ ใช้เพียงยืนยันข้อนั้น และไม่นำไปให้คะแนน
+
+## Implementation note (2026-11-11)
+The importer is not changed: inside `data/processed/quarantine/s05q_tNN.sqlite3` the rows keep `scenario_id = s05` and `trial_id = tNN`, because `import-trial` checks them against the raw path. The quarantine status is carried by the file name, the `quarantine/` folders (raw, JSONL, DB, import report) and `data/manifest_quarantine.csv`. Any tool that reads a quarantined DB must take the trial identity from the file name, not from the rows. Manifest `source_path` for the x10 rows is relative to `data/incoming` (`x10/...`), for t00 relative to `data/incoming/dryrun`.
