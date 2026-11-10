@@ -26,7 +26,8 @@ EVTX → JSONL → normalise → SQLite (one DB per trial) → gate → stitch �
 ## Data rules
 - `data/incoming/` = untouched original copies, never modify. `data/raw/` = written only by the copy/ingest scripts, never edited afterwards. `data/processed/`, `data/sample/` and `out/` = pipeline outputs. `data/manifest.csv` is maintained by the scripts.
 - Never modify `ground_truth/approved/` or `docs/papers/`. Claude writes answer-key drafts only to `ground_truth/drafts/`; the user approves and moves them. Write outputs to `out/<stage>/<trial_id>/`.
-- Work on `data/sample/` (S02, S04, S05 t00; S01 t01 later) first; run all 70 trials only after a stage passes review.
+- Split (decision 019): development = t00 for S02–S07 + t01 for all 7 scenarios; test = t02–t10; S01 t00 excluded. Never tune on test.
+- Work on `data/sample/` (S02, S04, S05 t00; t01 of all scenarios later) first; run all 70 trials only after a stage passes review.
 - Use the deduplicated view `events_dedup`, not `events`, for analysis.
 
 ## Code rules

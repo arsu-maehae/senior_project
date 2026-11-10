@@ -3,7 +3,7 @@
 Status marks: `[ ]` todo · `[~]` in progress · `[x]` done. The coordinator (`/next`) updates this file.
 Critical path: T1 → T3 → T4 → T6 → **T7** → T9 → T10. T2, T5, T8 run alongside.
 
-Data split: **development** = t00 (dry run) for S02–S07 + t01 for S01 once collected (S01 t00 is excluded: target side only — source EP-01 and DC01 files are S02 exports filed under S01) · **test** = trials 2–10 (locked answer keys).
+Data split (decision 019): **development** = t00 (dry run) for S02–S07 + t01 for all 7 scenarios once ingested (S01 t00 is excluded: target side only — source EP-01 and DC01 files are S02 exports filed under S01) · **test** = t02–t10 for all 7 scenarios (locked answer keys).
 Never tune code or weights on the test set.
 
 ## T0. Setup — depends on: nothing  (DONE 2026-11-09)
