@@ -1,4 +1,4 @@
-"""Command line: python -m data_layout.cli {map,copy,manifest} ... (PYTHONPATH=src)."""
+"""Command line: python -m data_layout.cli {map,copy,manifest,batch} ... (PYTHONPATH=src)."""
 from __future__ import annotations
 
 import argparse
@@ -7,6 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Optional, Sequence
 
+from data_layout import batch
 from data_layout import layout as L
 
 
@@ -68,6 +69,9 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--mapping", required=True)
     f.add_argument("--out", required=True)
     f.set_defaults(fn=_cmd_manifest)
+    b = sub.add_parser("batch", help="x10 batch ingest: incoming -> raw -> manifest -> JSONL -> SQLite")
+    batch.add_arguments(b)
+    b.set_defaults(fn=batch.run)
     return p
 
 
