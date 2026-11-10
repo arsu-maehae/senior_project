@@ -70,3 +70,4 @@ A summary block at the end of each big task. Newest at the bottom.
 - TODO (decision 023): when S07 t01–t10 are ingested, check for any svc_sql 4624 on ep-02; if none, state the S07 one-account deviation as a limitation in the report.
 - TODO (decision 026): recheck run intervals with `python -m answer_key check-overlap` on the ×10 trials; prefer manifest spans when they become tighter.
 - TODO (lock gate, AK-21): before the lock tag every hop is confirmed or explicitly excluded by the owner; no unconfirmed hop remains in an approved key.
+2026-11-10 · T5 owner answers · role field (attack|benign|background); basis manual_command_names_target (s04-A-h1 confirmed, session 0xd6398); manifest span clip + check-overlap (no overlaps; s05-t1 shared with s06/s07); verify lock_ready (s02, s03 true; s04-s07 blocked by one background hop each); decisions 021/023/026 amended; PLAN 10.6 independent ablation; 219 tests pass · see commit · 021, 023, 026
