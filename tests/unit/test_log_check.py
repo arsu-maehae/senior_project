@@ -1225,3 +1225,95 @@ def test_real_s05_has_smb_and_winrm_hops_and_no_password_leak(real_runs):
         o = real_runs[name][0]
         assert "Project123" not in o.markdown and "Project123" not in o.csv_text
         assert "Project123" not in json.dumps(o.report)
+
+
+# --------------------------------------------------------------------------------------------------
+# LC-04h: 4648 coverage (method source_4648)
+# --------------------------------------------------------------------------------------------------
+
+def _smb_hop_builder(target_acct="svc_backup") -> Builder:
+    """hop_builder plus an ADMIN$ 5145 in the target 4624 session so the hop is labelled SMB."""
+    b = hop_builder(target_acct=target_acct, sessions=((0x100, "svc_backup"), (0x300, "svc_backup")))
+    b.add(T0 + timedelta(seconds=2), "ep-02", "Security", 5145, session_id=0xE0010, share_name=r"\*\ADMIN$",
+          relative_target_name="a.exe")
+    return b
+
+
+def _add4648(b, offset, server, sid=0x300, cred="svc_backup", host="ep-01"):
+    return b.add(T0 + timedelta(seconds=offset), host, "Security", 4648, session_id=sid, subject_logon_id=sid,
+                 account_name=cred, subject_account=r"lab\svc_backup", destination_host=server)
+
+
+def _src4648(out):
+    return [r for r in csv_rows(out) if r["method"] == "source_4648"]
+
+
+@pytest.mark.parametrize("server", ["ep-02", "EP-02", "ep-02.lab.local", "endpoint-02", "192.168.50.22"])
+@pytest.mark.parametrize("cred,tier", [("svc_backup", "B"), ("admin_it", "D")])
+def test_lc04h_naming_4648_gives_source_4648_row(tmp_path, server, cred, tier):
+    b = _smb_hop_builder()
+    _add4648(b, 0.5, server, cred=cred)
+    out, _ = run(b, tmp_path, "h4648")
+    rows = _src4648(out)
+    assert len(rows) == 1, rows
+    r = rows[0]
+    assert r["candidate_session_id"] == "0x300" and r["confidence_tier"] == tier
+    assert r["protocol"] == "SMB" and r["hop_id"] == hop_of(out, "svc_backup")["hop_id"]
+    assert r["time_delta_ms"] == "500" and r["supporting_event_uids"] and r["target_event_uids"]
+    assert r["candidate_count_rows"] == "1"
+
+
+@pytest.mark.parametrize("server,offset", [
+    ("192.168.50.2", 1), ("192.168.50.220", 1), ("ep-020", 1),      # boundary-aware: other names
+    ("ep-03", 1),                                                   # another host
+    ("ep-02", -121), ("ep-02", 10.5),                               # outside [t-120, t+10]
+])
+def test_lc04h_no_row_for_other_host_boundary_or_out_of_range(tmp_path, server, offset):
+    b = _smb_hop_builder()
+    _add4648(b, offset, server)
+    out, _ = run(b, tmp_path, "h4648_no")
+    assert _src4648(out) == []
+    h = [x for x in out.report["checks"]["LC-04h"]["result"]["hops"] if x["account_name"] == "svc_backup"][0]
+    assert h["n_4648"] == 0
+
+
+def test_lc04h_range_edges_inside(tmp_path):
+    b = _smb_hop_builder()
+    _add4648(b, -119, "ep-02", sid=0x300)
+    _add4648(b, 9.5, "ep-02", sid=0x301)
+    out, _ = run(b, tmp_path, "h4648_edge")
+    assert sorted(r["candidate_session_id"] for r in _src4648(out)) == ["0x300", "0x301"]
+
+
+def test_lc04h_report_counts_and_status_info(tmp_path):
+    b = _smb_hop_builder()
+    _add4648(b, 0.5, "ep-02")
+    b.logon("11:05:30", "ep-02", "admin_it", 0xE0060, 3, ip="192.168.50.21", port=49800)   # second hop, no 4648
+    b.add("11:05:32", "ep-02", "Security", 5145, session_id=0xE0060, share_name=r"\*\ADMIN$",
+          relative_target_name="b.exe")
+    out, _ = run(b, tmp_path, "h4648_cnt")
+    chk = out.report["checks"]["LC-04h"]
+    assert chk["status"] == "INFO" and chk["sql"]
+    s = chk["result"]["summary"]["all"]
+    assert s["hops"] == 2 and len(s["with_naming_4648"]) == 1 and len(s["without_naming_4648"]) == 1
+    assert "session_differs_from_cmdline" in s
+
+
+def test_lc04h_not_measurable_for_reference_trial(tmp_path):
+    b = Builder("s01")
+    b.logon("10:00:00", "ep-01", "svc_backup", 0x100, 4)
+    out, _ = run(b, tmp_path, "h4648_s01")
+    assert out.report["checks"]["LC-04h"]["status"] == "NOT_MEASURABLE"
+
+
+def test_real_lc04h_s05_winrm_hop_has_source_4648_0x1c63d2(real_runs):
+    out = real_runs["s05"][0]
+    rows = [r for r in _src4648(out) if r["protocol"] == "WinRM"]
+    assert any(r["candidate_session_id"] == "0x1c63d2" for r in rows), [
+        (r["hop_id"], r["protocol"], r["candidate_session_id"]) for r in _src4648(out)]
+    assert out.report["checks"]["LC-04h"]["status"] == "INFO"
+
+
+def test_real_lc04h_s04_smb_hops_have_no_source_4648(real_runs):
+    out = real_runs["s04"][0]
+    assert [r for r in _src4648(out) if r["protocol"] == "SMB"] == []
