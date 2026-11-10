@@ -39,10 +39,10 @@ Never tune code or weights on the test set.
 - [x] 3.9 Import all available trials; counts match manifests
 **Done when:** tests pass and counts match.
 
-## T4. Data reality check — depends on: T3
-- [ ] 4.1 `/log-check` on the development trial of every scenario
-- [ ] 4.2 `docs/research/data_reality.md`: per scenario, which linking evidence exists
-- [ ] 4.3 Decision records for problems that affect linking or identity
+## T4. Data reality check — depends on: T3  (DONE 2026-11-10)
+- [x] 4.1 `/log-check` on the development trial of every scenario
+- [x] 4.2 `docs/research/data_reality.md`: per scenario, which linking evidence exists
+- [x] 4.3 Decision records for problems that affect linking or identity
 **Done when:** the linking design can be based on measured evidence.
 
 ## T5. Answer keys — depends on: T1 (alongside T3–T7)

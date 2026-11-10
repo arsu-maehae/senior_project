@@ -159,23 +159,54 @@ def session_state(logon: dict[str, Any], hist: HostHistory, at: datetime) -> tup
     return OPEN, "no logoff before dump", None
 
 
+OLD_REASON = "older than SESSION_LOOKBACK_S, no logoff and no boot before dump"
+
+
+def old_session_state(logon: dict[str, Any], hist: HostHistory, at: datetime) -> tuple[str, str] | None:
+    """State of a session whose 4624 is older than SESSION_LOOKBACK_S, or None to drop it.
+
+    LC-08: such a session is listed as end_unknown (never silently dropped, so the
+    Correction K exposed set stays complete) unless it is known to have ended: a logoff,
+    a boot event between its 4624 and the dump, or its logon id reused by a later 4624
+    (logon ids are unique per boot, so reuse proves the old session ended; the later 4624
+    represents that id).
+    """
+    state, reason, _ = session_state(logon, hist, at)
+    if state == CLOSED or reason.startswith(("boot", "logon id reused")):
+        return None
+    return END_UNKNOWN, OLD_REASON if state == OPEN else f"{OLD_REASON}; {reason}"
+
+
 def sessions_at(dump: Dump, logons: list[dict], hist: HostHistory, params: Params) -> tuple[list[dict], Counter]:
-    """4624 sessions on the dump host started within SESSION_LOOKBACK_S, with their state."""
+    """4624 sessions on the dump host before the dump, with their state.
+
+    Started within SESSION_LOOKBACK_S: open / end_unknown / closed by session_state().
+    Older: end_unknown unless known to have ended (old_session_state), counted as `old_*`.
+    """
     lookback = dump.t - seconds(params.session_lookback_s)
     listed, counts = [], Counter()
     predefined: dict[int, dict] = {}
     for lg in logons:
-        if lg["host"] != dump.host or lg.get("target_logon_id") is None or not (lookback <= lg["t"] < dump.t):
+        if lg["host"] != dump.host or lg.get("target_logon_id") is None or not (lg["t"] < dump.t):
             continue
+        recent = lg["t"] >= lookback
         if int(lg["target_logon_id"]) in PREDEFINED_LOGON_IDS:
             # Every service logon reuses 0x3e7/0x3e5/0x3e4; these sessions live from boot to
             # shutdown, so list each once (latest 4624) instead of as dozens of "reused" ids.
-            predefined[int(lg["target_logon_id"])] = lg
+            if recent:
+                predefined[int(lg["target_logon_id"])] = lg
             continue
-        state, reason, logoff_uid = session_state(lg, hist, dump.t)
-        counts[state] += 1
-        if state == CLOSED:
-            continue
+        if recent:
+            state, reason, logoff_uid = session_state(lg, hist, dump.t)
+            counts[state] += 1
+            if state == CLOSED:
+                continue
+        else:
+            old = old_session_state(lg, hist, dump.t)
+            counts["old_listed" if old else "old_ended"] += 1
+            if old is None:
+                continue
+            state, reason = old
         listed.append({"session_id": int(lg["target_logon_id"]), "session_hex": hex_id(lg["target_logon_id"]),
                        "linked_id": hex_id(lg.get("target_linked_logon_id")),
                        "linked_id_int": lg.get("target_linked_logon_id"),

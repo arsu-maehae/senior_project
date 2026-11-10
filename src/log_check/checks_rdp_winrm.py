@@ -301,7 +301,9 @@ def run_lc06(ctx: Context, hops: list[HopInstance], ev: WinrmEvidence, logon_ind
                f"({len(unmatched91)} not on a hop)")
     status, summary = gated_status(ctx, status, summary)
     return CheckResult("LC-06", "WinRM port join + WinRM 91 + wsmprovhost", status, summary,
-                       "WinRM hops can be linked by the Correction I port join to a source session.",
+                       "Port-join source-session candidates for WinRM hops (link method sysmon3_port, tier A); "
+                       "account counts are measurement only (decision 013). Identity uses the moving "
+                       "account and the source host, not this session.",
                        {"sysmon3_rows": len(ev.conns), "joined_pairs": len(ev.pairs),
                         "winrm_hops": details, "winrm91_not_on_hop": unmatched91,
                         "scenario_hops_linked": linked, "expected_winrm_hops": expected}), csv_rows

@@ -81,7 +81,7 @@ def run_checks(ctx: Context, keys_dir: Path | None) -> tuple[list[CheckResult], 
     dump_data = load_dump_data(ctx)
     lc08, dump_sessions = run_lc08(ctx, dump_data)
     checks = [run_lc01(ctx), run_lc02(ctx), run_lc03(ctx), lc04, run_lc04b(ctx),
-              run_lc04c(ctx, hops, shares, by_hop, services), run_lc04d(ctx, hops, by_host, logon_index), lc04h,
+              run_lc04c(ctx, hops, shares, by_hop, services), run_lc04d(ctx, hops, by_host, logon_index, explicit), lc04h,
               run_lc05(ctx, rdp_ev), lc06, run_lc07(ctx), lc08, run_lc08b(ctx, dump_data, dump_sessions),
               run_lc09(ctx), run_lc10(ctx, keys_dir)]
     csv_rows = [row for h in hops for row in hop_csv_rows(ctx.trial_id, h, evals[h.hop_id])]

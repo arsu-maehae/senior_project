@@ -369,8 +369,12 @@ def run_lc04(ctx: Context, hops: list[HopInstance], by_host: dict, logon_index: 
     status, summary = gated_status(ctx, status, summary)
     return CheckResult(
         "LC-04", "SMB source session by command-line target (decision 011)", status, summary,
-        "Source session for SMB hops (IdentityCoherence needs it). >1 session after the account "
-        "filter means the join is ambiguous for that hop (decision 011 kill criterion).",
+        "Command-line source-session candidates for SMB hops (link method cmdline_target). The "
+        "after-account-filter counts are measurement only: account is a supporting check, not a "
+        "join condition (decision 013). Identity uses the moving account and the source host, not "
+        "this session. Decision 013 kill criteria: >1 SMB attack hop with a wrong best-tier "
+        "session (T5 keys) drops SMB source linking; >20% of attack hops with >1 candidate after "
+        "supporting evidence (t01–t10) makes SMB links tier C.",
         {"hop_instances": len(hops), "excluded_4624": excluded,
          "params": {"CMD_BEFORE_S": p.cmd_before_s, "CMD_AFTER_S": p.cmd_after_s,
                     "HOP_GROUP_S": p.hop_group_s},
@@ -380,14 +384,17 @@ def run_lc04(ctx: Context, hops: list[HopInstance], by_host: dict, logon_index: 
          "expected_smb_hops": expected, "hops": details}), evals
 
 
-def run_lc04d(ctx: Context, hops: list[HopInstance], by_host: dict, logon_index: dict) -> CheckResult:
-    """LC-04d: after-filter session counts over the CMD_BEFORE_S × CMD_AFTER_S grid."""
+def run_lc04d(ctx: Context, hops: list[HopInstance], by_host: dict, logon_index: dict,
+              explicit_by_host: dict | None = None) -> CheckResult:
+    """LC-04d: session counts after the account filter incl. the LC-04e 4648 bridge, over the
+    CMD_BEFORE_S × CMD_AFTER_S grid (the bridge window moves with each cell). The result key
+    stays `sessions_after_account`; `filter` in the result states that it includes the bridge."""
     p = ctx.params
     grid = []
     changed = 0
     for h in hops:
         cells = {f"before{int(b)}_after{int(a)}":
-                 len(evaluate_hop(h, by_host, logon_index, p, b, a).after)
+                 len(evaluate_hop(h, by_host, logon_index, p, b, a, explicit_by_host).after_bridge)
                  for b in p.cmd_before_grid for a in p.cmd_after_grid}
         changed += int(len(set(cells.values())) > 1)
         grid.append({"hop_id": h.hop_id, "protocol": h.protocol, "account_name": h.account_name,
@@ -398,6 +405,7 @@ def run_lc04d(ctx: Context, hops: list[HopInstance], by_host: dict, logon_index:
     return CheckResult("LC-04d", "LC-04 sensitivity (CMD_BEFORE_S × CMD_AFTER_S)", status, summary,
                        "Shows whether the ±window choice drives the candidate count.",
                        {"grid_before": list(p.cmd_before_grid), "grid_after": list(p.cmd_after_grid),
+                        "filter": "account filter incl. LC-04e 4648 bridge",
                         "hops": grid})
 
 

@@ -29,7 +29,7 @@ from .timeutil import delta_ms, seconds, to_display
 
 METHOD_4648 = "source_4648"
 COVERED_PROTOCOLS = ("SMB", "WinRM")
-MATCH_DIRECT, MATCH_NONE = "direct", "none"
+MATCH_DIRECT, MATCH_4648, MATCH_NONE = "direct", "4648", "none"  # decision 013 account_match
 
 # Per-hop comparison of 4648 sessions with the LC-04 command-line sessions.
 CMP_NO_4648 = "no_naming_4648"
@@ -98,8 +98,12 @@ class Session4648:
         return min((r["t"] for r in self.rows), key=lambda x: abs((x - t).total_seconds()))
 
     def account_match(self, hop_account: str) -> str:
-        """direct = the credentials used include the 4624 account (decision 013), else none."""
-        return MATCH_DIRECT if hop_account in self.credentials else MATCH_NONE
+        """Decision 013 account_match: `direct` if the session's own (subject) account is the
+        4624 account; `4648` if not, but the credentials it supplied (TargetUserName) are;
+        else `none`. Account is supporting evidence only: it sets the tier, never drops a row."""
+        if self.subject_account == hop_account:
+            return MATCH_DIRECT
+        return MATCH_4648 if hop_account in self.credentials else MATCH_NONE
 
 
 def group_sessions(rows: list[dict[str, Any]], host: str, logon_index: dict) -> list[Session4648]:
@@ -128,9 +132,9 @@ class Coverage:
     sessions: list[Session4648] = field(default_factory=list)
     reason: str | None = None
 
-    def direct(self, hop_account: str) -> list[Session4648]:
-        """Sessions whose credentials used equal the 4624 account (LC-04g account-consistent)."""
-        return [s for s in self.sessions if s.account_match(hop_account) == MATCH_DIRECT]
+    def consistent(self, hop_account: str) -> list[Session4648]:
+        """Account-consistent sessions (LC-04g): account_match `direct` or `4648`."""
+        return [s for s in self.sessions if s.account_match(hop_account) != MATCH_NONE]
 
 
 def evaluate_coverage(hop: HopInstance, explicit_by_host: dict[str, list[dict[str, Any]]],
@@ -169,20 +173,24 @@ def compare_with_cmdline(cov: Coverage, ev: HopEval | None) -> dict[str, Any]:
             "sessions_in_cmdline_all": [hex_id(x) for x in sids if x in cmd_all]}
 
 
+def session_tier(s: Session4648, hop_account: str, n_consistent: int) -> str:
+    """LC-04h tier: B for `direct` or `4648` with one consistent session, C for several, D for
+    `none` (a 4648 is a name join, so never A; LC-04g)."""
+    return confidence_tier(METHOD_4648, s.account_match(hop_account) != MATCH_NONE, n_consistent)
+
+
 # --- report shaping ----------------------------------------------------------------------
 
 def coverage_csv_rows(trial_id: str, hop: HopInstance, cov: Coverage) -> list[dict[str, Any]]:
     """hop_candidates.csv rows (method source_4648): one per distinct 4648 subject session.
 
     Count columns keep their meaning: before = all 4648 sessions; after_account = subject
-    account equals the 4624 account; after_4648_bridge = subject account OR credentials
-    used equal it (the LC-04e rule). The tier uses the credentials match (decision 013).
+    account equals the 4624 account (`direct`); after_4648_bridge = `direct` or `4648` (the
+    LC-04e rule). The tier uses account_match (decision 013; see session_tier).
     No naming 4648 → no row (the absence is in report.json LC-04h).
     """
-    direct = cov.direct(hop.account_name)
-    after = [s for s in cov.sessions if s.subject_account == hop.account_name]
-    after_bridge = [s for s in cov.sessions if s.subject_account == hop.account_name
-                    or s.account_match(hop.account_name) == MATCH_DIRECT]
+    after = [s for s in cov.sessions if s.account_match(hop.account_name) == MATCH_DIRECT]
+    after_bridge = cov.consistent(hop.account_name)
     base = {"trial_id": trial_id, "protocol": hop.protocol, "hop_id": hop.hop_id,
             "target_host": hop.target_host, "target_event_uids": ";".join(hop.event_uids),
             "target_time_utc": to_display(hop.t), "account_name": hop.account_name,
@@ -193,10 +201,9 @@ def coverage_csv_rows(trial_id: str, hop: HopInstance, cov: Coverage) -> list[di
             "candidate_count_sessions_after_4648_bridge": len(after_bridge)}
     rows = []
     for s in cov.sessions:
-        ok = s.account_match(hop.account_name) == MATCH_DIRECT
         rows.append({**base, "candidate_count_rows": len(s.rows),
                      "time_delta_ms": delta_ms(s.closest_t(hop.t), hop.t),
-                     "confidence_tier": confidence_tier(METHOD_4648, ok, len(direct)),
+                     "confidence_tier": session_tier(s, hop.account_name, len(after_bridge)),
                      "candidate_session_id": hex_id(s.session_id) or "",
                      "candidate_account": s.subject_account or "",
                      "candidate_logon_type": (s.logon or {}).get("logon_type") or "",
@@ -205,10 +212,12 @@ def coverage_csv_rows(trial_id: str, hop: HopInstance, cov: Coverage) -> list[di
     return rows
 
 
-def _session_json(s: Session4648, hop: HopInstance) -> dict[str, Any]:
+def _session_json(s: Session4648, hop: HopInstance, n_consistent: int) -> dict[str, Any]:
+    """One entry per hop_candidates.csv source_4648 row, with account_match (not a CSV column)."""
     return {"session_id": hex_id(s.session_id), "subject_account": s.subject_account,
             "credentials_accounts": s.credentials,
             "account_match": s.account_match(hop.account_name),
+            "confidence_tier": session_tier(s, hop.account_name, n_consistent),
             "predefined_system": s.predefined,
             "logon_type": (s.logon or {}).get("logon_type"),
             "logon_start": to_display(s.logon["t"]) if s.logon else None,
@@ -224,9 +233,10 @@ def hop_coverage_json(hop: HopInstance, cov: Coverage, ev: HopEval | None, param
             "account_name": hop.account_name, "source_host": hop.source_host,
             "t_first_4624": to_display(hop.t), "scenario_account": hop.is_scenario_account(params),
             "reason": cov.reason, "n_4648": len(cov.rows), "n_sessions": len(cov.sessions),
-            "n_sessions_direct": len(cov.direct(hop.account_name)),
+            "n_sessions_account_consistent": len(cov.consistent(hop.account_name)),
+            "account_match_counts": dict(Counter(s.account_match(hop.account_name) for s in cov.sessions)),
             "credentials_accounts": sorted({a for s in cov.sessions for a in s.credentials}),
-            "sessions": [_session_json(s, hop) for s in cov.sessions],
+            "sessions": [_session_json(s, hop, len(cov.consistent(hop.account_name))) for s in cov.sessions],
             **compare_with_cmdline(cov, ev)}
 
 
@@ -268,6 +278,8 @@ def run_lc04h(ctx: Context, hops: list[HopInstance], explicit_by_host: dict[str,
     return CheckResult(
         "LC-04h", "4648 coverage per SMB/WinRM hop (decision 013)", status, summary,
         "A second, command-line-free source-session candidate (method source_4648); where it "
-        "differs from the command-line session the link is ambiguous for T7.",
+        "differs from the command-line session the link is ambiguous for T7. Account is supporting "
+        "evidence (account_match, decision 013). Kill criterion 3 of decision 013: a keyed hop "
+        "using another account's credentials with no 4648 drops 4648 as a method.",
         {"params": {"CMD_BEFORE_S": p.cmd_before_s, "CMD_AFTER_S": p.cmd_after_s},
          "protocols": list(COVERED_PROTOCOLS), "summary": summary_counts, "hops": details}), csv_rows

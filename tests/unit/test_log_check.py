@@ -1063,7 +1063,7 @@ def test_lc08_hours_lookback_limits_listing(tmp_path):
     out2, _ = run(b2, tmp_path, "lookback2")
     _, by2 = _dump_sessions(out2)
     assert by2["0x700"][0]["state"] == "open"
-    assert "open" not in [s["state"] for s in by2.get("0x701", [])]
+    assert [s["state"] for s in by2["0x701"]] == ["end_unknown"]      # older than the lookback: listed, not dropped
 
 
 def test_s01_t00_reference_only_is_not_measurable_not_problem(tmp_path):
@@ -1249,18 +1249,25 @@ def _src4648(out):
 
 
 @pytest.mark.parametrize("server", ["ep-02", "EP-02", "ep-02.lab.local", "endpoint-02", "192.168.50.22"])
-@pytest.mark.parametrize("cred,tier", [("svc_backup", "B"), ("admin_it", "D")])
-def test_lc04h_naming_4648_gives_source_4648_row(tmp_path, server, cred, tier):
-    b = _smb_hop_builder()
+@pytest.mark.parametrize("cred,hop_acct,match,tier", [
+    ("svc_backup", "svc_backup", "direct", "B"),     # subject account == 4624 account
+    ("admin_it", "svc_backup", "direct", "B"),       # subject account == 4624 account (credentials differ)
+    ("admin_it", "admin_it", "4648", "B"),           # credentials account == 4624 account
+    ("svc_sql", "admin_it", "none", "D"),            # neither
+])
+def test_lc04h_naming_4648_gives_source_4648_row(tmp_path, server, cred, hop_acct, match, tier):
+    b = _smb_hop_builder(target_acct=hop_acct)
     _add4648(b, 0.5, server, cred=cred)
     out, _ = run(b, tmp_path, "h4648")
     rows = _src4648(out)
     assert len(rows) == 1, rows
     r = rows[0]
     assert r["candidate_session_id"] == "0x300" and r["confidence_tier"] == tier
-    assert r["protocol"] == "SMB" and r["hop_id"] == hop_of(out, "svc_backup")["hop_id"]
+    assert r["protocol"] == "SMB" and r["hop_id"] == hop_of(out, hop_acct)["hop_id"]
     assert r["time_delta_ms"] == "500" and r["supporting_event_uids"] and r["target_event_uids"]
     assert r["candidate_count_rows"] == "1"
+    hop = [x for x in out.report["checks"]["LC-04h"]["result"]["hops"] if x["hop_id"] == r["hop_id"]][0]
+    assert [x["account_match"] for x in hop["sessions"]] == [match]
 
 
 @pytest.mark.parametrize("server,offset", [
@@ -1317,3 +1324,13 @@ def test_real_lc04h_s05_winrm_hop_has_source_4648_0x1c63d2(real_runs):
 def test_real_lc04h_s04_smb_hops_have_no_source_4648(real_runs):
     out = real_runs["s04"][0]
     assert [r for r in _src4648(out) if r["protocol"] == "SMB"] == []
+
+
+def test_lc08_session_older_than_lookback_is_end_unknown_not_dropped(tmp_path):
+    b = Builder("s02")
+    b.sysmon1("03:00:00", "ep-01", 0x9, "whoami")
+    b.logon("2026-09-23T10:00:00", "ep-01", "admin_it", 0x800, 2)     # ~19 h before the dump, no logoff, no boot
+    b.dump("05:42:00", "ep-01")
+    out, _ = run(b, tmp_path, "old_session")
+    _, by = _dump_sessions(out)
+    assert [s["state"] for s in by["0x800"]] == ["end_unknown"]

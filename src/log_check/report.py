@@ -93,12 +93,12 @@ def _coverage_lines(result: dict) -> list[str]:
     for h in result["hops"]:
         lines.append(f"- {h['hop_id']} {h['protocol']} {h['account_name']}@{h['target_host']} from "
                      f"{h['source_host']}: n_4648 {h['n_4648']}, sessions {h['n_sessions']} "
-                     f"(direct {h['n_sessions_direct']}), credentials {h['credentials_accounts']}, "
+                     f"(account match {h['account_match_counts']}), credentials {h['credentials_accounts']}, "
                      f"cmdline {h['cmdline_sessions_account_consistent']} → {h['comparison']}"
                      + (f" ({h['reason']})" if h["reason"] else ""))
         for s in h["sessions"]:
             lines.append(f"  - {s['session_id']} subject {s['subject_account']} creds {s['credentials_accounts']} "
-                         f"({s['account_match']}) type {s['logon_type']} n {s['n_4648']} "
+                         f"(match {s['account_match']}, tier {s['confidence_tier']}) type {s['logon_type']} n {s['n_4648']} "
                          f"Δ {s['time_delta_ms']} ms servers {s['target_servers']}")
     for scope, block in result["summary"].items():
         lines.append(f"- summary ({scope}): with {len(block['with_naming_4648'])}, without "
