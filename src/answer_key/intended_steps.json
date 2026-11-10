@@ -1,0 +1,90 @@
+{
+  "_comment": "Hand-written from docs/handoff_18.md sections 19.2, 19.4, 21.5. 'cite' gives the handoff line numbers. Fields left null are NOT stated by the handoff and are not guessed. design_only = the handoff states it as design, not as measured. S01 is excluded (decision 019).",
+  "source_document": "docs/handoff_18.md",
+  "scenarios": {
+    "s02": {
+      "title": "SMB + remote service",
+      "agent_accounts": {"value": ["svc_backup"], "cite": "handoff_18.md:1433"},
+      "steps": [
+        {"id": "s02-dump1", "kind": "lsass_dump", "host": "ep-01", "account": "svc_backup", "design_only": false,
+         "role": "attack", "cite": "handoff_18.md:1719 (S02 LSASS root moved to EP-01); :1468 (dump precursor yes)"},
+        {"id": "s02-h1", "kind": "move", "protocol": "SMB", "source_host": "ep-01", "target_host": "ep-02",
+         "account": "svc_backup", "service": null, "design_only": false, "role": "attack",
+         "cite": "handoff_18.md:1468 (S02 svc_backup->EP-02, baseline TP, w3 1.0); :1408 (SMB 445, Caldera); :1433 (SandcatAgent on EP-01 runs as svc_backup)"}
+      ]
+    },
+    "s03": {
+      "title": "WinRM / PSRP",
+      "agent_accounts": {"value": ["admin_it"], "cite": "handoff_18.md:1434"},
+      "steps": [
+        {"id": "s03-dump1", "kind": "lsass_dump", "host": "ep-01", "account": "admin_it", "design_only": false,
+         "role": "attack", "cite": "handoff_18.md:1720 (LSASS root added on EP-01); :1469"},
+        {"id": "s03-h1", "kind": "move", "protocol": "WinRM", "source_host": "ep-02", "target_host": "ep-03",
+         "account": "admin_it", "service": null, "design_only": false, "role": "attack",
+         "cite": "handoff_18.md:1720 (S03 target EP-02->EP-03); :1469 (admin_it->EP-03, TP, WinRM); :1434 (SandcatAgent_admin on EP-01)",
+         "note": "handoff source host ep-02; the agent task is on EP-01 (l.1434). A data/handoff source difference is kept as handoff_mismatch, never overwritten."}
+      ]
+    },
+    "s04": {
+      "title": "Ablation, over-fire control (Track B Caldera, Track A manual)",
+      "agent_accounts": {"value": ["svc_backup"], "cite": "handoff_18.md:1433 (S04-B on SandcatAgent); :1713 (S04 Track A admin_it)"},
+      "steps": [
+        {"id": "s04-dump1", "kind": "lsass_dump", "host": "ep-01", "account": "svc_backup", "design_only": false,
+         "role": "attack", "cite": "handoff_18.md:1416 (one dump, two Sysmon-10 records for svc_backup); :1721"},
+        {"id": "s04-B-h1", "kind": "move", "protocol": "SMB", "source_host": "ep-01", "target_host": "ep-02",
+         "account": "svc_backup", "service": null, "design_only": false, "role": "attack_pair",
+         "cite": "handoff_18.md:1471 (S04-B svc_backup->EP-02, paired attack); :1721 (Track B true path); :1433"},
+        {"id": "s04-A-h1", "kind": "move", "protocol": "SMB", "source_host": "ep-01", "target_host": "ep-02",
+         "account": "admin_it", "service": null, "design_only": false, "role": "distractor", "manual": true,
+         "cite": "handoff_18.md:1470 (S04-A admin_it->EP-02 benign over-fire control); :1416 (Track A executed manually, not via Caldera); :1721 (Track A distractor); :204 (admin_it task on EP-01)",
+         "note": "Handoff l.1470 expects w3 0.0; decision 018 settles 1 under Correction K."}
+      ]
+    },
+    "s05": {
+      "title": "Multi-hop SMB then WinRM",
+      "agent_accounts": {"value": ["svc_backup", "admin_it"], "cite": "handoff_18.md:1433, 1436"},
+      "steps": [
+        {"id": "s05-dump1", "kind": "lsass_dump", "host": "ep-01", "account": "svc_backup", "design_only": false,
+         "role": "attack", "cite": "handoff_18.md:1722 (both LSASS roots, EP-01 + EP-02); :1472"},
+        {"id": "s05-h1", "kind": "move", "protocol": "SMB", "source_host": "ep-01", "target_host": "ep-02",
+         "account": "svc_backup", "service": null, "design_only": false, "role": "attack",
+         "cite": "handoff_18.md:1472 (S05-H1 svc_backup->EP-02, multi-hop); :1722; :1433"},
+        {"id": "s05-dump2", "kind": "lsass_dump", "host": "ep-02", "account": "admin_it", "design_only": false,
+         "role": "attack", "cite": "handoff_18.md:1473 (dump on EP-02 pivot); :1722; :1436"},
+        {"id": "s05-h2", "kind": "move", "protocol": "WinRM", "source_host": "ep-02", "target_host": "ep-03",
+         "account": "admin_it", "service": null, "design_only": false, "role": "attack",
+         "cite": "handoff_18.md:1473 (S05-H2 admin_it->EP-03, cross-protocol hop, dump on EP-02 pivot); :1436 (SandcatPivotAdmin on EP-02); :1411 (SMB + WinRM); :1768"}
+      ]
+    },
+    "s06": {
+      "title": "Benign baseline (no attack path)",
+      "agent_accounts": {"value": ["admin_it"], "cite": "handoff_18.md:1434 (S06 on SandcatAgent_admin); :1474"},
+      "steps": [
+        {"id": "s06-winrm", "kind": "move", "protocol": "WinRM", "source_host": "ep-01", "target_host": null,
+         "account": "admin_it", "service": null, "design_only": true, "repeatable": true, "role": "benign",
+         "cite": "handoff_18.md:1412 (S06 benign baseline, WinRM + SMB); :1474 (all admin_it benign, no dump, w3 0.0); :1434",
+         "note": "Handoff gives no target hosts or counts for S06; target left null (any), one template per protocol."},
+        {"id": "s06-smb", "kind": "move", "protocol": "SMB", "source_host": "ep-01", "target_host": null,
+         "account": "admin_it", "service": null, "design_only": true, "repeatable": true, "role": "benign",
+         "cite": "handoff_18.md:1412; :1474; :1434", "note": "As s06-winrm."}
+      ]
+    },
+    "s07": {
+      "title": "Dual compromise, under-fire control",
+      "agent_accounts": {"value": ["svc_backup", "svc_sql"], "cite": "handoff_18.md:1433, 1435, 1476"},
+      "steps": [
+        {"id": "s07-dump-x", "kind": "lsass_dump", "host": "ep-01", "account": "svc_backup", "design_only": false,
+         "role": "attack_pair", "cite": "handoff_18.md:1417 (each path has its own LSASS root); :1480 (two EP-01 dumps, keyed by identity + time)"},
+        {"id": "s07-h-x", "kind": "move", "protocol": "SMB", "source_host": "ep-01", "target_host": "ep-02",
+         "account": "svc_backup", "service": "XferService", "design_only": false, "role": "attack_pair",
+         "cite": "handoff_18.md:1417 (svc_backup->XferService); :1475 (S07-X)"},
+        {"id": "s07-dump-y", "kind": "lsass_dump", "host": "ep-01", "account": "svc_backup", "design_only": false,
+         "role": "attack_pair", "cite": "handoff_18.md:1417; :1480 (both dumps run under the same foothold-agent identity)"},
+        {"id": "s07-h-y", "kind": "move", "protocol": "SMB", "source_host": "ep-03", "target_host": "ep-02",
+         "account": "svc_sql", "service": "SyncService", "design_only": false, "role": "attack_pair",
+         "cite": "handoff_18.md:1417 (svc_sql->SyncService); :1476 (S07-Y); :1723 (Path Y EP-03->EP-02)",
+         "note": "l.1723 gives source EP-03 while l.1435 puts SandcatAgent_sql on EP-01; kept as stated, data decides (handoff_mismatch)."}
+      ]
+    }
+  }
+}
