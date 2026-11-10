@@ -8,10 +8,12 @@ command text and PowerShell 4104 never confirms (no parent chain).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Mapping, Sequence
+from typing import Collection, Mapping, Sequence
 
-AGENT_IMAGE_SUFFIX = "splunkd.exe"
+AGENT_IMAGE = r"c:\users\public\splunkd.exe"
 CALDERA_PORT = 8888
+RUN_GAP_S = 6 * 3600.0     # roots further apart than this belong to an older run left in the same DB (run days)
+TRIAL_GAP_S = 1800.0       # same walk-back for the trial interval: trials of one day (S05 07:04, S06 08:58, S07 09:10) share a DB
 
 
 @dataclass(frozen=True)
@@ -33,19 +35,12 @@ class AgentProc:
 
 
 def is_splunkd(path: str | None) -> bool:
-    """True when an image path ends in splunkd.exe (case-insensitive)."""
-    return bool(path) and path.lower().replace("/", "\\").endswith("\\" + AGENT_IMAGE_SUFFIX)
+    r"""True only for the agent's exact image path C:\Users\Public\splunkd.exe (case-insensitive).
 
-
-def run_day(rows: Sequence[Mapping]) -> str | None:
-    """Trial run day = latest date on which a splunkd child was started (Sysmon 1).
-
-    WHY: the DBs also carry older host logs (ep-03 splunkd from September, ep-02
-    pivot start); the trial is the most recent agent activity in the DB.
+    WHY exact: any other ``splunkd.exe`` (a real Splunk forwarder install) is not the Caldera
+    agent, so a suffix match would pull unrelated process trees into the key.
     """
-    days = [r["t_utc"][:10] for r in rows
-            if r["event_id"] == 1 and r["channel"] == "Sysmon" and is_splunkd(r["parent_image"]) and r["t_utc"]]
-    return max(days) if days else None
+    return bool(path) and path.strip().lower().replace("/", "\\") == AGENT_IMAGE
 
 
 def _unresolved(path: str | None) -> bool:
@@ -78,23 +73,72 @@ def _splunkd_4688_roots(rows: Sequence[Mapping], tol_s: float = 3.0) -> set[str]
     return out
 
 
-def build_tree(rows: Sequence[Mapping], day: str | None) -> list[AgentProc]:
-    """All Sysmon 1 descendants of splunkd.exe at any depth, restricted to ``day``.
+def agent_roots(rows: Sequence[Mapping]) -> list[tuple[Mapping, str]]:
+    """(Sysmon 1 row, root_link) for every splunkd child, on any day (parent image or 4688 tie)."""
+    via_4688 = _splunkd_4688_roots(rows)
+    sysmon1 = [r for r in rows if r["event_id"] == 1 and r["channel"] == "Sysmon" and r["process_guid"] and r["t_utc"]]
+    out = [(r, "sysmon_parent_image") for r in sysmon1 if is_splunkd(r["parent_image"])]
+    out += [(r, "pid_match_4688") for r in sysmon1 if r["event_uid"] in via_4688]
+    return out
+
+
+def run_start_ts(rows: Sequence[Mapping], gap_s: float = RUN_GAP_S) -> float | None:
+    r"""Epoch time of the earliest splunkd root of the latest run.
+
+    RULE (cite as ``agent.run_day_rule``): sort all splunkd roots (Sysmon 1 with ParentImage
+    C:\Users\Public\splunkd.exe, plus ``pid_match_4688`` roots); start at the latest root and
+    walk back while consecutive roots are <= ``gap_s`` apart (6 h for the run days; 30 min,
+    TRIAL_GAP_S, for the trial interval, because several trials of one day share a DB); the
+    run starts at the earliest root reached. Older roots (e.g. ep-03 September agent runs) belong to other runs.
+    """
+    ts = sorted(r["ts"] for r, _ in agent_roots(rows))
+    if not ts:
+        return None
+    start = len(ts) - 1
+    while start > 0 and ts[start] - ts[start - 1] <= gap_s:
+        start -= 1
+    return ts[start]
+
+
+def run_days(rows: Sequence[Mapping]) -> tuple[list[str], bool]:
+    """UTC day(s) of the trial run, from ``run_start_ts`` to the latest splunkd root.
+
+    A run that crosses UTC midnight yields two days and the flag ``run_day_spans_midnight``
+    instead of being silently cut at one day.
+    """
+    t0 = run_start_ts(rows)
+    if t0 is None:
+        return [], False
+    from datetime import datetime, timedelta, timezone
+    t1 = max(r["ts"] for r, _ in agent_roots(rows))
+    d0 = datetime.fromtimestamp(t0, tz=timezone.utc).date()
+    d1 = datetime.fromtimestamp(t1, tz=timezone.utc).date()
+    days = [(d0 + timedelta(days=i)).isoformat() for i in range((d1 - d0).days + 1)]
+    return days, d0 != d1
+
+
+def run_day(rows: Sequence[Mapping]) -> str | None:
+    """Last UTC day of the run (kept for callers that need one label)."""
+    days, _ = run_days(rows)
+    return days[-1] if days else None
+
+
+def build_tree(rows: Sequence[Mapping], days: Collection[str] | str | None) -> list[AgentProc]:
+    """All Sysmon 1 descendants of splunkd.exe at any depth, restricted to the run ``days``.
 
     Roots are Sysmon 1 rows whose ParentImage is splunkd.exe, or (``root_link =
     pid_match_4688``) whose parent Sysmon left unresolved and 4688 names splunkd.exe.
     The walk follows ``parent_process_guid`` so ``cmd /c`` wrappers and powershell
-    grandchildren are found (attacker case AKT-16). Only rows of the run day are used.
+    grandchildren are found (attacker case AKT-16). Only rows of the run day(s) are used.
     """
+    day_set = {days} if isinstance(days, str) else set(days or ())
     sysmon1 = [r for r in rows
                if r["event_id"] == 1 and r["channel"] == "Sysmon" and r["process_guid"]
-               and day is not None and (r["t_utc"] or "")[:10] == day]
+               and (r["t_utc"] or "")[:10] in day_set]
     by_parent: dict[str, list[Mapping]] = {}
     for r in sysmon1:
         by_parent.setdefault((r["parent_process_guid"] or "").lower(), []).append(r)
-    via_4688 = _splunkd_4688_roots(rows)
-    roots = [(r, "sysmon_parent_image") for r in sysmon1 if is_splunkd(r["parent_image"])]
-    roots += [(r, "pid_match_4688") for r in sysmon1 if r["event_uid"] in via_4688]
+    roots = [(r, link) for r, link in agent_roots(rows) if (r["t_utc"] or "")[:10] in day_set]
     out: list[AgentProc] = []
     seen: set[str] = set()
     for root, link in roots:
@@ -127,11 +171,12 @@ def attach_4688(procs: Sequence[AgentProc], rows: Sequence[Mapping], tol_s: floa
     return out
 
 
-def agent_network(rows: Sequence[Mapping], day: str | None) -> dict:
-    """Server ip/port evidence: splunkd Sysmon 3 on the run day, excluding mDNS 5353."""
+def agent_network(rows: Sequence[Mapping], days: Collection[str] | str | None) -> dict:
+    """Server ip/port evidence: splunkd Sysmon 3 on the run day(s), excluding mDNS 5353."""
+    day_set = {days} if isinstance(days, str) else set(days or ())
     hits = [r for r in rows
             if r["event_id"] == 3 and r["channel"] == "Sysmon" and is_splunkd(r["image"])
-            and (r["t_utc"] or "")[:10] == day and r["destination_port"] != 5353]
+            and (r["t_utc"] or "")[:10] in day_set and r["destination_port"] != 5353]
     dests = sorted({(r["destination_ip"], r["destination_port"]) for r in hits}, key=str)
     return {"connections": [{"ip": ip, "port": port} for ip, port in dests],
             "server_confirmed": all(p == CALDERA_PORT for _, p in dests) and bool(dests),

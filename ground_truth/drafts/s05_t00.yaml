@@ -37,8 +37,15 @@
       "svc_sql",
       "system"
     ],
+    "run_days": [
+      "2026-10-12"
+    ],
     "run_day": "2026-10-12",
-    "run_day_rule": "latest date with a splunkd child (Sysmon 1); older rows excluded"
+    "run_interval": {
+      "start_utc": "2026-10-12T07:02:46.721Z",
+      "end_utc": "2026-10-12T07:17:48.154Z"
+    },
+    "run_day_rule": "run = the latest splunkd root plus every earlier root reached by walking back while consecutive roots are <= 6 h apart (roots = Sysmon 1 children of the agent splunkd.exe in Users/Public plus pid_match_4688 roots); run days = UTC days from the earliest to the latest of those roots; run_interval start = earliest root of a walk-back with a 30 min gap (trials of one day share a DB) - 60 s, end = last step + 300 s; older roots belong to other runs"
   },
   "steps": [
     {
@@ -179,6 +186,7 @@
     {
       "protocol": "SMB",
       "source_host": "ep-01",
+      "command_host": "ep-01",
       "target_host": "ep-02",
       "basis": "command_names_target",
       "agent_account": "svc_backup",
@@ -199,6 +207,7 @@
         "ba5b79156442d3ad6ede55cc59009ffc03b20e0d6664ff5cf1b4f37ff64d7ea3"
       ],
       "candidate_count": 1,
+      "candidate_count_before_absorption": 1,
       "flags": [],
       "needs_owner_approval": false,
       "candidates": [
@@ -216,9 +225,13 @@
             "0335f1115a1a6d20b735195535844f7ae9cdf1628cfef58ebe4292484614c8fc"
           ],
           "authentication_package": "NTLM",
+          "source_ip": "192.168.50.21",
           "name_match_by_logon_id": true
         }
       ],
+      "credential_logon_uids": [],
+      "related_logon_uids": [],
+      "port_join_event_uids": [],
       "target_binding": "logon_id_artifact",
       "reason": null,
       "handoff_step": "s05-h1",
@@ -226,6 +239,8 @@
       "role": "attack",
       "proposed_role": null,
       "stray": false,
+      "method": "command_names_target+artifact",
+      "source_ip": "192.168.50.21",
       "account": "svc_backup",
       "logon_account": "svc_backup",
       "move_time_utc": "2026-10-12T07:10:47.476731Z",
@@ -277,6 +292,7 @@
         "tolerance_s": 5.0,
         "dump_candidates_on_host": 1,
         "identity_at_tol0": 1,
+        "identity_if_unknown_counted": 1,
         "dump_account": "svc_backup",
         "end_unknown": [],
         "dump_before_agent_command_source_clock": true
@@ -290,10 +306,11 @@
     {
       "protocol": "WinRM",
       "source_host": "ep-02",
+      "command_host": "ep-02",
       "target_host": "ep-03",
       "basis": "command_names_target",
       "agent_account": "admin_it",
-      "cmd_credential_account": "",
+      "cmd_credential_account": "admin_it",
       "agent_command": "powershell.exe -ExecutionPolicy Bypass -C \"$pw = [Environment]::GetEnvironmentVariable('ADMIN_IT_PW','Machine'); $c = New-Object System.Management.Automation.PSCredential(\\\"LAB\\admin_it\\\",(ConvertTo-SecureString $pw -AsPlainText -Force)); Invoke-Command -ComputerName Endpoint-03.lab.local -Credential $c -ScriptBlock { Get-Service -Name *SQL* | Select-Object Status,Name }\"",
       "agent_command_time_utc": "2026-10-12T07:12:45.734000Z",
       "agent_root_link": "sysmon_parent_image",
@@ -304,6 +321,7 @@
         "4df97c692f00fc842171a5fd163ee55c71d0e78618eac1fa11e5544b1de4b5a9"
       ],
       "candidate_count": 1,
+      "candidate_count_before_absorption": 1,
       "flags": [],
       "needs_owner_approval": false,
       "candidates": [
@@ -325,8 +343,16 @@
             "e2457519ee20b58f1795dd7333ca648a81368bd88fdf1fda8dd443a51d02c828"
           ],
           "authentication_package": "Kerberos",
+          "source_ip": "192.168.50.22",
           "name_match_by_logon_id": true
         }
+      ],
+      "credential_logon_uids": [],
+      "related_logon_uids": [],
+      "port_join_event_uids": [
+        "f4dbd3ab54e38cf5f62df44d83e36f1a5c8cad6fdbc51c8e8b3471b3821a45ce",
+        "1780d97064737942d5df0e13aeb4e88bdc7aaf53e29dfeed386b3ab999e5a055",
+        "65a30831e03f56caa8f55e83c9a5737fb1e6a9a6881d966563c11cec9021a406"
       ],
       "target_binding": "logon_id_artifact",
       "reason": null,
@@ -335,6 +361,8 @@
       "role": "attack",
       "proposed_role": null,
       "stray": false,
+      "method": "command_names_target+artifact",
+      "source_ip": "192.168.50.22",
       "account": "admin_it",
       "logon_account": "admin_it",
       "move_time_utc": "2026-10-12T07:12:48.154931Z",
@@ -390,6 +418,7 @@
         "tolerance_s": 5.0,
         "dump_candidates_on_host": 1,
         "identity_at_tol0": 1,
+        "identity_if_unknown_counted": 1,
         "dump_account": "admin_it",
         "end_unknown": [],
         "dump_before_agent_command_source_clock": true
@@ -405,6 +434,9 @@
       "protocol": "SMB",
       "source_host": "ep-01",
       "target_host": "ep-02",
+      "source_ip": "192.168.50.21",
+      "command_host": null,
+      "method": "time_account_only+unexplained_logon",
       "account": "admin_it",
       "logon_account": "admin_it",
       "agent_account": null,
@@ -415,7 +447,7 @@
       "move_time_utc": "2026-10-12T07:05:15.541622Z",
       "basis": "time_account_only",
       "status": "unconfirmed",
-      "reason": "no_agent_command_names_target",
+      "reason": "no_agent_command_names_target; logon lies inside the trial run interval 2026-10-12T07:02:46.721Z .. 2026-10-12T07:17:48.154Z",
       "agent_event_uids": [],
       "target_event_uids": [
         "99d66c99408102578e3dc969e69cdbeb8aaba73e977530f62c2c9095ae0d73b6",
@@ -437,12 +469,16 @@
         "move_after_dump": false,
         "tolerance_s": 5.0,
         "dump_candidates_on_host": 1,
-        "identity_at_tol0": 0
+        "identity_at_tol0": 0,
+        "identity_if_unknown_counted": 0
       },
       "time_delta_ms": null,
       "confidence_tier": "D",
       "target_binding": "time_account",
       "candidate_count": 1,
+      "credential_logon_uids": [],
+      "related_logon_uids": [],
+      "port_join_event_uids": [],
       "needs_owner_approval": false,
       "flags": [],
       "role": null,
@@ -469,7 +505,7 @@
       "kind": "hop",
       "id": "s05-t1",
       "role": null,
-      "reason": "no_agent_command_names_target",
+      "reason": "no_agent_command_names_target; logon lies inside the trial run interval 2026-10-12T07:02:46.721Z .. 2026-10-12T07:17:48.154Z",
       "flags": [],
       "event_uids": [
         "99d66c99408102578e3dc969e69cdbeb8aaba73e977530f62c2c9095ae0d73b6",
@@ -481,6 +517,8 @@
       ]
     }
   ],
+  "system_dumps_ignored": [],
+  "flags": [],
   "open_points": [],
   "event_keys": {
     "00575dce163506f548dcc250a092de8875603c466cc9a4f36213aa9000ff6b57": {
@@ -510,6 +548,13 @@
       "event_id": 1,
       "record_id": 63294,
       "time_utc": "2026-10-12T07:04:16.419000Z"
+    },
+    "1780d97064737942d5df0e13aeb4e88bdc7aaf53e29dfeed386b3ab999e5a055": {
+      "host": "ep-02",
+      "channel": "Sysmon",
+      "event_id": 3,
+      "record_id": 49624,
+      "time_utc": "2026-10-12T07:12:47.181000Z"
     },
     "18a9c77b0cb6d074bd4eb5d4c0f814d3c8c1c9c7567a9640beb5228a21cc1529": {
       "host": "ep-01",
@@ -629,6 +674,13 @@
       "event_id": 4624,
       "record_id": 1706781,
       "time_utc": "2026-10-12T07:10:47.476731Z"
+    },
+    "65a30831e03f56caa8f55e83c9a5737fb1e6a9a6881d966563c11cec9021a406": {
+      "host": "ep-02",
+      "channel": "Sysmon",
+      "event_id": 3,
+      "record_id": 49625,
+      "time_utc": "2026-10-12T07:12:47.591000Z"
     },
     "748172b0cf610f5e5a759a4c947f386eba2ef7964f333209ddc871e9052f6d75": {
       "host": "ep-01",
@@ -867,6 +919,13 @@
       "event_id": 5145,
       "record_id": 1704830,
       "time_utc": "2026-10-12T07:05:15.585391Z"
+    },
+    "f4dbd3ab54e38cf5f62df44d83e36f1a5c8cad6fdbc51c8e8b3471b3821a45ce": {
+      "host": "ep-02",
+      "channel": "Sysmon",
+      "event_id": 3,
+      "record_id": 49621,
+      "time_utc": "2026-10-12T07:12:46.318000Z"
     },
     "fb21a51a62e850b1bdd3711cb5a898e7f80b669ef52231ec91621a91a0665435": {
       "host": "ep-02",

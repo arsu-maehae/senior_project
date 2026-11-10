@@ -44,7 +44,7 @@ IDENTITY_BASIS_FIELDS = ["dump_event_uid", "open_session_ids", "dump_time_utc", 
 TOP_FIELDS = ["trial_id", "scenario", "status", "provenance", "db_sha256", "window", "agent", "steps", "hops",
               "paths", "benign_paths", "unconfirmed", "open_points"]
 STEP_FIELDS = ["step_id", "kind", "host", "time_utc", "account", "status", "source", "event_uids", "note"]
-ALLOWED_FLAGS = {"source_host_conflict", "decision_conflict", "weak_exposure_only", "handoff_mismatch",
+ALLOWED_FLAGS = {"clock_order_disagree", "run_day_spans_midnight", "source_host_conflict", "decision_conflict", "weak_exposure_only", "handoff_mismatch",
                  "attempt_no_target_evidence", "order_within_tolerance", "stray_agent_ep02", "decode_failed",
                  "end_unknown", "no_intended_step", "account_mismatch"}
 
@@ -611,8 +611,7 @@ def lsass_dump_rows(trial: str):
 def test_s06_no_dump_everywhere_all_identity_zero(real):
     assert lsass_dump_rows("s06_t00") == [], "data premise (decision 017) changed"
     d = draft_of(real, "s06_t00")
-    assert [s for s in d["steps"] if s["kind"] == "lsass_dump"] == [] or all(s["status"] == "unconfirmed" and not s["event_uids"]
-                                                                              for s in d["steps"] if s["kind"] == "lsass_dump")
+    assert [s for s in d["steps"] if s["kind"] == "lsass_dump" and s["event_uids"]] == []
     assert d["hops"]
     assert all(h["identity_expected"] == 0 for h in d["hops"])
     assert all("decision_conflict" not in h["flags"] for h in d["hops"])
@@ -623,12 +622,17 @@ def test_s06_no_dump_everywhere_all_identity_zero(real):
 
 def test_s06_account_mismatch_recorded(real):
     d = draft_of(real, "s06_t00")
-    mism = [h for h in d["hops"] if h["status"] == "confirmed" and h["agent_account"] != h["logon_account"]
-            or h["cmd_credential_account"] and h["cmd_credential_account"] != h["logon_account"]]
-    assert mism
-    for h in mism:
-        assert h["account_mismatch"] is True and "account_mismatch" in h["flags"]
-        assert h["account"] == h["logon_account"]
+    # fixed expectations: (agent_account, cmd_credential_account, logon_account) per hop (decisions 023/024, AK-02)
+    expect = {"s06-winrm-1": ("svc_backup", "admin_it", "admin_it"),
+              "s06-winrm-2": ("svc_backup", "admin_it", "admin_it"),
+              "s06-smb-1": ("svc_backup", "admin_it", "svc_backup")}
+    for hid, (agent, cred, logon) in expect.items():
+        h = hop_by_id(d, hid)
+        assert (h["agent_account"], h["cmd_credential_account"], h["logon_account"]) == (agent, cred, logon), hid
+        assert h["account_mismatch"] is True and "account_mismatch" in h["flags"], hid
+        assert h["account"] == h["logon_account"], hid
+        l4624 = [r for r in by_uid("s06_t00", h["target_event_uids"]).values() if r["event_id"] == 4624]
+        assert {targets.normalise_account(r["account_name"]) for r in l4624} == {logon}, hid
 
 
 def test_s06_inserted_dump_flips_identity_and_raises_decision_conflict(tmp_path):
@@ -647,7 +651,7 @@ def test_s06_inserted_dump_flips_identity_and_raises_decision_conflict(tmp_path)
     _, d = synth(tmp_path, "s06_t00", edit)
     flipped = [h for h in d["hops"] if h["identity_expected"] == 1]
     assert flipped, "identities did not flip"
-    assert any("decision_conflict" in h["flags"] for h in d["hops"]) or "decision_conflict" in json.dumps(d["open_points"])
+    assert all("decision_conflict" in h["flags"] for h in flipped), [h["hop_id"] for h in flipped]
     assert len([s for s in d["steps"] if s["kind"] == "lsass_dump"]) == 1, "pair within 1 s must be one dump"
 
 
@@ -660,7 +664,7 @@ def test_ak18_deleting_track_a_ep01_logons_flips_to_zero_with_decision_conflict(
     _, d = synth(tmp_path, "s04_t00", edit)
     a = track_a(d)
     assert a["identity_expected"] == 0
-    assert "decision_conflict" in a["flags"] or any("decision_conflict" in h["flags"] for h in d["hops"])
+    assert "decision_conflict" in a["flags"]
 
 
 # ====================================================================== (7) S07
@@ -680,7 +684,12 @@ def test_s07_two_hops_distinct_logons_and_services(real):
     sx, lx = hop_service_and_logons("s07_t00", x)
     sy, ly = hop_service_and_logons("s07_t00", y)
     assert lx and ly and not (lx & ly), "hops share a 4624 logon id (merged)"
-    assert not (set(x["target_event_uids"]) & set(y["target_event_uids"])) or True
+    ex = by_uid("s07_t00", x["target_event_uids"])
+    ey = by_uid("s07_t00", y["target_event_uids"])
+    l4624_x = {u for u, r in ex.items() if r["event_id"] == 4624}
+    l4624_y = {u for u, r in ey.items() if r["event_id"] == 4624}
+    assert l4624_x and l4624_y and not (l4624_x & l4624_y), "the two hops share a 4624 event"
+    assert not ({u for u, r in ex.items() if r["event_id"] in (7045, 4697)} & {u for u, r in ey.items() if r["event_id"] in (7045, 4697)})
     assert {frozenset(sx), frozenset(sy)} == {frozenset({"xferservice"}), frozenset({"syncservice"})}, (sx, sy)
     assert x["hop_id"] != y["hop_id"]
     assert len({p["path_id"] for p in d["paths"]}) == 2
@@ -1087,6 +1096,33 @@ def test_akt10b_non_user_lsass_access_never_a_dump(real):
 
 # ====================================================================== AK-07 source host, accounts
 
+def independent_identity(trial: str, host: str, account: str, move: datetime) -> int:
+    """Correction K from raw SQL only: latest domain-user rundll32->lsass dump on `host` at or before move+5 s,
+    and a session of `account` on `host` with logon <= dump that no 4634 (logon < logoff <= dump) closed."""
+    dumps = [min(t_of(r) for r in g) for g in independent_dump_groups(trial) if g[0]["host"] == host]
+    dumps = [t for t in dumps if t <= move + timedelta(seconds=5)]
+    if not dumps:
+        return 0
+    dump = max(dumps)
+    logons = rows(trial, "SELECT target_logon_id, event_utc, logon_type, account_name FROM events_dedup WHERE host=? AND event_id=4624 "
+                         "AND channel='Security'", (host,))
+    for r in logons:
+        if (r["account_name"] or "").lower() != account or r["target_logon_id"] in (0x3E4, 0x3E5, 0x3E7):
+            continue
+        if not r["logon_type"] or parse(r["event_utc"]) > dump:
+            continue
+        offs = rows(trial, "SELECT event_utc FROM events_dedup WHERE host=? AND event_id=4634 AND target_logon_id=?", (host, r["target_logon_id"]))
+        if any(parse(r["event_utc"]) < parse(o["event_utc"]) <= dump for o in offs):
+            continue
+        return 1
+    return 0
+
+
+# fixed known identity values (decisions 017, 018, 022, 023, 024; Correction K)
+KNOWN_IDENTITY = {"s02-h1": 1, "s03-h1": 1, "s04-A-h1": 1, "s04-B-h1": 1, "s04-t1": 0, "s05-h1": 1, "s05-h2": 1, "s05-t1": 0,
+                  "s06-winrm-1": 0, "s06-winrm-2": 0, "s06-smb-1": 0, "s06-t1": 0, "s07-h-x": 1, "s07-h-y": 1, "s07-t1": 0}
+
+
 @pytest.mark.parametrize("trial", TRIALS)
 def test_ak07_hop_account_and_source_host_from_target_4624(real, trial):
     d = draft_of(real, trial)
@@ -1099,13 +1135,10 @@ def test_ak07_hop_account_and_source_host_from_target_4624(real, trial):
         assert {LAB_IP_HOST.get(r["source_ip"]) for r in l4624} == {h["source_host"]}, h["hop_id"]
         assert all(r["host"] == h["target_host"] and r["logon_type"] in (3, 10) for r in l4624)
         assert h["move_time_utc"] <= fmt(max(t_of(r) for r in l4624))
-        # identity value follows from the recorded basis (Correction K): open session AND move >= dump - 5 s
-        ib = h["identity_basis"]
-        expect = 1 if (ib["open_session_ids"] and ib["dump_event_uid"] and
-                       parse(h["move_time_utc"]) >= parse(ib["dump_time_utc"]) - timedelta(seconds=5)) else 0
-        assert h["identity_expected"] == expect, h["hop_id"]
-        assert ib["move_after_dump"] is bool(ib["dump_event_uid"] and
-                                             parse(h["move_time_utc"]) >= parse(ib["dump_time_utc"]) - timedelta(seconds=5))
+        # identity value: fixed known value AND an independent SQL computation (not the hop's own identity_basis)
+        assert h["identity_expected"] == KNOWN_IDENTITY[h["hop_id"]], h["hop_id"]
+        move = min(t_of(r) for r in l4624)
+        assert h["identity_expected"] == independent_identity(trial, h["source_host"], h["logon_account"], move), h["hop_id"]
 
 
 @pytest.mark.parametrize("trial", ["s02_t00", "s04_t00", "s05_t00", "s07_t00"])
@@ -1133,11 +1166,23 @@ def test_ak07_open_sessions_belong_to_moving_account_on_source_host(real, trial)
 @pytest.mark.parametrize("trial", TRIALS)
 def test_ak12_window_from_all_non_agent_start_steps(real, trial):
     d = draft_of(real, trial)
-    times = [parse(s["time_utc"]) for s in d["steps"] if s["kind"] != "agent_start" and s["time_utc"]]
+    # independent step times: a step time must equal the DB time of one of the step's own events
+    times: list[datetime] = []
+    for s in d["steps"]:
+        if s["kind"] == "agent_start" or not s["time_utc"]:
+            continue
+        if s["event_uids"]:
+            ev = by_uid(trial, s["event_uids"])
+            assert ev, f"step {s['step_id']} has uids that are not in the DB"
+            db_times = [t_of(r) for r in ev.values()]
+            assert min(abs((parse(s["time_utc"]) - t).total_seconds()) for t in db_times) < 0.002, \
+                f"step {s['step_id']} time {s['time_utc']} equals none of its events' times"
+        times.append(parse(s["time_utc"]))
     assert times
     w = d["window"]
     assert abs((parse(w["start_utc"]) - (min(times) - timedelta(seconds=60))).total_seconds()) < 0.002
     assert abs((parse(w["end_utc"]) - (max(times) + timedelta(seconds=300))).total_seconds()) < 0.002
+    assert w["source"] == "key"
     for h in confirmed(d):
         assert w["start_utc"] <= h["move_time_utc"] <= w["end_utc"]
     oc = w["outside_counts"]
@@ -1190,3 +1235,340 @@ def test_agent_commands_masked_when_password_in_db(real, trial):
     assert all(PASSWORD not in c for c in cmds)
     if pw_rows:
         assert any("***" in c for c in cmds) or not cmds
+
+
+# ====================================================================== decisions 021-025: pinned expectations on the real drafts
+
+def test_dec021_s04_track_a_source_session_is_desktop_0xd6398(real):
+    d = draft_of(real, "s04_t00")
+    a = hop_by_id(d, "s04-A-h1")
+    assert (a["source_host"], a["target_host"], a["account"]) == ("ep-01", "ep-02", "admin_it")
+    assert find(a, "session_id") == ["0xd6398"] and find(a, "session_logon_type") == [11]
+    assert a["status"] == "unconfirmed" and a["identity_expected"] == 1 and a["needs_owner_approval"] is True
+    assert a["proposed_role"] == "benign" and find(a, "splunkd_ancestor") == [False]
+    assert "0xd6398" in a["identity_basis"]["open_session_ids"]
+    # independent DB evidence for the session: a type 11 admin_it 4624 on ep-01 with logon id 0xd6398
+    r = rows("s04_t00", "SELECT account_name, logon_type FROM events_dedup WHERE host='ep-01' AND event_id=4624 AND target_logon_id=?", (0xd6398,))
+    assert r and all((x["account_name"], x["logon_type"]) == ("admin_it", 11) for x in r)
+    assert [p["hop_ids"] for p in d["benign_paths"]] == [["s04-A-h1"]]
+
+
+def test_dec022_s05_hop2_ep02_to_ep03_tier_a_uses_ep02_dump(real):
+    d = draft_of(real, "s05_t00")
+    h = hop_by_id(d, "s05-h2")
+    assert (h["protocol"], h["source_host"], h["target_host"], h["account"]) == ("WinRM", "ep-02", "ep-03", "admin_it")
+    assert h["confidence_tier"] == "A" and h["identity_expected"] == 1 and h["status"] == "confirmed"
+    ib = h["identity_basis"]
+    assert ib["dump_time_utc"].startswith("2026-10-12T07:11:49.7") and ib["dump_host"] == "ep-02"
+    r = by_uid("s05_t00", [ib["dump_event_uid"]])[ib["dump_event_uid"]]
+    assert (r["host"], r["event_id"]) == ("ep-02", 10) and fmt(t_of(r)).startswith("2026-10-12T07:11:49.7")
+    assert [p["hop_ids"] for p in d["paths"]] == [["s05-h1", "s05-h2"]]
+
+
+def test_dec023_s07_two_hops_fixed_values(real):
+    d = draft_of(real, "s07_t00")
+    x, y = hop_by_id(d, "s07-h-x"), hop_by_id(d, "s07-h-y")
+    assert [c["hop_id"] for c in confirmed(d)] == ["s07-h-x", "s07-h-y"]
+    assert (x["target_logon_id"], y["target_logon_id"]) == ("0x49cdfa", "0x4b5d51")
+    sx, lx = hop_service_and_logons("s07_t00", x)
+    sy, ly = hop_service_and_logons("s07_t00", y)
+    assert sx == {"xferservice"} and sy == {"syncservice"}
+    assert 0x49cdfa in lx and 0x4b5d51 in ly and not (lx & ly)     # a hop may hold a burst of logons; the anchor is its own
+    assert x["candidate_count"] == 1
+    assert x["account"] == y["account"] == "svc_backup"
+    assert y["cmd_credential_account"] == "svc_sql" and y["handoff_account"] == "svc_sql"
+    assert y["account_mismatch"] is True and "account_mismatch" in y["flags"]
+
+
+def test_dec024_s06_all_hops_identity_zero_and_all_in_benign_paths(real):
+    d = draft_of(real, "s06_t00")
+    assert {h["hop_id"] for h in d["hops"]} == {"s06-winrm-1", "s06-winrm-2", "s06-smb-1", "s06-t1"}
+    assert all(h["identity_expected"] == 0 for h in d["hops"])
+    assert {x for p in d["benign_paths"] for x in p["hop_ids"]} == {h["hop_id"] for h in d["hops"]}
+    assert all(p["role"] == "benign" for p in d["benign_paths"]) and d["paths"] == []
+    smb = hop_by_id(d, "s06-smb-1")
+    assert smb["candidate_count"] == 1 and len(smb["credential_logon_uids"]) == 1
+    cl = by_uid("s06_t00", smb["credential_logon_uids"])
+    assert all((r["event_id"], r["account_name"], r["host"], r["source_ip"]) == (4624, "admin_it", "ep-02", "192.168.50.21") for r in cl.values())
+    w1 = hop_by_id(d, "s06-winrm-1")
+    assert w1["candidate_count"] == 1 and w1["related_logon_uids"]
+    rl = by_uid("s06_t00", w1["related_logon_uids"])
+    assert all((r["event_id"], r["account_name"], r["host"]) == (4624, "admin_it", "ep-02") for r in rl.values())
+    assert not (set(w1["related_logon_uids"]) & set(w1["target_event_uids"]))
+
+
+def test_dec025_s03_dedicated_winrm_hop(real):
+    d = draft_of(real, "s03_t00")
+    h = hop_by_id(d, "s03-h1")
+    assert [c["hop_id"] for c in confirmed(d)] == ["s03-h1"]
+    assert (h["protocol"], h["source_host"], h["target_host"], h["account"]) == ("WinRM", "ep-01", "ep-03", "admin_it")
+    assert h["identity_expected"] == 1 and h["confidence_tier"] == "A" and h["basis"] == "command_names_target"
+    assert "handoff_mismatch" in h["flags"] and h["target_binding"] == "logon_id_artifact"
+    ev = by_uid("s03_t00", h["target_event_uids"])
+    wsm = [r for r in ev.values() if (r["image"] or "").lower().endswith("wsmprovhost.exe") or (r["channel"], r["event_id"]) == ("WinRM", 91)]
+    assert wsm, "no wsmprovhost / WinRM 91 artefact in the hop"
+    l4624 = [r for r in ev.values() if r["event_id"] == 4624]
+    assert l4624 and {r["source_ip"] for r in l4624} == {"192.168.50.21"} and {r["host"] for r in l4624} == {"ep-03"}
+
+
+def test_s02_stray_target_side_events_listed_and_not_in_hop(real):
+    d = draft_of(real, "s02_t00")
+    h = hop_by_id(d, "s02-h1")
+    stray_ids = [u for e in d["unconfirmed"] if e.get("role") == "stray" for u in e.get("stray_target_side_event_uids", [])]
+    assert stray_ids, "stray_target_side_event_uids empty"
+    ev = by_uid("s02_t00", stray_ids)
+    assert set(ev) == set(stray_ids)
+    assert {r["event_id"] for r in ev.values()} <= {5140, 5145, 7045, 4697} and {r["host"] for r in ev.values()} == {"ep-02"}
+    assert all(parse("2026-09-24T05:42:00Z") <= t_of(r) <= parse("2026-09-24T05:42:10Z") for r in ev.values())
+    assert 7045 in {r["event_id"] for r in ev.values()}
+    assert not (set(stray_ids) & set(h["target_event_uids"]))
+
+
+def test_ak17_leftover_hops_only_inside_run_interval(real):
+    for trial in real:
+        d = draft_of(real, trial)
+        ri = d["agent"]["run_interval"]
+        lo, hi = parse(ri["start_utc"]), parse(ri["end_utc"])
+        for h in d["hops"]:
+            assert lo <= parse(h["move_time_utc"]) <= hi, (trial, h["hop_id"], h["move_time_utc"], ri)
+
+    def at(trial, hhmmss):
+        return [h["hop_id"] for h in draft_of(real, trial)["hops"] if h["move_time_utc"][11:19] == hhmmss]
+
+    assert at("s06_t00", "07:05:15") == [] and at("s07_t00", "07:05:15") == []
+    assert at("s05_t00", "07:05:15") == ["s05-t1"] and at("s07_t00", "09:11:08") == ["s07-t1"]
+    for trial, hid in (("s05_t00", "s05-t1"), ("s07_t00", "s07-t1")):
+        h = hop_by_id(draft_of(real, trial), hid)
+        assert h["basis"] == "time_account_only" and h["status"] == "unconfirmed" and h["account"] == "admin_it"
+
+
+def test_ak18_system_dumps_ignored_lists_s02_ep02_system_dump(real):
+    d = draft_of(real, "s02_t00")
+    db_sys = {r["event_uid"] for r in rows("s02_t00", "SELECT event_uid FROM events_dedup WHERE channel='Sysmon' AND event_id=10 AND host='ep-02' "
+                                                      "AND source_image LIKE '%rundll32.exe' AND target_image LIKE '%lsass.exe' AND account_name='system'")}
+    assert db_sys
+    ent = [e for e in d["system_dumps_ignored"] if e["host"] == "ep-02"]
+    assert len(ent) == 1 and set(ent[0]["event_uids"]) == db_sys and ent[0]["count"] >= 1 and "system" in ent[0]["accounts"]
+
+
+# ====================================================================== AK-18 sessions (synthetic)
+
+SESSION_ID = 2476739     # 0x25cac3: type 4 svc_backup logon on ep-01 at 05:35:51.41 (S02 t00), open at the 05:42 dump
+
+
+def s02_hop(d: dict) -> dict:
+    return hop_by_id(d, "s02-h1")
+
+
+def test_ak18_logoff_with_reused_id_before_logon_does_not_close(tmp_path):
+    need_db("s02_t00")
+    assert rows("s02_t00", "SELECT 1 FROM events_dedup WHERE host='ep-01' AND event_id=4624 AND target_logon_id=? AND account_name='svc_backup'", (SESSION_ID,))
+
+    def edit(con):
+        insert_event(con, host="ep-01", channel="Security", event_id=4634, event_utc="2026-09-24T05:30:00.000000Z",
+                     target_logon_id=SESSION_ID, logon_type=4)
+
+    _, d = synth(tmp_path, "s02_t00", edit)
+    h = s02_hop(d)
+    assert h["identity_expected"] == 1 and "0x25cac3" in h["identity_basis"]["open_session_ids"]
+
+
+def test_ak18_logoff_after_logon_before_dump_closes_session(tmp_path):
+    need_db("s02_t00")
+
+    def edit(con):
+        insert_event(con, host="ep-01", channel="Security", event_id=4634, event_utc="2026-09-24T05:36:00.000000Z",
+                     target_logon_id=SESSION_ID, logon_type=4)
+
+    _, d = synth(tmp_path, "s02_t00", edit)
+    h = s02_hop(d)
+    assert "0x25cac3" not in h["identity_basis"]["open_session_ids"]
+    assert h["identity_expected"] == 0 and h["identity_basis"]["identity_if_unknown_counted"] == 0
+
+
+def test_ak18_dropping_the_4634_of_a_closed_session_counts_it_open(tmp_path):
+    need_db("s02_t00")
+    closed_id = 2475862     # svc_backup type 4 on ep-01, logon 05:35:51.23, 4634 at 05:35:51.26 (before the 05:42 dump)
+    assert rows("s02_t00", "SELECT 1 FROM events_dedup WHERE host='ep-01' AND event_id=4634 AND target_logon_id=?", (closed_id,))
+    _, d0 = synth(tmp_path / "a", "s02_t00")
+    assert hex(closed_id) not in s02_hop(d0)["identity_basis"]["open_session_ids"]
+
+    def edit(con):
+        con.execute("DELETE FROM events WHERE host='ep-01' AND event_id=4634 AND target_logon_id=?", (closed_id,))
+
+    _, d = synth(tmp_path / "b", "s02_t00", edit)
+    ib = s02_hop(d)["identity_basis"]
+    assert hex(closed_id) in ib["open_session_ids"], "session without a logoff must count as open (decision 004)"
+    assert s02_hop(d)["identity_expected"] == 1 and ib["identity_if_unknown_counted"] == 1
+
+
+def test_ak18_boot_marker_makes_session_end_unknown_not_counted(tmp_path):
+    need_db("s02_t00")
+
+    def edit(con):
+        insert_event(con, host="ep-01", channel="System", event_id=6005, event_utc="2026-09-24T05:38:00.000000Z")
+
+    _, d = synth(tmp_path, "s02_t00", edit)
+    h = s02_hop(d)
+    ib = h["identity_basis"]
+    assert "0x25cac3" in ib["end_unknown_ids"] and "0x25cac3" not in ib["open_session_ids"]
+    assert "end_unknown" in h["flags"]
+    assert ib["identity_if_unknown_counted"] == 1
+    assert h["identity_expected"] == (1 if ib["open_session_ids"] else 0)
+
+
+# ====================================================================== source_host_conflict (synthetic)
+
+def retarget_source_ip(con, new_ip: str):
+    con.execute("UPDATE events SET source_ip=? WHERE host='ep-02' AND event_id=4624 AND source_ip='192.168.50.21' "
+                "AND event_utc BETWEEN '2026-09-24T05:42:30' AND '2026-09-24T05:43:00'", (new_ip,))
+
+
+def test_source_host_conflict_other_endpoint_ip(tmp_path):
+    need_db("s02_t00")
+    _, d = synth(tmp_path, "s02_t00", lambda con: retarget_source_ip(con, "192.168.50.23"))
+    h = s02_hop(d)
+    assert h["status"] == "confirmed" and h["source_host"] == "ep-03"
+    assert "source_host_conflict" in h["flags"]
+    assert h["identity_basis"]["dump_host"] == "ep-03"          # decision 013: the IP host, not the command host
+    assert h["identity_expected"] == 0                           # ep-03 has no dump in S02
+
+
+def test_source_host_conflict_unmapped_ip_gives_null_source(tmp_path):
+    need_db("s02_t00")
+    _, d = synth(tmp_path, "s02_t00", lambda con: retarget_source_ip(con, "192.168.50.199"))
+    h = s02_hop(d)
+    assert h["source_host"] is None and "source_host_conflict" in h["flags"]
+    assert h["identity_expected"] == 0 and h["account"] == "svc_backup"
+
+
+# ====================================================================== AKT-03 two services of one name (synthetic)
+
+def test_akt03_two_services_same_name_never_silent_first_pick(tmp_path):
+    need_db("s07_t00")
+    holder = {}
+
+    def edit(con):
+        holder["u"] = insert_event(con, host="ep-02", channel="System", event_id=7045, event_utc="2026-10-12T09:17:59.000000Z",
+                                   service_name="XferService", service_image_path="C:\\Windows\\Xpay.exe", account_name="svc_backup")
+
+    repo, d = synth(tmp_path, "s07_t00", edit)
+    x = hop_by_id(d, "s07-h-x")
+    dbp = repo / "data" / "processed" / "s07_t00.sqlite3"
+    con = sqlite3.connect(dbp)
+    in_hop = [r[0] for r in con.execute(f"SELECT event_uid FROM events WHERE event_id=7045 AND event_uid IN ({','.join('?' * len(x['target_event_uids']))})",
+                                        x["target_event_uids"])]
+    con.close()
+    both = holder["u"] in in_hop and len(in_hop) == 2
+    neither = not in_hop
+    assert both or neither or x["status"] != "confirmed", "exactly one of two same-name services silently taken"
+    assert x["service_candidates_by_name"] == 2 or x["status"] != "confirmed"
+    assert holder["u"] not in hop_by_id(d, "s07-h-y")["target_event_uids"]
+
+
+# ====================================================================== PSCredential quote styles, splunkd exact path
+
+@pytest.mark.parametrize("cmd", [
+    "$c = New-Object System.Management.Automation.PSCredential('LAB\\admin_it', $pw)",
+    '$c = New-Object System.Management.Automation.PSCredential("LAB\\admin_it", $pw)',
+    '$c = New-Object System.Management.Automation.PSCredential(\\"LAB\\admin_it\\",$pw)',
+])
+def test_pscredential_account_three_quote_styles(cmd):
+    assert targets.credential_account([cmd]) == "admin_it"
+
+
+def test_is_splunkd_requires_exact_agent_path():
+    from answer_key import agent_tree
+    assert agent_tree.is_splunkd("C:\\Users\\Public\\splunkd.exe")
+    assert agent_tree.is_splunkd("c:\\users\\public\\SPLUNKD.EXE")
+    for bad in ("C:\\Program Files\\SplunkUniversalForwarder\\bin\\splunkd.exe", "C:\\Users\\Public\\x\\splunkd.exe",
+                "D:\\Users\\Public\\splunkd.exe", "splunkd.exe", "-", "", None):
+        assert not agent_tree.is_splunkd(bad), bad
+
+
+def test_child_of_other_splunkd_path_is_not_an_agent_command(tmp_path):
+    need_db("s02_t00")
+    holder = {}
+
+    def edit(con):
+        holder["u"] = sysmon1(con, "ep-01", parse("2026-09-24T05:44:00.000000Z"), "cafebabe-0001-6ab4-0001-000000002200",
+                              "cafebabe-0000-6ab4-0001-000000002200", "svc_backup",
+                              "C:\\Windows\\System32\\cmd.exe", r"sc.exe \\ep-03 create Foo binPath= C:\Windows\foo.exe",
+                              parent_image="C:\\Program Files\\SplunkUniversalForwarder\\bin\\splunkd.exe", pid=62000, ppid=7000)
+
+    _, d = synth(tmp_path, "s02_t00", edit)
+    u = holder["u"]
+    # AK-04: a command not under the agent tree is at most listed as unconfirmed; never an agent-tree confirmation
+    assert not [h for h in d["hops"] if u in h["agent_event_uids"] and (h["status"] == "confirmed" or h["basis"] == "command_names_target")]
+    assert not any(u in p_uids for p_uids in [s["event_uids"] for s in d["steps"] if s["status"] == "confirmed"])
+    assert all(x["kind"] in ("attempt", "hop", "step") and x.get("role") != "attack" for x in d["unconfirmed"] if appears(x, u))
+    assert not appears({"paths": d["paths"]}, u)
+    assert len(confirmed(d)) == 1
+
+
+# ====================================================================== flags: clock_order_disagree, midnight
+
+def test_clock_order_disagree_is_an_allowed_flag_and_is_raised(tmp_path):
+    assert "clock_order_disagree" in ALLOWED_FLAGS
+    need_db("s02_t00")
+    uids = sorted(s02_dump_uids())
+    _, d0 = synth(tmp_path / "base", "s02_t00")
+    h0 = s02_hop(d0)
+    t0 = parse(h0["agent_command_time_utc"])
+    move = parse(h0["move_time_utc"])
+    assert abs((move - t0).total_seconds()) < 4, "premise: command and 4624 within the 5 s tolerance"
+    dump_t = t0 + timedelta(seconds=1)     # dump after the agent command on ep-01's clock; the 4624 (ep-02 clock) is still >= dump - 5 s
+
+    def edit(con):
+        for i, u in enumerate(uids):
+            t = dump_t + timedelta(milliseconds=50 * i)
+            con.execute("UPDATE events SET event_utc=?, timestamp_utc=? WHERE event_uid=?", (fmt(t), fmt(t), u))
+
+    _, d = synth(tmp_path / "x", "s02_t00", edit)
+    h = s02_hop(d)
+    assert h["identity_basis"]["move_after_dump"] is True
+    assert h["identity_basis"]["dump_before_agent_command_source_clock"] is False
+    assert "clock_order_disagree" in h["flags"] and set(h["flags"]) <= ALLOWED_FLAGS
+
+
+def test_run_day_spans_midnight_flag(tmp_path):
+    need_db("s02_t00")
+
+    def edit(con):
+        agent_child(con, "2026-09-23T23:55:00.000000Z", "cmd.exe /c echo early", 70, parent="feedbeef-0000-6ab4-0001-000000002200")
+
+    _, d = synth(tmp_path / "x", "s02_t00", edit)
+    assert "run_day_spans_midnight" in d["flags"]
+    assert d["agent"]["run_days"] == ["2026-09-23", "2026-09-24"]
+    _, d0 = synth(tmp_path / "plain", "s02_t00")
+    assert "run_day_spans_midnight" not in d0["flags"] and d0["agent"]["run_days"] == ["2026-09-24"]
+
+
+# ====================================================================== verify: wrong_event_type, logon_uids
+
+def test_verify_rejects_uid_of_wrong_event_type(real):
+    d = json.loads(json.dumps(draft_of(real, "s02_t00")))
+    h = hop_by_id(d, "s02-h1")
+    ev = by_uid("s02_t00", h["target_event_uids"])
+    u4624 = next(u for u, r in ev.items() if r["event_id"] == 4624)
+    assert u4624 in d["event_keys"]
+    h["agent_event_uids"].append(u4624)                # a 4624 is not a process-creation record
+    rep = verify_mod.verify(d, db_path("s02_t00"))
+    bad = [f for f in rep["failures"] if f["type"] == "wrong_event_type"]
+    assert rep["ok"] is False and bad and bad[0]["uid"] == u4624 and bad[0]["at"].endswith("/agent_event_uids")
+    assert bad[0]["found"] == "Security 4624"
+    assert not [f for f in rep["failures"] if f["type"] != "wrong_event_type"]
+
+
+def test_verify_checks_logon_uid_lists(real):
+    d = json.loads(json.dumps(draft_of(real, "s06_t00")))
+    smb = hop_by_id(d, "s06-smb-1")
+    ev = by_uid("s06_t00", smb["target_event_uids"])
+    u5145 = next(u for u, r in ev.items() if r["event_id"] != 4624)      # any non-logon target-side event
+    smb["credential_logon_uids"] = [u5145]
+    w1 = hop_by_id(d, "s06-winrm-1")
+    w1["related_logon_uids"] = ["0" * 64]
+    rep = verify_mod.verify(d, db_path("s06_t00"))
+    types = {(f["type"], f["uid"]) for f in rep["failures"]}
+    assert ("wrong_event_type", u5145) in types and ("missing_uid", "0" * 64) in types
+    assert rep["ok"] is False

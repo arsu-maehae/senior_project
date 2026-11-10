@@ -11,8 +11,9 @@ from .timeutil import fmt_utc, parse_utc
 
 HOP_DEFAULTS = {"move_time_utc": None, "identity_expected": None, "identity_basis": None, "time_delta_ms": None,
                 "confidence_tier": "D", "target_binding": None, "target_event_uids": [], "account": None,
-                "logon_account": None, "account_mismatch": False}
-PRIVATE = ("_names", "_anchor_ts", "_burst_uids")
+                "logon_account": None, "account_mismatch": False, "method": None, "candidate_count": None,
+                "credential_logon_uids": [], "related_logon_uids": [], "port_join_event_uids": []}
+PRIVATE = ("_names", "_anchor_ts", "_burst_uids", "_absorbed_uids")
 KEY_MARGIN_BEFORE_S, KEY_MARGIN_AFTER_S = 60.0, 300.0
 
 
@@ -45,9 +46,13 @@ def track_a_evidence(hop: Mapping, manual: Sequence, rows: Sequence[Mapping], by
                                             (hop.get("identity_basis") or {}).get("open_sessions", [])]}
 
 
-def finish(scenario, trial_id, sc, isteps, rows, steps, hops, unconfirmed, open_points, dumps, net, tree, stray_acts,
-           db_sha256, provisional, day, by_guid, rows4688, manual) -> dict:
-    """Assemble the final draft dict."""
+def finish(scenario: str, trial_id: str, sc: Mapping, isteps: Sequence[Mapping], rows: Sequence[Mapping],
+           steps: list[dict], hops: list[dict], unconfirmed: list[dict], open_points: list[str], dumps: Sequence,
+           net: Mapping, tree: Sequence, stray_acts: Sequence, db_sha256: str, provisional: Mapping | None,
+           days: Sequence[str], by_guid: Mapping[str, Mapping], rows4688: Sequence[Mapping], manual: Sequence,
+           sys_dumps: Sequence[Mapping] = (), flags: Sequence[str] = (),
+           run_interval: Mapping | None = None) -> dict:
+    """Assemble the final draft dict (roles, decision checks, paths, window, evidence keys)."""
     by_uid = {r["event_uid"]: r for r in rows}
     s06_dump = scenario == "s06" and bool(dumps)
     for h in hops:
@@ -63,8 +68,10 @@ def finish(scenario, trial_id, sc, isteps, rows, steps, hops, unconfirmed, open_
             if h["identity_expected"] != 1:
                 h["flags"].append("decision_conflict")
             open_points.append("S04 Track A source session (desktop vs agent) chosen from evidence in hops[].session_evidence; owner approval needed (AK-08).")
-        if scenario == "s06" and (h["identity_expected"] or s06_dump):
-            h["flags"].append("decision_conflict")
+        if scenario == "s06":
+            h["role"] = h.get("role") or "benign"        # S06 has no attack path (AK-09)
+            if h["identity_expected"] or s06_dump:
+                h["flags"].append("decision_conflict")
         h["flags"] = list(dict.fromkeys(h["flags"]))
     if s06_dump:
         open_points.append("S06: a dump was found; decision 017 kill criterion raised.")
@@ -100,9 +107,10 @@ def finish(scenario, trial_id, sc, isteps, rows, steps, hops, unconfirmed, open_
     for h in hops:
         if h.get("handoff_step") and h["role"] == "attack_pair":
             paths.append({"path_id": f"{h['hop_id']}-path", "role": "attack_pair", "hop_ids": [h["hop_id"]], "status": h["status"]})
-        elif h.get("role") in ("benign", "distractor"):
+        elif h.get("role") in ("benign", "distractor") or scenario == "s06":
             benign_paths.append({"path_id": f"{h['hop_id']}-path", "role": "benign", "hop_ids": [h["hop_id"]], "status": h["status"],
-                                 "proposed_role": h.get("proposed_role")})
+                                 "proposed_role": h.get("proposed_role"),
+                                 "note": "S06 has no attack path (AK-09)" if scenario == "s06" else None})
     for st in isteps:
         if st["kind"] == "move" and st["id"] not in used and st["role"] in ("attack", "attack_pair"):
             paths.append({"path_id": f"{st['id']}-path", "role": st["role"], "hop_ids": [], "missing_steps": [st["id"]], "status": "unconfirmed"})
@@ -120,12 +128,20 @@ def finish(scenario, trial_id, sc, isteps, rows, steps, hops, unconfirmed, open_
                 win["outside_counts"]["target_side_events"] += n
         if provisional:
             win["provisional"] = {"start_utc": provisional["start_utc"], "end_utc": provisional["end_utc"]}
-            win["shrink_flag"] = (_iso(lo) > provisional["start_utc"]) or (_iso(hi) < provisional["end_utc"])
+            win["shrink_flag"] = (lo > parse_utc(provisional["start_utc"]).timestamp()
+                                  or hi < parse_utc(provisional["end_utc"]).timestamp())
     accounts = sorted({p.account for p in tree if p.depth == 1})
     agent = {"image": "C:\\Users\\Public\\splunkd.exe", "server_ip": (net["connections"][0]["ip"] if net["connections"] else None),
              "server_port": (net["connections"][0]["port"] if net["connections"] else None),
              "server_confirmed": net["server_confirmed"], "sysmon3_event_uids": net["event_uids"], "accounts": accounts,
-             "run_day": day, "run_day_rule": "latest date with a splunkd child (Sysmon 1); older rows excluded"}
+             "run_days": list(days), "run_day": days[-1] if days else None,
+             "run_interval": dict(run_interval) if run_interval else None,
+             "run_day_rule": "run = the latest splunkd root plus every earlier root reached by walking back while "
+                             "consecutive roots are <= 6 h apart (roots = Sysmon 1 children of "
+                             "the agent splunkd.exe in Users/Public plus pid_match_4688 roots); run days = UTC days from the "
+                             "earliest to the latest of those roots; run_interval start = earliest root of a walk-back with a 30 min gap "
+                             "(trials of one day share a DB) - 60 s, end = last step + 300 s; "
+                             "older roots belong to other runs"}
     for h in hops:
         for k in PRIVATE:
             h.pop(k, None)
@@ -133,7 +149,8 @@ def finish(scenario, trial_id, sc, isteps, rows, steps, hops, unconfirmed, open_
         open_points.append("Some agent roots are tied by 4688 parent=splunkd.exe because Sysmon 1 shows ParentImage '-' (root_link=pid_match_4688).")
     draft = {"trial_id": trial_id, "scenario": scenario, "status": "draft", "provenance": "log-based, agent process tree (decision 020)",
              "db_sha256": db_sha256, "window": win, "agent": agent, "steps": steps, "hops": hops, "paths": paths,
-             "benign_paths": benign_paths, "unconfirmed": unconfirmed, "open_points": open_points}
+             "benign_paths": benign_paths, "unconfirmed": unconfirmed, "system_dumps_ignored": list(sys_dumps),
+             "flags": list(flags), "open_points": open_points}
     draft["event_keys"] = event_keys(draft, by_uid)
     return draft
 

@@ -12,10 +12,36 @@ import json
 from collections import Counter
 from pathlib import Path
 
+from datetime import datetime
+
 from .db import open_ro, sha256_file
 
 LIST_KEYS = ("event_uids", "agent_event_uids", "target_event_uids", "dump_event_uids", "stray_target_side_event_uids",
-             "agent_corroboration_4688_uids", "sysmon3_event_uids", "command_event_uids", "target_events_tied_by_name")
+             "agent_corroboration_4688_uids", "sysmon3_event_uids", "command_event_uids", "target_events_tied_by_name",
+             "logon_uids", "credential_logon_uids", "related_logon_uids", "port_join_event_uids")
+
+# Event kinds a uid may have, by the key it is stored under (channel, event id). ``None`` = not checked
+# (``event_uids`` of a step is a mixed list). Written here, not imported from the builder (independence).
+_TARGET_SIDE = {("Security", 4624), ("Security", 5140), ("Security", 5145), ("Security", 4697), ("System", 7045),
+                ("WinRM", 91)}
+_PROCESS = {("Sysmon", 1), ("Security", 4688)}
+EXPECTED_KINDS: dict[str, set[tuple[str, int]]] = {
+    "dump_event_uid": {("Sysmon", 10)}, "dump_event_uids": {("Sysmon", 10)},
+    "target_event_uids": _TARGET_SIDE, "target_events_tied_by_name": _TARGET_SIDE,
+    "stray_target_side_event_uids": {("Security", 5140), ("Security", 5145), ("Security", 4697), ("System", 7045)},
+    "agent_event_uids": _PROCESS, "command_event_uids": _PROCESS,
+    "agent_corroboration_4688_uids": {("Security", 4688)}, "sysmon3_event_uids": {("Sysmon", 3)},
+    "port_join_event_uids": {("Sysmon", 3)},
+    "logon_uids": {("Security", 4624)}, "credential_logon_uids": {("Security", 4624)},
+    "related_logon_uids": {("Security", 4624)}, "session_logon_uid": {("Security", 4624)},
+}
+# a wsmprovhost start (WinRM session artefact) is a process event stored in target_event_uids
+_WSMPROV = {"target_event_uids"}
+
+
+def parse_time(text: str) -> datetime:
+    """ISO-8601 UTC (``...Z``) to an aware datetime, so times compare as instants, not as strings."""
+    return datetime.fromisoformat(text.replace("Z", "+00:00"))
 
 
 def load_draft(path: Path) -> dict:
@@ -44,8 +70,28 @@ def uids_with_context(node, where: str = "") -> list[tuple[str, str]]:
 
 
 def _fetch(con, uid: str):
-    return con.execute("SELECT host, channel, event_id, record_id, COALESCE(event_utc, timestamp_utc) AS t "
+    return con.execute("SELECT host, channel, event_id, record_id, image, COALESCE(event_utc, timestamp_utc) AS t "
                        "FROM events_dedup WHERE event_uid = ?", (uid,)).fetchone()
+
+
+def kind_ok(key: str, row) -> bool:
+    """True when the stored event has an event type allowed at this location of the draft."""
+    allowed = EXPECTED_KINDS.get(key)
+    if allowed is None:
+        return True
+    kind = (row["channel"], row["event_id"])
+    if kind in allowed:
+        return True
+    return (key in _WSMPROV and kind in _PROCESS and (row["image"] or "").replace("/", "\\").rsplit("\\", 1)[-1].lower()
+            == "wsmprovhost.exe")
+
+
+def _same_time(a: str | None, b: str | None) -> bool:
+    """Equal instants (string formats may differ)."""
+    try:
+        return a is not None and b is not None and parse_time(a) == parse_time(b)
+    except ValueError:
+        return a == b
 
 
 def verify(draft: dict, db_path: Path) -> dict:
@@ -76,11 +122,14 @@ def verify(draft: dict, db_path: Path) -> dict:
                 continue
             got = {"host": row["host"], "channel": row["channel"], "event_id": row["event_id"],
                    "record_id": row["record_id"], "time_utc": row["t"]}
-            bad = [f for f in got if got[f] != key.get(f)]
+            bad = [f for f in got if not (_same_time(got[f], key.get(f)) if f == "time_utc" else got[f] == key.get(f))]
             if bad:
                 report["failures"].append({"type": "content_key_mismatch", "uid": uid, "at": loc, "fields": bad})
+            if not kind_ok(loc.rsplit("/", 1)[-1].split("[")[0], row):
+                report["failures"].append({"type": "wrong_event_type", "uid": uid, "at": loc,
+                                           "found": f"{row['channel']} {row['event_id']}"})
             kinds[f"{row['channel']} {row['event_id']}"] += 1
-            if lo and hi and not (lo <= row["t"] <= hi):
+            if lo and hi and not (parse_time(lo) <= parse_time(row["t"]) <= parse_time(hi)):
                 report["out_of_window"] += 1
     finally:
         con.close()

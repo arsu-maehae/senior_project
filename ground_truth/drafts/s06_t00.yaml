@@ -38,8 +38,15 @@
       "svc_sql",
       "system"
     ],
+    "run_days": [
+      "2026-10-12"
+    ],
     "run_day": "2026-10-12",
-    "run_day_rule": "latest date with a splunkd child (Sysmon 1); older rows excluded"
+    "run_interval": {
+      "start_utc": "2026-10-12T08:57:25.672Z",
+      "end_utc": "2026-10-12T09:09:34.564Z"
+    },
+    "run_day_rule": "run = the latest splunkd root plus every earlier root reached by walking back while consecutive roots are <= 6 h apart (roots = Sysmon 1 children of the agent splunkd.exe in Users/Public plus pid_match_4688 roots); run days = UTC days from the earliest to the latest of those roots; run_interval start = earliest root of a walk-back with a 30 min gap (trials of one day share a DB) - 60 s, end = last step + 300 s; older roots belong to other runs"
   },
   "steps": [
     {
@@ -165,6 +172,7 @@
     {
       "protocol": "WinRM",
       "source_host": "ep-01",
+      "command_host": "ep-01",
       "target_host": "ep-02",
       "basis": "command_names_target",
       "agent_account": "svc_backup",
@@ -178,7 +186,8 @@
       "agent_corroboration_4688_uids": [
         "5c6fb29ae0f52d2c06ef17bdd2843a6ae9f613bafa2a73b8b6f0c491ec79a86d"
       ],
-      "candidate_count": 4,
+      "candidate_count": 1,
+      "candidate_count_before_absorption": 2,
       "flags": [
         "account_mismatch"
       ],
@@ -198,6 +207,7 @@
             "6d86e392423f90c78721bf9c608837c748029e811402a9b042408ed829eb20de"
           ],
           "authentication_package": "Kerberos",
+          "source_ip": "192.168.50.21",
           "name_match_by_logon_id": true
         },
         {
@@ -212,34 +222,19 @@
             "34a37e309a32adf55a8778627448aa5f1ab680d88813b4a4c5279ca30b9c8d18"
           ],
           "authentication_package": "Kerberos",
-          "name_match_by_logon_id": false
-        },
-        {
-          "account": "admin_it",
-          "first_logon_time_utc": "2026-10-12T09:04:30.593347Z",
-          "logon_ids": [
-            "0x2f2125"
-          ],
-          "logon_uids": [
-            "6f044b40323e530626979d0c41ff8433f29c0453eed672bec532922fca8c938a"
-          ],
-          "authentication_package": "NTLM",
-          "name_match_by_logon_id": false
-        },
-        {
-          "account": "svc_backup",
-          "first_logon_time_utc": "2026-10-12T09:04:30.642711Z",
-          "logon_ids": [
-            "0x2f219d",
-            "0x2f2209"
-          ],
-          "logon_uids": [
-            "e0256fe7a283991f8615358992df8837169e2f968db2c2ae6b866196e0cf39ff",
-            "e42d78383ca022524c4483f6b3a5d498de67c86fe3dd8464488c938efb9c618c"
-          ],
-          "authentication_package": "NTLM",
+          "source_ip": "192.168.50.21",
           "name_match_by_logon_id": false
         }
+      ],
+      "credential_logon_uids": [],
+      "related_logon_uids": [
+        "1ace76885b48806c420792a0876fc404351f2ba4e52efbd44cc97a6c978fa538",
+        "34a37e309a32adf55a8778627448aa5f1ab680d88813b4a4c5279ca30b9c8d18"
+      ],
+      "port_join_event_uids": [
+        "9d3dbbe203d592e92cc27d3dc344736f520e26b37fe86983b3eb69fae8d20b93",
+        "2851e30108c3697506ab92537ee71811fe7a57cbffe6ce38a93356cdbb44db08",
+        "974201c69d93c116ff89b0db03d109b4fad8f83ca01a1c6da73cedc8ba0a8d80"
       ],
       "target_binding": "logon_id_artifact",
       "reason": null,
@@ -248,6 +243,8 @@
       "role": "benign",
       "proposed_role": null,
       "stray": false,
+      "method": "command_names_target+artifact",
+      "source_ip": "192.168.50.21",
       "account": "admin_it",
       "logon_account": "admin_it",
       "move_time_utc": "2026-10-12T09:03:01.638190Z",
@@ -276,7 +273,8 @@
         "move_after_dump": false,
         "tolerance_s": 5.0,
         "dump_candidates_on_host": 0,
-        "identity_at_tol0": 0
+        "identity_at_tol0": 0,
+        "identity_if_unknown_counted": 0
       },
       "port_join_sysmon3": true,
       "confidence_tier": "A",
@@ -287,6 +285,7 @@
     {
       "protocol": "WinRM",
       "source_host": "ep-01",
+      "command_host": "ep-01",
       "target_host": "ep-03",
       "basis": "command_names_target",
       "agent_account": "svc_backup",
@@ -301,6 +300,7 @@
         "d24f58f3358a67a5b12f0fbf3d8493de1f453ed0b3939a49309234d52d4818c4"
       ],
       "candidate_count": 1,
+      "candidate_count_before_absorption": 1,
       "flags": [
         "account_mismatch"
       ],
@@ -324,9 +324,13 @@
             "1266922ce56946a294640d4e315bbe8ba3c8c8df8940c193e559f892e4b106c0"
           ],
           "authentication_package": "Kerberos",
+          "source_ip": "192.168.50.21",
           "name_match_by_logon_id": true
         }
       ],
+      "credential_logon_uids": [],
+      "related_logon_uids": [],
+      "port_join_event_uids": [],
       "target_binding": "logon_id_artifact",
       "reason": null,
       "handoff_step": "s06-winrm",
@@ -334,6 +338,8 @@
       "role": "benign",
       "proposed_role": null,
       "stray": false,
+      "method": "command_names_target+artifact",
+      "source_ip": "192.168.50.21",
       "account": "admin_it",
       "logon_account": "admin_it",
       "move_time_utc": "2026-10-12T09:03:56.381651Z",
@@ -365,7 +371,8 @@
         "move_after_dump": false,
         "tolerance_s": 5.0,
         "dump_candidates_on_host": 0,
-        "identity_at_tol0": 0
+        "identity_at_tol0": 0,
+        "identity_if_unknown_counted": 0
       },
       "port_join_sysmon3": false,
       "confidence_tier": "B",
@@ -376,6 +383,7 @@
     {
       "protocol": "SMB",
       "source_host": "ep-01",
+      "command_host": "ep-01",
       "target_host": "ep-02",
       "basis": "command_names_target",
       "agent_account": "svc_backup",
@@ -395,7 +403,8 @@
         "bf0c4a1cd444800f5091b51ab7b73e8a2b8a899ad35af43b4ad7811b8b811121",
         "ff18c9332dba5395577ccb9644c3e32a451de7b7184f0f53d9d6b9b0b81b189e"
       ],
-      "candidate_count": 2,
+      "candidate_count": 1,
+      "candidate_count_before_absorption": 2,
       "flags": [
         "account_mismatch",
         "handoff_mismatch"
@@ -412,6 +421,7 @@
             "6f044b40323e530626979d0c41ff8433f29c0453eed672bec532922fca8c938a"
           ],
           "authentication_package": "NTLM",
+          "source_ip": "192.168.50.21",
           "name_match_by_logon_id": false
         },
         {
@@ -426,9 +436,15 @@
             "e42d78383ca022524c4483f6b3a5d498de67c86fe3dd8464488c938efb9c618c"
           ],
           "authentication_package": "NTLM",
+          "source_ip": "192.168.50.21",
           "name_match_by_logon_id": true
         }
       ],
+      "credential_logon_uids": [
+        "6f044b40323e530626979d0c41ff8433f29c0453eed672bec532922fca8c938a"
+      ],
+      "related_logon_uids": [],
+      "port_join_event_uids": [],
       "target_binding": "logon_id_artifact",
       "reason": null,
       "handoff_step": "s06-smb",
@@ -436,6 +452,8 @@
       "role": "benign",
       "proposed_role": null,
       "stray": false,
+      "method": "command_names_target+artifact",
+      "source_ip": "192.168.50.21",
       "account": "svc_backup",
       "logon_account": "svc_backup",
       "move_time_utc": "2026-10-12T09:04:30.642711Z",
@@ -463,10 +481,11 @@
         "move_after_dump": false,
         "tolerance_s": 5.0,
         "dump_candidates_on_host": 0,
-        "identity_at_tol0": 0
+        "identity_at_tol0": 0,
+        "identity_if_unknown_counted": 0
       },
       "port_join_sysmon3": false,
-      "confidence_tier": "C",
+      "confidence_tier": "B",
       "account_mismatch": true,
       "status": "confirmed",
       "hop_id": "s06-smb-1"
@@ -476,6 +495,9 @@
       "protocol": "SMB",
       "source_host": "ep-01",
       "target_host": "ep-02",
+      "source_ip": "192.168.50.21",
+      "command_host": null,
+      "method": "time_account_only+unexplained_logon",
       "account": "admin_it",
       "logon_account": "admin_it",
       "agent_account": null,
@@ -486,7 +508,7 @@
       "move_time_utc": "2026-10-12T08:59:36.356922Z",
       "basis": "time_account_only",
       "status": "unconfirmed",
-      "reason": "no_agent_command_names_target",
+      "reason": "no_agent_command_names_target; logon lies inside the trial run interval 2026-10-12T08:57:25.672Z .. 2026-10-12T09:09:34.564Z",
       "agent_event_uids": [],
       "target_event_uids": [
         "a6fe57f3a6bf52c9ae65982fe4de40ebc7ef6ecff0276d0dade6f57197dd0288",
@@ -508,111 +530,21 @@
         "move_after_dump": false,
         "tolerance_s": 5.0,
         "dump_candidates_on_host": 0,
-        "identity_at_tol0": 0
+        "identity_at_tol0": 0,
+        "identity_if_unknown_counted": 0
       },
       "time_delta_ms": null,
       "confidence_tier": "D",
       "target_binding": "time_account",
       "candidate_count": 1,
+      "credential_logon_uids": [],
+      "related_logon_uids": [],
+      "port_join_event_uids": [],
       "needs_owner_approval": false,
       "flags": [],
-      "role": null,
+      "role": "benign",
       "proposed_role": null,
       "target_logon_id": "0x2596ab",
-      "authentication_package": "NTLM",
-      "source_host_by_ip": "ep-01"
-    },
-    {
-      "hop_id": "s06-t2",
-      "protocol": null,
-      "source_host": "ep-01",
-      "target_host": "ep-02",
-      "account": "admin_it",
-      "logon_account": "admin_it",
-      "agent_account": null,
-      "cmd_credential_account": null,
-      "handoff_account": null,
-      "handoff_step": null,
-      "account_mismatch": false,
-      "move_time_utc": "2026-10-12T09:03:13.037347Z",
-      "basis": "time_account_only",
-      "status": "unconfirmed",
-      "reason": "no_agent_command_names_target",
-      "agent_event_uids": [],
-      "target_event_uids": [
-        "1ace76885b48806c420792a0876fc404351f2ba4e52efbd44cc97a6c978fa538",
-        "34a37e309a32adf55a8778627448aa5f1ab680d88813b4a4c5279ca30b9c8d18"
-      ],
-      "identity_expected": 0,
-      "identity_basis": {
-        "dump_event_uid": null,
-        "dump_event_uids": [],
-        "dump_time_utc": null,
-        "dump_host": "ep-01",
-        "open_session_ids": [],
-        "open_sessions": [],
-        "end_unknown_ids": [],
-        "move_after_dump": false,
-        "tolerance_s": 5.0,
-        "dump_candidates_on_host": 0,
-        "identity_at_tol0": 0
-      },
-      "time_delta_ms": null,
-      "confidence_tier": "D",
-      "target_binding": "time_account",
-      "candidate_count": 1,
-      "needs_owner_approval": false,
-      "flags": [],
-      "role": null,
-      "proposed_role": null,
-      "target_logon_id": "0x2b1212",
-      "authentication_package": "Kerberos",
-      "source_host_by_ip": "ep-01"
-    },
-    {
-      "hop_id": "s06-t3",
-      "protocol": "SMB",
-      "source_host": "ep-01",
-      "target_host": "ep-02",
-      "account": "admin_it",
-      "logon_account": "admin_it",
-      "agent_account": null,
-      "cmd_credential_account": null,
-      "handoff_account": null,
-      "handoff_step": null,
-      "account_mismatch": false,
-      "move_time_utc": "2026-10-12T09:04:30.593347Z",
-      "basis": "time_account_only",
-      "status": "unconfirmed",
-      "reason": "no_agent_command_names_target",
-      "agent_event_uids": [],
-      "target_event_uids": [
-        "6f044b40323e530626979d0c41ff8433f29c0453eed672bec532922fca8c938a",
-        "c9fad97ff47d21e67274e510410da47e618b936b4eab993cf8b895131b5d5a60"
-      ],
-      "identity_expected": 0,
-      "identity_basis": {
-        "dump_event_uid": null,
-        "dump_event_uids": [],
-        "dump_time_utc": null,
-        "dump_host": "ep-01",
-        "open_session_ids": [],
-        "open_sessions": [],
-        "end_unknown_ids": [],
-        "move_after_dump": false,
-        "tolerance_s": 5.0,
-        "dump_candidates_on_host": 0,
-        "identity_at_tol0": 0
-      },
-      "time_delta_ms": null,
-      "confidence_tier": "D",
-      "target_binding": "time_account",
-      "candidate_count": 1,
-      "needs_owner_approval": false,
-      "flags": [],
-      "role": null,
-      "proposed_role": null,
-      "target_logon_id": "0x2f2125",
       "authentication_package": "NTLM",
       "source_host_by_ip": "ep-01"
     }
@@ -626,7 +558,8 @@
         "s06-winrm-1"
       ],
       "status": "confirmed",
-      "proposed_role": null
+      "proposed_role": null,
+      "note": "S06 has no attack path (AK-09)"
     },
     {
       "path_id": "s06-winrm-2-path",
@@ -635,7 +568,8 @@
         "s06-winrm-2"
       ],
       "status": "confirmed",
-      "proposed_role": null
+      "proposed_role": null,
+      "note": "S06 has no attack path (AK-09)"
     },
     {
       "path_id": "s06-smb-1-path",
@@ -644,15 +578,26 @@
         "s06-smb-1"
       ],
       "status": "confirmed",
-      "proposed_role": null
+      "proposed_role": null,
+      "note": "S06 has no attack path (AK-09)"
+    },
+    {
+      "path_id": "s06-t1-path",
+      "role": "benign",
+      "hop_ids": [
+        "s06-t1"
+      ],
+      "status": "unconfirmed",
+      "proposed_role": null,
+      "note": "S06 has no attack path (AK-09)"
     }
   ],
   "unconfirmed": [
     {
       "kind": "hop",
       "id": "s06-t1",
-      "role": null,
-      "reason": "no_agent_command_names_target",
+      "role": "benign",
+      "reason": "no_agent_command_names_target; logon lies inside the trial run interval 2026-10-12T08:57:25.672Z .. 2026-10-12T09:09:34.564Z",
       "flags": [],
       "event_uids": [
         "a6fe57f3a6bf52c9ae65982fe4de40ebc7ef6ecff0276d0dade6f57197dd0288",
@@ -662,30 +607,10 @@
         "a978897c0bc8714109eaf40ea6a0deb80cb1201b80b8b9d044a08fca553f7ad4",
         "b60a466fa4427616098ea309b801433450b875e1011f2bddb8cb94ecdc99eedc"
       ]
-    },
-    {
-      "kind": "hop",
-      "id": "s06-t2",
-      "role": null,
-      "reason": "no_agent_command_names_target",
-      "flags": [],
-      "event_uids": [
-        "1ace76885b48806c420792a0876fc404351f2ba4e52efbd44cc97a6c978fa538",
-        "34a37e309a32adf55a8778627448aa5f1ab680d88813b4a4c5279ca30b9c8d18"
-      ]
-    },
-    {
-      "kind": "hop",
-      "id": "s06-t3",
-      "role": null,
-      "reason": "no_agent_command_names_target",
-      "flags": [],
-      "event_uids": [
-        "6f044b40323e530626979d0c41ff8433f29c0453eed672bec532922fca8c938a",
-        "c9fad97ff47d21e67274e510410da47e618b936b4eab993cf8b895131b5d5a60"
-      ]
     }
   ],
+  "system_dumps_ignored": [],
+  "flags": [],
   "open_points": [],
   "event_keys": {
     "001179f358ee86e9fe517bc929bbdcb729ea51879d5d15b7ebd3de7cdfe812dd": {
@@ -729,6 +654,13 @@
       "event_id": 4624,
       "record_id": 1709350,
       "time_utc": "2026-10-12T09:03:13.037347Z"
+    },
+    "2851e30108c3697506ab92537ee71811fe7a57cbffe6ce38a93356cdbb44db08": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 3,
+      "record_id": 63847,
+      "time_utc": "2026-10-12T09:03:00.701000Z"
     },
     "342ccc626281710152be1269efba92a4f90c05dc3d3d1d36bea253da241bf7f7": {
       "host": "ep-03",
@@ -898,6 +830,20 @@
       "record_id": 2340160,
       "time_utc": "2026-10-12T08:58:28.972669Z"
     },
+    "974201c69d93c116ff89b0db03d109b4fad8f83ca01a1c6da73cedc8ba0a8d80": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 3,
+      "record_id": 63848,
+      "time_utc": "2026-10-12T09:03:00.827000Z"
+    },
+    "9d3dbbe203d592e92cc27d3dc344736f520e26b37fe86983b3eb69fae8d20b93": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 3,
+      "record_id": 63845,
+      "time_utc": "2026-10-12T09:03:00.415000Z"
+    },
     "a3a57752159ec85b96d1793970ac98471968282cba746af8c71280dfaac72dbc": {
       "host": "ep-02",
       "channel": "Sysmon",
@@ -981,13 +927,6 @@
       "event_id": 4624,
       "record_id": 6304094,
       "time_utc": "2026-10-12T09:03:56.381651Z"
-    },
-    "c9fad97ff47d21e67274e510410da47e618b936b4eab993cf8b895131b5d5a60": {
-      "host": "ep-02",
-      "channel": "Security",
-      "event_id": 5140,
-      "record_id": 1709794,
-      "time_utc": "2026-10-12T09:04:30.597729Z"
     },
     "cae9dea956b37bf36464d4dc65f01839845261b05da61567f3a33c809dcff2d6": {
       "host": "ep-02",

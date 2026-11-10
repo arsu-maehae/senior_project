@@ -32,8 +32,15 @@
       "svc_sql",
       "system"
     ],
+    "run_days": [
+      "2026-09-24"
+    ],
     "run_day": "2026-09-24",
-    "run_day_rule": "latest date with a splunkd child (Sysmon 1); older rows excluded"
+    "run_interval": {
+      "start_utc": "2026-09-24T09:36:11.277Z",
+      "end_utc": "2026-09-24T09:46:36.205Z"
+    },
+    "run_day_rule": "run = the latest splunkd root plus every earlier root reached by walking back while consecutive roots are <= 6 h apart (roots = Sysmon 1 children of the agent splunkd.exe in Users/Public plus pid_match_4688 roots); run days = UTC days from the earliest to the latest of those roots; run_interval start = earliest root of a walk-back with a 30 min gap (trials of one day share a DB) - 60 s, end = last step + 300 s; older roots belong to other runs"
   },
   "steps": [
     {
@@ -130,10 +137,11 @@
     {
       "protocol": "WinRM",
       "source_host": "ep-01",
+      "command_host": "ep-01",
       "target_host": "ep-03",
       "basis": "command_names_target",
       "agent_account": "admin_it",
-      "cmd_credential_account": "",
+      "cmd_credential_account": "admin_it",
       "agent_command": "powershell.exe -ExecutionPolicy Bypass -C \"$c=New-Object System.Management.Automation.PSCredential(\\\"LAB\\admin_it\\\",(ConvertTo-SecureString *** -AsPlainText -Force)); Invoke-Command -ComputerName Endpoint-03.lab.local -Credential $c -ScriptBlock { Get-WmiObject Win32_OperatingSystem | Select-Object CSName,Version; Get-LocalGroupMember -Group Administrators }\"",
       "agent_command_time_utc": "2026-09-24T09:41:33.443000Z",
       "agent_root_link": "sysmon_parent_image",
@@ -144,6 +152,7 @@
         "1a604c0895c3afc485192cc97cd94f4edc6f7585b56726890c5d97afb6c1da32"
       ],
       "candidate_count": 1,
+      "candidate_count_before_absorption": 1,
       "flags": [
         "handoff_mismatch"
       ],
@@ -167,8 +176,15 @@
             "cab5f4afb42a152be50da5c7d1d108f9e76c6e27b4056fd01f5947e72845a2d7"
           ],
           "authentication_package": "Kerberos",
+          "source_ip": "192.168.50.21",
           "name_match_by_logon_id": true
         }
+      ],
+      "credential_logon_uids": [],
+      "related_logon_uids": [],
+      "port_join_event_uids": [
+        "0cae4c265d4a8822e2298391dae3d77e0db2fe0421b61308bb0aeed0650d95b9",
+        "0482a4f73cbe8ac1c27479ea8486c6701ceeaae883d288026f30a56c2ff0b2de"
       ],
       "target_binding": "logon_id_artifact",
       "reason": null,
@@ -177,6 +193,8 @@
       "role": "attack",
       "proposed_role": null,
       "stray": false,
+      "method": "command_names_target+artifact",
+      "source_ip": "192.168.50.21",
       "account": "admin_it",
       "logon_account": "admin_it",
       "move_time_utc": "2026-09-24T09:41:36.205857Z",
@@ -241,12 +259,13 @@
         "tolerance_s": 5.0,
         "dump_candidates_on_host": 1,
         "identity_at_tol0": 1,
+        "identity_if_unknown_counted": 1,
         "dump_account": "admin_it",
         "end_unknown": [],
         "dump_before_agent_command_source_clock": true
       },
-      "port_join_sysmon3": false,
-      "confidence_tier": "B",
+      "port_join_sysmon3": true,
+      "confidence_tier": "A",
       "account_mismatch": false,
       "status": "confirmed",
       "hop_id": "s03-h1"
@@ -264,14 +283,30 @@
   ],
   "benign_paths": [],
   "unconfirmed": [],
+  "system_dumps_ignored": [],
+  "flags": [],
   "open_points": [],
   "event_keys": {
+    "0482a4f73cbe8ac1c27479ea8486c6701ceeaae883d288026f30a56c2ff0b2de": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 3,
+      "record_id": 63788,
+      "time_utc": "2026-09-24T09:41:33.668000Z"
+    },
     "05f81d10189c9883035e9703197a3cf7e17bfb5bd0f2107f26db9866ba6142c3": {
       "host": "ep-01",
       "channel": "Sysmon",
       "event_id": 10,
       "record_id": 63720,
       "time_utc": "2026-09-24T09:40:29.772000Z"
+    },
+    "0cae4c265d4a8822e2298391dae3d77e0db2fe0421b61308bb0aeed0650d95b9": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 3,
+      "record_id": 63787,
+      "time_utc": "2026-09-24T09:41:33.583000Z"
     },
     "0df6d0837700b1f6716be875997433e45dcfad6acf0cb4fa19c638254e420202": {
       "host": "ep-01",

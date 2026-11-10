@@ -19,5 +19,5 @@ S06 supplies the check that benign paths rank below attack paths (Correction J).
 Change if any S06 trial shows an LSASS read (decision 017).
 
 ## Committee answer
-**EN:** The benign scenario has three real admin moves and no credential dump, so each scores zero; they are the paths that should rank below the attacks.
-**TH:** สถานการณ์ปกติมีการเคลื่อนที่ของผู้ดูแลระบบจริงสามครั้งและไม่มีการ dump credential ทุกครั้งจึงได้ศูนย์ เป็นเส้นทางที่ควรอยู่ต่ำกว่าการโจมตี
+**EN:** The benign scenario has three benign moves and no credential dump, so each scores zero on identity; they are expected to rank below the attack paths, to be measured.
+**TH:** สถานการณ์ปกติมีการเคลื่อนที่ปกติสามครั้งและไม่มีการ dump credential ทุกครั้งจึงได้ศูนย์ด้าน identity คาดว่าจะอยู่ต่ำกว่าเส้นทางโจมตี ซึ่งจะวัดผลต่อไป

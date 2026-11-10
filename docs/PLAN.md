@@ -46,11 +46,11 @@ Never tune code or weights on the test set.
 **Done when:** the linking design can be based on measured evidence.
 
 ## T5. Answer keys — depends on: T1 (alongside T3–T7)
-- [ ] 5.1 YAML format (steps → event ids, paths, benign paths, expected identity per hop)
-- [ ] 5.2 Draft helper from the agent process tree (splunkd.exe) + handoff intended steps + target-side events (decision 020; Caldera logs lost)
-- [ ] 5.3 Development key drafts → user approves → ground_truth/approved/
-- [ ] 5.4 Settle S04-A identity, S05 hop 2, S07 accounts, S06 benign paths
-- [ ] 5.5 Every listed event exists in the logs
+- [x] 5.1 YAML format (steps → event ids, paths, benign paths, expected identity per hop)
+- [x] 5.2 Draft helper from the agent process tree (splunkd.exe) + handoff intended steps + target-side events (decision 020; Caldera logs lost)
+- [ ] 5.3 Development key drafts → user approves → ground_truth/approved/  (drafts built for S02–S07 t00; waiting for approval)
+- [ ] 5.4 (records 021–025 proposed, waiting for approval) Settle S04-A identity, S05 hop 2, S07 accounts, S06 benign paths
+- [ ] 5.5 Every listed event exists in the logs  (verify ok on 6 drafts; waiting for approval)
 - [ ] 5.6 Test key drafts → user approves
 - [ ] 5.7 Lock test keys: git tag `answer-keys-locked` (before T10)
 

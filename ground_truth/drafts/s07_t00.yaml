@@ -11,8 +11,10 @@
     "provisional": null,
     "shrink_flag": null,
     "outside_counts": {
-      "target_side_events": 0,
-      "per_hop": {}
+      "target_side_events": 6,
+      "per_hop": {
+        "s07-t1": 6
+      }
     }
   },
   "agent": {
@@ -40,8 +42,15 @@
       "svc_sql",
       "system"
     ],
+    "run_days": [
+      "2026-10-12"
+    ],
     "run_day": "2026-10-12",
-    "run_day_rule": "latest date with a splunkd child (Sysmon 1); older rows excluded"
+    "run_interval": {
+      "start_utc": "2026-10-12T09:09:49.665Z",
+      "end_utc": "2026-10-12T09:24:33.179Z"
+    },
+    "run_day_rule": "run = the latest splunkd root plus every earlier root reached by walking back while consecutive roots are <= 6 h apart (roots = Sysmon 1 children of the agent splunkd.exe in Users/Public plus pid_match_4688 roots); run days = UTC days from the earliest to the latest of those roots; run_interval start = earliest root of a walk-back with a 30 min gap (trials of one day share a DB) - 60 s, end = last step + 300 s; older roots belong to other runs"
   },
   "steps": [
     {
@@ -199,6 +208,7 @@
     {
       "protocol": "SMB",
       "source_host": "ep-01",
+      "command_host": "ep-01",
       "target_host": "ep-02",
       "basis": "command_names_target",
       "agent_account": "svc_backup",
@@ -218,7 +228,8 @@
         "4907e1f8a604798fc84d3f2ea0c342ebb09fae37a3d1bb98bd2383f443a5ddfc",
         "d895032737335ae3700f84c3b5f087f05daa440f9b4739a6f8744730f764bc0c"
       ],
-      "candidate_count": 2,
+      "candidate_count": 1,
+      "candidate_count_before_absorption": 1,
       "flags": [],
       "needs_owner_approval": false,
       "candidates": [
@@ -236,23 +247,13 @@
             "ee86c364dd317ca6fcfa7ba8bdebccc77a65f914cd57b3d3abcc4ae40362488e"
           ],
           "authentication_package": "NTLM",
+          "source_ip": "192.168.50.21",
           "name_match_by_logon_id": true
-        },
-        {
-          "account": "svc_backup",
-          "first_logon_time_utc": "2026-10-12T09:19:33.179614Z",
-          "logon_ids": [
-            "0x4b5d51",
-            "0x4b5da5"
-          ],
-          "logon_uids": [
-            "6f60f8e334fdc3a9310f6e6a61bcda17401c00831423bedd467114170e0d54bd",
-            "cc3d5b77a98438b68c90fbf2d07cdbf94c8f18191def049e2235e4ae32fefc66"
-          ],
-          "authentication_package": "NTLM",
-          "name_match_by_logon_id": false
         }
       ],
+      "credential_logon_uids": [],
+      "related_logon_uids": [],
+      "port_join_event_uids": [],
       "target_binding": "logon_id_artifact",
       "reason": null,
       "handoff_step": "s07-h-x",
@@ -260,6 +261,8 @@
       "role": "attack_pair",
       "proposed_role": null,
       "stray": false,
+      "method": "command_names_target+artifact",
+      "source_ip": "192.168.50.21",
       "account": "svc_backup",
       "logon_account": "svc_backup",
       "move_time_utc": "2026-10-12T09:17:57.753472Z",
@@ -318,12 +321,13 @@
         "tolerance_s": 5.0,
         "dump_candidates_on_host": 2,
         "identity_at_tol0": 1,
+        "identity_if_unknown_counted": 1,
         "dump_account": "svc_backup",
         "end_unknown": [],
         "dump_before_agent_command_source_clock": true
       },
       "port_join_sysmon3": false,
-      "confidence_tier": "C",
+      "confidence_tier": "B",
       "account_mismatch": false,
       "status": "confirmed",
       "hop_id": "s07-h-x"
@@ -331,6 +335,7 @@
     {
       "protocol": "SMB",
       "source_host": "ep-01",
+      "command_host": "ep-01",
       "target_host": "ep-02",
       "basis": "command_names_target",
       "agent_account": "svc_backup",
@@ -351,6 +356,7 @@
         "f6b7371deb45bc8e0c9e246c75b1d715e4aadd73c7a840eef90d8d7e8293ef1e"
       ],
       "candidate_count": 1,
+      "candidate_count_before_absorption": 1,
       "flags": [
         "account_mismatch",
         "handoff_mismatch"
@@ -369,9 +375,13 @@
             "cc3d5b77a98438b68c90fbf2d07cdbf94c8f18191def049e2235e4ae32fefc66"
           ],
           "authentication_package": "NTLM",
+          "source_ip": "192.168.50.21",
           "name_match_by_logon_id": true
         }
       ],
+      "credential_logon_uids": [],
+      "related_logon_uids": [],
+      "port_join_event_uids": [],
       "target_binding": "logon_id_artifact",
       "reason": null,
       "handoff_step": "s07-h-y",
@@ -379,6 +389,8 @@
       "role": "attack_pair",
       "proposed_role": null,
       "stray": false,
+      "method": "command_names_target+artifact",
+      "source_ip": "192.168.50.21",
       "account": "svc_backup",
       "logon_account": "svc_backup",
       "move_time_utc": "2026-10-12T09:19:33.179614Z",
@@ -421,6 +433,7 @@
         "tolerance_s": 5.0,
         "dump_candidates_on_host": 2,
         "identity_at_tol0": 1,
+        "identity_if_unknown_counted": 1,
         "dump_account": "svc_backup",
         "end_unknown": [],
         "dump_before_agent_command_source_clock": true
@@ -430,6 +443,64 @@
       "account_mismatch": true,
       "status": "confirmed",
       "hop_id": "s07-h-y"
+    },
+    {
+      "hop_id": "s07-t1",
+      "protocol": "SMB",
+      "source_host": "ep-01",
+      "target_host": "ep-02",
+      "source_ip": "192.168.50.21",
+      "command_host": null,
+      "method": "time_account_only+unexplained_logon",
+      "account": "admin_it",
+      "logon_account": "admin_it",
+      "agent_account": null,
+      "cmd_credential_account": null,
+      "handoff_account": null,
+      "handoff_step": null,
+      "account_mismatch": false,
+      "move_time_utc": "2026-10-12T09:11:08.098862Z",
+      "basis": "time_account_only",
+      "status": "unconfirmed",
+      "reason": "no_agent_command_names_target; logon lies inside the trial run interval 2026-10-12T09:09:49.665Z .. 2026-10-12T09:24:33.179Z",
+      "agent_event_uids": [],
+      "target_event_uids": [
+        "017fec3654e50ed911432733a9e8f211487423cc564bba768a9778af83409181",
+        "b9f82b991aeeb9267e48a10c5d0aa699ac25aa725a4e860a3d5ddcbf45fefe5e",
+        "1dc356d08ec3f69f4298586eb4e150264ad6fa45d8ba5fc52c14d85f108bd775",
+        "71bad54bf8b83402d247001dddc1e14b3b5337d5a5a16e85818360bcb8765913",
+        "8335779b7f841bfac8b4079798ca4ee4ba6794baaee3e0f6eb629cdf27b7e267",
+        "2a413f769b0b926c049e7a4b88c384676845e2b567df391b40fb525cdc385e4f"
+      ],
+      "identity_expected": 0,
+      "identity_basis": {
+        "dump_event_uid": null,
+        "dump_event_uids": [],
+        "dump_time_utc": null,
+        "dump_host": "ep-01",
+        "open_session_ids": [],
+        "open_sessions": [],
+        "end_unknown_ids": [],
+        "move_after_dump": false,
+        "tolerance_s": 5.0,
+        "dump_candidates_on_host": 2,
+        "identity_at_tol0": 0,
+        "identity_if_unknown_counted": 0
+      },
+      "time_delta_ms": null,
+      "confidence_tier": "D",
+      "target_binding": "time_account",
+      "candidate_count": 1,
+      "credential_logon_uids": [],
+      "related_logon_uids": [],
+      "port_join_event_uids": [],
+      "needs_owner_approval": false,
+      "flags": [],
+      "role": null,
+      "proposed_role": null,
+      "target_logon_id": "0x264f4c",
+      "authentication_package": "NTLM",
+      "source_host_by_ip": "ep-01"
     }
   ],
   "paths": [
@@ -451,9 +522,34 @@
     }
   ],
   "benign_paths": [],
-  "unconfirmed": [],
+  "unconfirmed": [
+    {
+      "kind": "hop",
+      "id": "s07-t1",
+      "role": null,
+      "reason": "no_agent_command_names_target; logon lies inside the trial run interval 2026-10-12T09:09:49.665Z .. 2026-10-12T09:24:33.179Z",
+      "flags": [],
+      "event_uids": [
+        "017fec3654e50ed911432733a9e8f211487423cc564bba768a9778af83409181",
+        "b9f82b991aeeb9267e48a10c5d0aa699ac25aa725a4e860a3d5ddcbf45fefe5e",
+        "1dc356d08ec3f69f4298586eb4e150264ad6fa45d8ba5fc52c14d85f108bd775",
+        "71bad54bf8b83402d247001dddc1e14b3b5337d5a5a16e85818360bcb8765913",
+        "8335779b7f841bfac8b4079798ca4ee4ba6794baaee3e0f6eb629cdf27b7e267",
+        "2a413f769b0b926c049e7a4b88c384676845e2b567df391b40fb525cdc385e4f"
+      ]
+    }
+  ],
+  "system_dumps_ignored": [],
+  "flags": [],
   "open_points": [],
   "event_keys": {
+    "017fec3654e50ed911432733a9e8f211487423cc564bba768a9778af83409181": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 4624,
+      "record_id": 1711892,
+      "time_utc": "2026-10-12T09:11:08.098862Z"
+    },
     "09226ed7e1503dbf867944433f6b6f3ef8ce9c1c310c39f6b7ba425a7a94c2ac": {
       "host": "ep-01",
       "channel": "Sysmon",
@@ -496,6 +592,13 @@
       "record_id": 1732834,
       "time_utc": "2026-10-12T09:17:57.943131Z"
     },
+    "1dc356d08ec3f69f4298586eb4e150264ad6fa45d8ba5fc52c14d85f108bd775": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 5140,
+      "record_id": 1711895,
+      "time_utc": "2026-10-12T09:11:08.105955Z"
+    },
     "21cc225b8ca3d1f7ba02bfaff1d868d6bc07e85cacef599e1fdc6e280ff17db2": {
       "host": "ep-01",
       "channel": "Sysmon",
@@ -509,6 +612,13 @@
       "event_id": 1,
       "record_id": 63259,
       "time_utc": "2026-10-12T09:10:40.260000Z"
+    },
+    "2a413f769b0b926c049e7a4b88c384676845e2b567df391b40fb525cdc385e4f": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 5145,
+      "record_id": 1711898,
+      "time_utc": "2026-10-12T09:11:08.132016Z"
     },
     "2cd5080d4b971931ca43902f14f686a6e422f8b3a2501a9172623dcc87bb24f5": {
       "host": "ep-01",
@@ -671,6 +781,13 @@
       "record_id": 1733131,
       "time_utc": "2026-10-12T09:19:33.047069Z"
     },
+    "71bad54bf8b83402d247001dddc1e14b3b5337d5a5a16e85818360bcb8765913": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 5145,
+      "record_id": 1711896,
+      "time_utc": "2026-10-12T09:11:08.110980Z"
+    },
     "72a62ab20a8c20dfe39ebf9c3dd6a3e3b262f83551bb8d8ed1eeb0066896e765": {
       "host": "ep-02",
       "channel": "Security",
@@ -698,6 +815,13 @@
       "event_id": 5145,
       "record_id": 1732838,
       "time_utc": "2026-10-12T09:17:57.960873Z"
+    },
+    "8335779b7f841bfac8b4079798ca4ee4ba6794baaee3e0f6eb629cdf27b7e267": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 5145,
+      "record_id": 1711897,
+      "time_utc": "2026-10-12T09:11:08.118378Z"
     },
     "8351c7f300da9b8feefe2d73bacd73ff1f1c5f91213f3e7390fbc61588e33e72": {
       "host": "ep-02",
@@ -796,6 +920,13 @@
       "event_id": 7045,
       "record_id": 6082,
       "time_utc": "2026-10-12T09:17:58.082630Z"
+    },
+    "b9f82b991aeeb9267e48a10c5d0aa699ac25aa725a4e860a3d5ddcbf45fefe5e": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 5140,
+      "record_id": 1711894,
+      "time_utc": "2026-10-12T09:11:08.101705Z"
     },
     "bd91e94d7b36998a4251d906a946b41e6dee8a8f4380f2af3a224841ddcad8a4": {
       "host": "ep-02",

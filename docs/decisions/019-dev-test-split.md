@@ -22,4 +22,4 @@ If t01 of a scenario turns out unusable (under-fired, missing hosts), record it 
 
 ## Committee answer
 **EN:** We tune only on trial 0 (dry run) and trial 1 of each scenario (S01: trial 1 only) and score once on trials 2 to 10, so the test result is not tuned.
-**TH:** เราปรับค่าเฉพาะบนรอบที่ 0 และ 1 ของแต่ละสถานการณ์ และวัดผลครั้งเดียวบนรอบที่ 2 ถึง 10 ผลทดสอบจึงไม่ถูกปรับแต่ง
+**TH:** เราปรับค่าเฉพาะบนรอบที่ 0 (dry run) และ 1 ของแต่ละสถานการณ์ (S01 ใช้เฉพาะรอบที่ 1) และวัดผลครั้งเดียวบนรอบที่ 2 ถึง 10 ผลทดสอบจึงไม่ถูกปรับแต่ง

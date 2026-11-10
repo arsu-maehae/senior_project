@@ -19,7 +19,8 @@ HOST_NAME_FORMS: dict[str, tuple[str, ...]] = {
 LAB_SUFFIX = r"(?:\.lab\.local)?"
 _ENC_RE = re.compile(r"(?i)(?<![A-Za-z0-9_])-(?:e|enc|ec|encodedcommand)\s+([A-Za-z0-9+/]{16,}={0,2})")
 _USER_RE = re.compile(r"(?i)/user:(\S+)")
-_PSCRED_RE = re.compile(r"(?i)PSCredential\(\s*[\"']?([^\"',)]+)")
+# Handles PSCredential("LAB\x",..), PSCredential('LAB\x',..) and the escaped form PSCredential(\"LAB\x\",..).
+_PSCRED_RE = re.compile(r"""(?i)PSCredential\(\s*(?:\\?["'])?([^"',)]+)""")
 MACHINE_OR_SYSTEM = {"system", "local service", "network service", "anonymous logon", "-", ""}
 
 
@@ -99,7 +100,8 @@ def credential_account(texts: Iterable[str]) -> str | None:
         for cand in [t, *decode_encoded(t)[0]]:
             m = _USER_RE.search(cand) or _PSCRED_RE.search(cand)
             if m:
-                return normalise_account(m.group(1))
+                # an escaped quote leaves a trailing/leading backslash that is not part of the name
+                return normalise_account(m.group(1).strip("\\'\" "))
     return None
 
 

@@ -8,17 +8,20 @@ linker output (AK-06).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Mapping, Sequence
+from datetime import datetime, timezone
+from typing import Collection, Mapping, Sequence
 
 from . import collect, identity, targets
-from .agent_tree import AgentProc, agent_network, attach_4688, build_tree, is_splunkd, run_day
-from .timeutil import add_s, delta_ms, fmt_utc, parse_utc
+from .agent_tree import AgentProc, agent_network, attach_4688, build_tree, is_splunkd, run_days, run_start_ts, TRIAL_GAP_S
+from .targets import normalise_account
+from .timeutil import delta_ms, fmt_utc, parse_utc
 
 IMAGE = "C:\\Users\\Public\\splunkd.exe"
 KEY_MARGIN_BEFORE_S = 60.0
 KEY_MARGIN_AFTER_S = 300.0
-SEARCH_MARGIN_S = 300.0     # only to look for time/account-only logons (AK-04), never to confirm
 STRAY_SERVICE_WINDOW_S = 60.0
+RUN_INTERVAL_BEFORE_S = 60.0
+RUN_INTERVAL_AFTER_S = 300.0
 PROVENANCE = "log-based, agent process tree (decision 020)"
 
 
@@ -53,7 +56,7 @@ def group_actions(tree: Sequence[AgentProc]) -> list[Action]:
     return acts
 
 
-def manual_actions(rows: Sequence[Mapping], tree_uids: set[str], day: str | None,
+def manual_actions(rows: Sequence[Mapping], tree_uids: set[str], days: Collection[str],
                    ip_to_host: Mapping[str, str]) -> list[Action]:
     """Sysmon 1 commands on the run day, not in the agent tree, that name another host.
 
@@ -63,7 +66,7 @@ def manual_actions(rows: Sequence[Mapping], tree_uids: set[str], day: str | None
     cands = []
     for r in rows:
         if (r["channel"] == "Sysmon" and r["event_id"] == 1 and r["event_uid"] not in tree_uids
-                and (r["t_utc"] or "")[:10] == day and r.get("command_line")
+                and (r["t_utc"] or "")[:10] in days and r.get("command_line")
                 and targets.is_user_account(r.get("account_name"))):
             named, failed = targets.find_targets([r["command_line"]], ip_to_host)
             named.discard(r["host"])
@@ -158,38 +161,84 @@ def tier(basis: str, port_join: bool, candidate_count: int, binding: str) -> str
     return "C"
 
 
-def port_join_present(rows_idx: collect.Index, source_host: str, target_ip: str | None, src_port: int | None) -> bool:
-    """Sysmon 3 on the source host whose source port equals the target 4624 IpPort (where logged: WinRM)."""
-    if not target_ip or not src_port:
-        return False
-    return any(e.get("source_port") == src_port and e.get("destination_ip") == target_ip
-               for e in rows_idx.by_key.get((source_host, "Sysmon", 3), []))
+def absorb_logons(bursts: Sequence[Sequence[Mapping]], arts: Sequence[Mapping], sel: int, protocol: str | None,
+                  cred: str | None) -> tuple[list[int], list[int]]:
+    """Indexes of bursts that belong to the selected move's command rather than being a second move.
+
+    ``credential`` = same source IP, account equals the account typed in the command but not the
+    account the artefacts tie to (S06 smb-1: admin_it NTLM next to the svc_backup logon).
+    ``related`` = same account, same source IP, same protocol (or none shown and same
+    authentication package): a repeat connection of one command (S06 winrm-1's second Kerberos logon).
+    The hop's own account stays the artefact-tied one.
+    """
+    anchor = bursts[sel][0]
+    acct, ip, pkg = normalise_account(anchor["account_name"]), anchor.get("source_ip"), anchor.get("authentication_package")
+    credential: list[int] = []
+    related: list[int] = []
+    for i, b in enumerate(bursts):
+        if i == sel or b[0].get("source_ip") != ip:
+            continue
+        b_acct = normalise_account(b[0]["account_name"])
+        if cred and b_acct == cred and cred != acct:
+            credential.append(i)
+        elif b_acct == acct:
+            bp = collect.burst_protocol(arts[i], b)
+            if bp == protocol or (bp is None and b[0].get("authentication_package") == pkg):
+                related.append(i)
+    return credential, related
 
 
-def build_hop(a: Action, target: str, ctx: "Ctx") -> dict:
-    """One hop record for action ``a`` naming ``target`` (confirmed only per AK-02)."""
+def command_window(ts0: float, next_cmd_ts: float | None) -> tuple[float, float]:
+    """Candidate window for a command's target 4624: [c - 10 s, c + 120 s], cut at the next command
+    naming the same target on the same host (that command's own 4624 must not be seen here)."""
+    lo, hi = ts0 - collect.CMD_BEFORE_LOGON_S, ts0 + collect.CMD_AFTER_LOGON_S
+    if next_cmd_ts is not None:
+        hi = min(hi, max(next_cmd_ts - collect.CMD_BEFORE_LOGON_S, ts0))
+    return lo, hi
+
+
+def _empty_hop(a: Action, target: str, ctx: "Ctx", agent_account: str, cred: str | None, protocol: str | None,
+               names: Mapping, bursts: Sequence, arts: Sequence) -> dict:
+    """Hop record before a burst is chosen: command facts plus every candidate (AK-02, AK-03)."""
+    t0 = a.root.time_utc
+    return {"protocol": protocol, "source_host": a.host, "command_host": a.host, "target_host": target,
+            "basis": "command_names_target" if a.in_agent_tree else "time_account_only",
+            "agent_account": agent_account, "cmd_credential_account": cred,
+            "agent_command": targets.mask_command(a.root.command_line)[:600],
+            "agent_command_time_utc": t0, "agent_root_link": a.root.root_link,
+            "agent_event_uids": [p.event_uid for p in a.procs if _names(p.command_line, target, ctx)],
+            "agent_corroboration_4688_uids": sorted({u for p in a.procs for u in p.corroborating_4688}),
+            "candidate_count": len(bursts), "candidate_count_before_absorption": len(bursts), "flags": [],
+            "needs_owner_approval": False,
+            "candidates": [collect.describe_burst(b, ar) for b, ar in zip(bursts, arts)],
+            "credential_logon_uids": [], "related_logon_uids": [], "port_join_event_uids": [],
+            "target_binding": None, "reason": None, "handoff_step": None, "handoff_account": None,
+            "role": None, "proposed_role": None, "stray": False, "_names": names, "_anchor_ts": None,
+            "_absorbed_uids": []}
+
+
+def build_hop(a: Action, target: str, ctx: "Ctx", next_cmd_ts: float | None = None) -> dict:
+    """One hop record for action ``a`` naming ``target`` (confirmed only per AK-02).
+
+    Target 4624s are searched from ANY source IP but the target's own; the hop's source host is
+    the host that owns the chosen 4624's IpAddress (decision 013) and a different command host
+    raises ``source_host_conflict`` (the dump used is the IP host's).
+    """
     agent_account = targets.normalise_account(a.root.account)
     cred = targets.credential_account(a.texts)
-    protocol = targets.classify_protocol(" ".join(a.texts + targets.decode_encoded(" ".join(a.texts))[0]))
-    names = targets.artifact_names(a.texts + targets.decode_encoded(" ".join(a.texts))[0])
-    src_ip = ctx.host_ip.get(a.host)
+    decoded = targets.decode_encoded(" ".join(a.texts))[0]
+    protocol = targets.classify_protocol(" ".join(a.texts + decoded))
+    names = targets.artifact_names(a.texts + decoded)
+    cmd_ip = ctx.host_ip.get(a.host)
     t0 = a.root.time_utc
     ts0 = parse_utc(t0).timestamp()
-    logons = collect.remote_logons(ctx.idx, target, src_ip, ts0 - collect.CMD_BEFORE_LOGON_S, ts0 + collect.CMD_AFTER_LOGON_S)
+    lo, hi = command_window(ts0, next_cmd_ts)
+    logons = collect.remote_logons(ctx.idx, target, lo, hi, exclude_ips=[ctx.host_ip.get(target)])
     bursts = collect.cluster_bursts(logons)
     arts = [collect.burst_artifacts(ctx.idx, target, b, names) for b in bursts]
-    sel, how = collect.select_burst(bursts, arts, [cred or "", agent_account])
-    hop: dict = {"protocol": protocol, "source_host": a.host, "target_host": target,
-                 "basis": "command_names_target" if a.in_agent_tree else "time_account_only",
-                 "agent_account": agent_account, "cmd_credential_account": cred,
-                 "agent_command": targets.mask_command(a.root.command_line)[:600],
-                 "agent_command_time_utc": t0, "agent_root_link": a.root.root_link,
-                 "agent_event_uids": [p.event_uid for p in a.procs if _names(p.command_line, target, ctx)],
-                 "agent_corroboration_4688_uids": sorted({u for p in a.procs for u in p.corroborating_4688}),
-                 "candidate_count": len(bursts), "flags": [], "needs_owner_approval": False,
-                 "candidates": [collect.describe_burst(b, ar) for b, ar in zip(bursts, arts)],
-                 "target_binding": None, "reason": None, "handoff_step": None, "handoff_account": None,
-                 "role": None, "proposed_role": None, "stray": False, "_names": names, "_anchor_ts": None}
+    sel, how = collect.select_burst(bursts, arts, [cred or "", agent_account], cmd_ip)
+    hop = _empty_hop(a, target, ctx, agent_account, cred, protocol, names, bursts, arts)
+    hop["method"] = f"{hop['basis']}+{how}"
     if a.decode_failed:
         hop["flags"].append("decode_failed")
     if sel is None:
@@ -201,34 +250,41 @@ def build_hop(a: Action, target: str, ctx: "Ctx") -> dict:
     burst, art = bursts[sel], arts[sel]
     anchor = burst[0]
     anchor_ts = anchor["ts"]
-    svc = service_exec_uids(ctx.idx, target, anchor_ts, names, ctx.stray_ranges.get(target, []))
-    wrm = collect.winrm_events(ctx.idx, target, anchor["account_name"], src_ip or "", anchor_ts) if protocol == "WinRM" else []
-    binding = ("logon_id_artifact" if art["bound"] else "name_only" if svc else "time_account")
     logon_account = targets.normalise_account(anchor["account_name"])
+    source_by_ip = ctx.ip_host.get(anchor.get("source_ip") or "")
+    cred_i, rel_i = absorb_logons(bursts, arts, sel, protocol, cred)
+    svc = service_exec_uids(ctx.idx, target, anchor_ts, names, ctx.stray_ranges.get(target, []))
+    wrm = collect.winrm_events(ctx.idx, target, anchor["account_name"], anchor.get("source_ip") or "", anchor_ts) \
+        if protocol == "WinRM" else []
+    binding = ("logon_id_artifact" if art["bound"] else "name_only" if svc else "time_account")
     tgt_uids = ([b["event_uid"] for b in burst] + art["share_uids"] + art["file_uids"] + art["install_uids"]
                 + art["wsmprovhost_uids"] + [e["event_uid"] for e in svc] + [e["event_uid"] for e in wrm])
-    source_by_ip = ctx.ip_host.get(anchor.get("source_ip") or "")
     ident = identity.evaluate_identity(ctx.dumps, ctx.state, logon_account, source_by_ip, anchor_ts)
+    pj = collect.port_join_events(ctx.idx, source_by_ip, ctx.host_ip.get(target), burst)
     hop.update({
+        "source_host": source_by_ip, "source_ip": anchor.get("source_ip"),
         "account": logon_account, "logon_account": logon_account, "target_binding": binding,
         "move_time_utc": anchor["t_utc"], "target_logon_id": hex(anchor["target_logon_id"]),
         "authentication_package": anchor.get("authentication_package"),
         "target_event_uids": list(dict.fromkeys(tgt_uids)), "service_candidates_by_name": len(svc),
         "time_delta_ms": delta_ms(t0, anchor["t_utc"]), "select_how": how,
         "source_host_by_ip": source_by_ip, "identity_expected": ident["identity_expected"],
-        "identity_basis": ident["identity_basis"], "_anchor_ts": anchor_ts, "_burst_uids": [b["event_uid"] for b in burst]})
+        "identity_basis": ident["identity_basis"], "_anchor_ts": anchor_ts, "_burst_uids": [b["event_uid"] for b in burst],
+        "credential_logon_uids": [x["event_uid"] for i in cred_i for x in bursts[i]],
+        "related_logon_uids": [x["event_uid"] for i in rel_i for x in bursts[i]],
+        "candidate_count": len(bursts) - len(cred_i) - len(rel_i),
+        "port_join_sysmon3": bool(pj), "port_join_event_uids": [e["event_uid"] for e in pj]})
+    hop["_absorbed_uids"] = hop["credential_logon_uids"] + hop["related_logon_uids"]
     hop["flags"] += ident["flags"]
-    port = port_join_present(ctx.idx, a.host, ctx.host_ip.get(target), anchor.get("source_port"))
-    hop["port_join_sysmon3"] = port
-    hop["confidence_tier"] = tier(hop["basis"], port, len(bursts), binding)
-    if source_by_ip and source_by_ip != a.host:
+    hop["confidence_tier"] = tier(hop["basis"], bool(pj), hop["candidate_count"], binding)
+    if source_by_ip != a.host:
         hop["flags"].append("source_host_conflict")
     if len({x for x in (agent_account, cred, logon_account) if x}) > 1:
         hop["flags"].append("account_mismatch")
     hop["account_mismatch"] = "account_mismatch" in hop["flags"]
-    # source-clock order check (dump vs the agent command on that host)
+    # source-clock order check (dump vs the agent command), only when both are on one host's clock
     dump = identity.pick_dump(ctx.dumps, source_by_ip, anchor_ts, identity.CROSS_HOST_TOL_S) if source_by_ip else None
-    if dump is not None and a.in_agent_tree:
+    if dump is not None and a.in_agent_tree and source_by_ip == a.host:
         before = dump.ts <= ts0
         hop["identity_basis"]["dump_before_agent_command_source_clock"] = before
         if before != hop["identity_basis"]["move_after_dump"]:
@@ -262,17 +318,26 @@ def _step(step_id: str, kind: str, host: str | None, time_utc: str | None, accou
             "status": status, "source": source, "event_uids": list(dict.fromkeys(uids)), "note": note}
 
 
-def leftover_bursts(ctx: Ctx, used: set[str], t_lo: float, t_hi: float) -> list[tuple[str, str, list[Mapping]]]:
-    """Remote ep->ep user logons in the search interval that no command explained (AK-04)."""
+def day_interval(days: Sequence[str]) -> tuple[float, float]:
+    """[00:00 of the first run day, 24:00 of the last] in epoch seconds (UTC)."""
+    from datetime import datetime, timedelta, timezone
+    lo = datetime.fromisoformat(min(days)).replace(tzinfo=timezone.utc)
+    hi = datetime.fromisoformat(max(days)).replace(tzinfo=timezone.utc) + timedelta(days=1)
+    return lo.timestamp(), hi.timestamp()
+
+
+def leftover_bursts(ctx: Ctx, used: set[str], t_lo: float, t_hi: float) -> list[tuple[str | None, str, list[Mapping]]]:
+    """Remote user logon bursts on lab endpoints in [t_lo, t_hi] that no command explained (AK-04).
+
+    The source host comes from the 4624 IpAddress; an address that maps to no host gives ``None``
+    (kept, never dropped). ``used`` holds logons already placed on a hop (selected or absorbed).
+    """
     out = []
-    ep_hosts = [h for h in ctx.host_ip if h.startswith("ep-")]
-    for tgt in ep_hosts:
-        for ip, src in ctx.ip_host.items():
-            if src == tgt or not src.startswith("ep-"):
-                continue
-            for b in collect.cluster_bursts(collect.remote_logons(ctx.idx, tgt, ip, t_lo, t_hi)):
-                if not any(x["event_uid"] in used for x in b):
-                    out.append((src, tgt, b))
+    for tgt in [h for h in ctx.host_ip if h.startswith("ep-")]:
+        logons = collect.remote_logons(ctx.idx, tgt, t_lo, t_hi, exclude_ips=[ctx.host_ip.get(tgt)])
+        for b in collect.cluster_bursts(logons):
+            if not any(x["event_uid"] in used for x in b):
+                out.append((ctx.ip_host.get(b[0].get("source_ip") or ""), tgt, b))
     out.sort(key=lambda x: x[2][0]["ts"])
     return out
 
@@ -293,14 +358,16 @@ def build_draft(rows: list[dict], trial_id: str, intended: Mapping, db_sha256: s
     scenario = trial_id.split("_")[0]
     sc = intended["scenarios"][scenario]
     isteps = sc["steps"]
-    day = run_day(rows)
-    tree = attach_4688(build_tree(rows, day), rows)
-    net = agent_network(rows, day)
+    days, spans_midnight = run_days(rows)
+    tree = attach_4688(build_tree(rows, days), rows)
+    net = agent_network(rows, days)
     ip_host = targets.lab_ip_to_host(rows)
     host_ip = {h: ip for ip, h in ip_host.items()}
     idx = collect.build_index(rows)
     state = identity.build_host_state(rows)
-    all_dumps = identity.find_dumps([r for r in rows if (r["t_utc"] or "")[:10] == day])
+    day_rows = [r for r in rows if (r["t_utc"] or "")[:10] in days]
+    all_dumps = identity.find_dumps(day_rows)
+    sys_dumps = identity.system_dumps_ignored(day_rows)
     acts = group_actions(tree)
     annotate_targets(acts, ip_host)
     stray_acts = [a for a in acts if is_stray(a)]
@@ -313,7 +380,7 @@ def build_draft(rows: list[dict], trial_id: str, intended: Mapping, db_sha256: s
         stray_ranges.setdefault(a.host, []).append((t - 5.0, t + STRAY_SERVICE_WINDOW_S))
     ctx = Ctx(idx, ip_host, host_ip, dumps, state, stray_ranges)
     tree_uids = {p.event_uid for p in tree}
-    manual = manual_actions(rows, tree_uids, day, ip_host)
+    manual = manual_actions(rows, tree_uids, days, ip_host)
     by_guid = {(r["process_guid"] or "").lower(): r for r in rows if r["channel"] == "Sysmon" and r["event_id"] == 1}
     rows4688 = [r for r in rows if r["event_id"] == 4688 and r["channel"] == "Security"]
 
@@ -327,7 +394,7 @@ def build_draft(rows: list[dict], trial_id: str, intended: Mapping, db_sha256: s
 
     # agent_start steps (not used for the window)
     starts = [r for r in rows if r["channel"] == "Sysmon" and r["event_id"] == 1 and is_splunkd(r.get("image"))
-              and (r["t_utc"] or "")[:10] == day]
+              and (r["t_utc"] or "")[:10] in days]
     for i, r in enumerate(sorted(starts, key=lambda r: r["ts"]), 1):
         corr = [x["event_uid"] for x in rows4688 if x["host"] == r["host"] and is_splunkd(x.get("image"))
                 and abs(x["ts"] - r["ts"]) <= 3.0]
@@ -342,10 +409,12 @@ def build_draft(rows: list[dict], trial_id: str, intended: Mapping, db_sha256: s
         flag = ["stray_agent_ep02"] if a.host == "ep-02" else []
         self_target = a.host in {h for h in targets.find_targets(a.texts, ip_host)[0]} or \
             any(ip_pat for ip_pat in [targets.ip_pattern(host_ip.get(a.host, "-")).search(t) for t in a.texts])
-        svc_names = targets.artifact_names(a.texts)
         t0 = parse_utc(a.root.time_utc).timestamp()
-        stray_events = [e["event_uid"] for e in collect.service_events(idx, a.host, t0 + 30.0, svc_names)
-                        if t0 - 5 <= e["ts"] <= t0 + STRAY_SERVICE_WINDOW_S] if svc_names["services"] else []
+        later = [parse_utc(o.root.time_utc).timestamp() for o in stray_acts
+                 if o.host == a.host and parse_utc(o.root.time_utc).timestamp() > t0]
+        end = min([t0 + STRAY_SERVICE_WINDOW_S] + later)   # a later stray run owns the events after its start
+        stray_events = [e["event_uid"] for e in collect.stray_events(
+            idx, a.host, t0 - 5.0, end, targets.artifact_names(a.texts))]
         sid = f"{scenario}-stray-{a.host}-{n}"
         unconfirmed.append({"kind": "stray", "id": sid, "role": "stray", "host": a.host, "time_utc": a.root.time_utc,
                             "agent_account": targets.normalise_account(a.root.account), "flags": flag,
@@ -400,14 +469,14 @@ def build_draft(rows: list[dict], trial_id: str, intended: Mapping, db_sha256: s
             continue
         if not a.in_agent_tree and not targets.classify_protocol(" ".join(a.texts)):
             continue   # e.g. a pre-flight ping by hand: no protocol, not a move
-        if len(tg) > 1:
-            cand_actions += [(a, t) for t in tg]
-        else:
-            cand_actions += [(a, t) for t in tg]
+        cand_actions += [(a, t) for t in tg]
     cand_actions.sort(key=lambda at: at[0].root.time_utc)
-    for a, tgt in cand_actions:
+    cmd_ts = [parse_utc(a.root.time_utc).timestamp() for a, _ in cand_actions]
+    for n, (a, tgt) in enumerate(cand_actions):
         multi = len([t for t in a.targets if t != a.host]) > 1
-        hop = build_hop(a, tgt, ctx)
+        nxt = next((cmd_ts[j] for j in range(n + 1, len(cand_actions))
+                    if cand_actions[j][0].host == a.host and cand_actions[j][1] == tgt and cmd_ts[j] > cmd_ts[n]), None)
+        hop = build_hop(a, tgt, ctx, nxt)
         if hop["status"] == "unconfirmed" and hop["reason"] == "attempt_no_target_evidence":
             unconfirmed.append({"kind": "attempt", "id": f"{scenario}-attempt-{a.host}-{tgt}", "role": None,
                                 "reason": "attempt_no_target_evidence", "flags": hop["flags"],
@@ -419,23 +488,36 @@ def build_draft(rows: list[dict], trial_id: str, intended: Mapping, db_sha256: s
             hop["reason"] = "multiple_targets_in_command"
         if hop.get("account") is None:                       # ambiguous burst: keep as unconfirmed hop without anchor
             hop["account"] = hop["logon_account"] = None
-        st = match_step(isteps, consumed, hop["protocol"], a.host, tgt, hop.get("logon_account") or hop["agent_account"],
+        st = match_step(isteps, consumed, hop["protocol"], hop["source_host"] or a.host, tgt, hop.get("logon_account") or hop["agent_account"],
                         hop["_names"], manual=not a.in_agent_tree)
         _attach_step(hop, st, isteps, consumed, counters, scenario, a)
         hops.append(hop)
         used_logons.update(hop.get("_burst_uids", []))
+        used_logons.update(hop.get("_absorbed_uids", []))
         if hop["status"] == "confirmed" and not st:
             hop["status"] = "unconfirmed"
             hop["reason"] = "no_intended_step"
 
-    # leftover bursts: time/account only
-    kinds = [parse_utc(s["time_utc"]).timestamp() for s in steps if s["kind"] != "agent_start" and s["time_utc"]]
-    kinds += [parse_utc(h["agent_command_time_utc"]).timestamp() for h in hops if h.get("agent_command_time_utc")]
-    if kinds:
-        for src, tgt, b in leftover_bursts(ctx, used_logons, min(kinds) - SEARCH_MARGIN_S, max(kinds) + SEARCH_MARGIN_S):
-            hops.append(_leftover_hop(b, src, tgt, ctx, counters, scenario, idx))
+    # leftover bursts: time/account only, bounded to the trial's own run interval (AK-04):
+    # [earliest splunkd root of the run - 60 s, last step/command in the draft + 300 s]
+    run_interval = None
+    t_start = run_start_ts(rows, TRIAL_GAP_S)
+    if t_start is not None:
+        ends = [parse_utc(s["time_utc"]).timestamp() for s in steps if s["time_utc"]]
+        for h in hops:
+            ends += [parse_utc(h[k]).timestamp() for k in ("agent_command_time_utc", "move_time_utc") if h.get(k)]
+        t_lo = t_start - RUN_INTERVAL_BEFORE_S
+        t_hi = max(ends + [t_start]) + RUN_INTERVAL_AFTER_S
+        run_interval = {"start_utc": fmt_utc(datetime.fromtimestamp(t_lo, tz=timezone.utc)),
+                        "end_utc": fmt_utc(datetime.fromtimestamp(t_hi, tz=timezone.utc))}
+        for src, tgt, b in leftover_bursts(ctx, used_logons, t_lo, t_hi):
+            hop = _leftover_hop(b, src, tgt, ctx, counters, scenario, idx)
+            hop["reason"] = (f"no_agent_command_names_target; logon lies inside the trial run interval "
+                             f"{run_interval['start_utc']} .. {run_interval['end_utc']}")
+            hops.append(hop)
+    flags = ["run_day_spans_midnight"] if spans_midnight else []
     return _finish(scenario, trial_id, sc, isteps, rows, steps, hops, unconfirmed, open_points, dumps, net, tree,
-                   stray_acts, db_sha256, provisional, day, by_guid, rows4688, manual)
+                   stray_acts, db_sha256, provisional, days, by_guid, rows4688, manual, sys_dumps, flags, run_interval)
 
 
 def _attach_step(hop: dict, st: Mapping | None, isteps: Sequence[Mapping], consumed: set[str], counters: dict,
@@ -449,7 +531,6 @@ def _attach_step(hop: dict, st: Mapping | None, isteps: Sequence[Mapping], consu
             hop["status"], hop["reason"] = "unconfirmed", "no_intended_step"
         return
     consumed.add(st["id"])
-    n = sum(1 for k in consumed if k == st["id"])
     hop["hop_id"] = st["id"]
     if st.get("repeatable"):
         counters[st["id"]] = counters.get(st["id"], 0) + 1
@@ -462,35 +543,42 @@ def _attach_step(hop: dict, st: Mapping | None, isteps: Sequence[Mapping], consu
             or (st.get("account") and st["account"] != acct) \
             or (st.get("service") and st["service"].lower() not in hop["_names"].get("services", ())):
         hop["flags"].append("handoff_mismatch")
-    del n
 
 
-def _leftover_hop(b: Sequence[Mapping], src: str, tgt: str, ctx: Ctx, counters: dict, scenario: str,
+def _leftover_hop(b: Sequence[Mapping], src: str | None, tgt: str, ctx: Ctx, counters: dict, scenario: str,
                   idx: collect.Index) -> dict:
-    """A remote logon burst no command explains: time_account_only, unconfirmed (AK-04)."""
+    """A remote logon burst no command explains: time_account_only, unconfirmed (AK-04).
+
+    ``src`` is the host owning the 4624 IpAddress (None when the address maps to no lab host).
+    """
     anchor = b[0]
     acct = targets.normalise_account(anchor["account_name"])
     art = collect.burst_artifacts(idx, tgt, b, {})
-    protocol = ("WinRM" if art["wsmprovhost_uids"] else "RDP" if anchor.get("logon_type") == 10
-                else "SMB" if (art["share_uids"] or art["file_uids"]) else None)
+    protocol = collect.burst_protocol(art, b)
     counters["t"] += 1
     ident = identity.evaluate_identity(ctx.dumps, ctx.state, acct, src, anchor["ts"])
     uids = [x["event_uid"] for x in b] + art["share_uids"] + art["file_uids"] + art["install_uids"] + art["wsmprovhost_uids"]
     return {"hop_id": f"{scenario}-t{counters['t']}", "protocol": protocol, "source_host": src, "target_host": tgt,
+            "source_ip": anchor.get("source_ip"), "command_host": None, "method": "time_account_only+unexplained_logon",
             "account": acct, "logon_account": acct, "agent_account": None, "cmd_credential_account": None,
             "handoff_account": None, "handoff_step": None, "account_mismatch": False,
             "move_time_utc": anchor["t_utc"], "basis": "time_account_only", "status": "unconfirmed",
             "reason": "no_agent_command_names_target", "agent_event_uids": [], "target_event_uids": list(dict.fromkeys(uids)),
             "identity_expected": ident["identity_expected"], "identity_basis": ident["identity_basis"],
             "time_delta_ms": None, "confidence_tier": "D", "target_binding": "time_account", "candidate_count": 1,
+            "credential_logon_uids": [], "related_logon_uids": [], "port_join_event_uids": [],
             "needs_owner_approval": False, "flags": list(ident["flags"]), "role": None, "proposed_role": None,
             "target_logon_id": hex(anchor["target_logon_id"]), "authentication_package": anchor.get("authentication_package"),
             "source_host_by_ip": src, "_anchor_ts": anchor["ts"], "_burst_uids": [x["event_uid"] for x in b], "_names": {}}
 
 
-def _finish(scenario, trial_id, sc, isteps, rows, steps, hops, unconfirmed, open_points, dumps, net, tree, stray_acts,
-            db_sha256, provisional, day, by_guid, rows4688, manual) -> dict:
+def _finish(scenario: str, trial_id: str, sc: Mapping, isteps: Sequence[Mapping], rows: Sequence[Mapping],
+            steps: list[dict], hops: list[dict], unconfirmed: list[dict], open_points: list[str],
+            dumps: Sequence[identity.Dump], net: Mapping, tree: Sequence[AgentProc], stray_acts: Sequence[Action],
+            db_sha256: str, provisional: Mapping | None, days: Sequence[str], by_guid: Mapping[str, Mapping],
+            rows4688: Sequence[Mapping], manual: Sequence[Action], sys_dumps: Sequence[Mapping],
+            flags: Sequence[str], run_interval: Mapping | None = None) -> dict:
     """Roles, S04-A evidence, decision checks, paths, window and the final dict (see build_draft)."""
     from . import finish
     return finish.finish(scenario, trial_id, sc, isteps, rows, steps, hops, unconfirmed, open_points, dumps, net, tree,
-                         stray_acts, db_sha256, provisional, day, by_guid, rows4688, manual)
+                         stray_acts, db_sha256, provisional, days, by_guid, rows4688, manual, sys_dumps, flags, run_interval)
