@@ -12,6 +12,7 @@ from .timeutil import fmt_utc, parse_utc
 HOP_DEFAULTS = {"move_time_utc": None, "identity_expected": None, "identity_basis": None, "time_delta_ms": None,
                 "confidence_tier": "D", "target_binding": None, "target_event_uids": [], "account": None,
                 "logon_account": None, "account_mismatch": False, "method": None, "candidate_count": None,
+                "reviewed": False, "excluded": False, "excluded_reason": None, "reviewed_note": None,
                 "credential_logon_uids": [], "related_logon_uids": [], "port_join_event_uids": []}
 ROLES = ("attack", "benign", "background")
 PRIVATE = ("_names", "_anchor_ts", "_burst_uids", "_absorbed_uids")

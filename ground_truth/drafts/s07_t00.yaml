@@ -338,7 +338,11 @@
       "confidence_tier": "B",
       "account_mismatch": false,
       "status": "confirmed",
-      "hop_id": "s07-h-x"
+      "hop_id": "s07-h-x",
+      "reviewed": false,
+      "excluded": false,
+      "excluded_reason": null,
+      "reviewed_note": null
     },
     {
       "protocol": "SMB",
@@ -452,7 +456,11 @@
       "confidence_tier": "B",
       "account_mismatch": true,
       "status": "confirmed",
-      "hop_id": "s07-h-y"
+      "hop_id": "s07-h-y",
+      "reviewed": false,
+      "excluded": false,
+      "excluded_reason": null,
+      "reviewed_note": null
     },
     {
       "hop_id": "s07-t1",
@@ -512,6 +520,10 @@
       "target_logon_id": "0x264f4c",
       "authentication_package": "NTLM",
       "source_host_by_ip": "ep-01",
+      "reviewed": true,
+      "excluded": false,
+      "excluded_reason": null,
+      "reviewed_note": "owner reviewed the six-hop rows 2026-11-10; background hop",
       "shared_with_trials": []
     }
   ],

@@ -549,6 +549,26 @@ def build_draft(rows: list[dict], trial_id: str, intended: Mapping, db_sha256: s
                    stray_acts, db_sha256, provisional, days, by_guid, rows4688, manual, sys_dumps, flags, run_interval, manifest_span)
 
 
+OWNER_FIELDS = ("reviewed", "reviewed_note", "excluded", "excluded_reason")
+
+
+def apply_owner_reviews(draft: dict, reviews: Mapping | None) -> None:
+    """Copy the owner's review decisions onto the hops (in place); the builder never decides them.
+
+    ``reviews`` is the ``<trial_id>`` entry of owner_reviews.json: {hop_id: {reviewed, ...}}.
+    A hop id that is not in the draft raises, so a stale entry cannot silently apply.
+    """
+    reviews = reviews or {}
+    by_id = {h["hop_id"]: h for h in draft["hops"]}
+    stale = sorted(set(reviews) - set(by_id))
+    if stale:
+        raise ValueError(f"owner_reviews.json names hops not in {draft['trial_id']}: {stale}")
+    for hop_id, entry in reviews.items():
+        for k in OWNER_FIELDS:
+            if k in entry:
+                by_id[hop_id][k] = entry[k]
+
+
 def _downgrade_manual(hop: dict) -> None:
     """A manual-session command that matches no intended step is only time/account evidence (AK-04)."""
     hop["basis"] = "time_account_only"

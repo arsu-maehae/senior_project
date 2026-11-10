@@ -309,6 +309,10 @@
       "account_mismatch": false,
       "status": "confirmed",
       "hop_id": "s04-A-h1",
+      "reviewed": false,
+      "excluded": false,
+      "excluded_reason": null,
+      "reviewed_note": null,
       "owner_note": "decision 021, owner approved the source session 2026-11-10 on this evidence",
       "session_evidence": {
         "session_id": "0xd6398",
@@ -501,7 +505,11 @@
       "confidence_tier": "C",
       "account_mismatch": false,
       "status": "confirmed",
-      "hop_id": "s04-B-h1"
+      "hop_id": "s04-B-h1",
+      "reviewed": false,
+      "excluded": false,
+      "excluded_reason": null,
+      "reviewed_note": null
     },
     {
       "hop_id": "s04-t1",
@@ -561,6 +569,10 @@
       "target_logon_id": "0x1442aa",
       "authentication_package": "NTLM",
       "source_host_by_ip": "ep-01",
+      "reviewed": true,
+      "excluded": false,
+      "excluded_reason": null,
+      "reviewed_note": "owner reviewed the six-hop rows 2026-11-10; background hop",
       "shared_with_trials": []
     }
   ],

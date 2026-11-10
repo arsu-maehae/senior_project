@@ -95,16 +95,25 @@ def _same_time(a: str | None, b: str | None) -> bool:
 
 
 def lock_status(draft: dict) -> dict:
-    """Lock readiness (informational): no hop may be unconfirmed and every hop needs a valid role.
+    """Lock readiness (informational), owner rule: (a) every hop has a role; (b) no non-excluded
+    attack/benign hop is unconfirmed; (c) every non-excluded background hop is ``reviewed``;
+    (d) every excluded hop has a non-empty ``excluded_reason``.
 
-    WHY: no unconfirmed hop may remain in an approved key before the lock tag.
+    WHY: background hops can never be confirmed by design, so the owner's review replaces confirmation.
     """
     blockers = []
     for h in draft.get("hops", []):
-        if h.get("status") != "confirmed":
-            blockers.append({"hop_id": h.get("hop_id"), "reason": f"status {h.get('status')}: {h.get('reason')}"})
-        if h.get("role") not in ("attack", "benign", "background"):
-            blockers.append({"hop_id": h.get("hop_id"), "reason": f"role missing or invalid: {h.get('role')}"})
+        hid, role, excluded = h.get("hop_id"), h.get("role"), bool(h.get("excluded"))
+        if role not in ("attack", "benign", "background"):
+            blockers.append({"hop_id": hid, "reason": f"role missing or invalid: {role}"})
+        if excluded and not (h.get("excluded_reason") or "").strip():
+            blockers.append({"hop_id": hid, "reason": "excluded without excluded_reason"})
+        if excluded:
+            continue
+        if role in ("attack", "benign") and h.get("status") != "confirmed":
+            blockers.append({"hop_id": hid, "reason": f"status {h.get('status')}: {h.get('reason')}"})
+        if role == "background" and not h.get("reviewed"):
+            blockers.append({"hop_id": hid, "reason": "background hop not reviewed"})
     return {"lock_ready": not blockers, "lock_blockers": blockers}
 
 

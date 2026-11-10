@@ -12,11 +12,12 @@ import sys
 from pathlib import Path
 
 from . import db, overlap
-from .build import build_draft
+from .build import apply_owner_reviews, build_draft
 from .verify import load_draft, to_markdown, verify
 
 REPO = Path(__file__).resolve().parents[2]
 INTENDED = Path(__file__).with_name("intended_steps.json")
+OWNER_REVIEWS = Path(__file__).with_name("owner_reviews.json")
 
 
 def safe_draft_path(repo: Path, trial: str) -> Path:
@@ -62,6 +63,7 @@ def cmd_build(trial: str, repo: Path) -> Path:
     with db.guarded(dbp) as (con, sha):
         rows = db.load_events(con)
         draft = build_draft(rows, trial, intended, sha, read_provisional(repo, trial), read_manifest_span(repo, trial))
+    apply_owner_reviews(draft, json.loads(OWNER_REVIEWS.read_text(encoding="utf-8")).get(trial))
     overlap.annotate_shared(draft, repo / "data" / "processed")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(draft, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

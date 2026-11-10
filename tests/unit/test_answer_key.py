@@ -1803,23 +1803,15 @@ def test_ak20_manual_command_in_agent_tree_session_is_not_manual_basis(tmp_path)
     assert not [h for h in d["hops"] if h["basis"] == "manual_command_names_target"]
 
 
-# ---- AK-21 lock gate
+# ---- AK-21 lock gate (decisions 027, 028)
 
-@pytest.mark.parametrize("trial", TRIALS)
-def test_ak21_verify_json_lock_fields_on_real_drafts(real, trial):
-    repo = real[trial][0] if trial in real else pytest.skip("db missing")
-    cmd_verify(trial, repo)
-    on_disk = json.loads((repo / "out" / "answer_key" / trial / "verify.json").read_text(encoding="utf-8"))
-    assert "lock_ready" in on_disk and "lock_blockers" in on_disk
-    d = read_draft(repo, trial)
-    expect = sorted(h["hop_id"] for h in d["hops"] if h["status"] != "confirmed")         # recomputed from the draft
-    assert sorted(b["hop_id"] for b in on_disk["lock_blockers"]) == expect
-    assert on_disk["lock_ready"] is (not expect)
-    if trial in BACKGROUND_HOPS:                                                           # actual drafts: one background hop each
-        assert on_disk["lock_ready"] is False and [b["hop_id"] for b in on_disk["lock_blockers"]] == [BACKGROUND_HOPS[trial]]
-    else:
-        assert trial in ("s02_t00", "s03_t00") and on_disk["lock_ready"] is True and on_disk["lock_blockers"] == []
-    assert all(b.get("reason") for b in on_disk["lock_blockers"])
+OWNER_FILE = SRC_AK / "owner_reviews.json"
+
+
+def owner_entries() -> dict:
+    """Independent read of the owner file: {trial: {hop_id: entry}}."""
+    data = json.loads(OWNER_FILE.read_text(encoding="utf-8"))
+    return {k: v for k, v in data.items() if not k.startswith("_")}
 
 
 def _verify_copy(real, trial, mutate):
@@ -1828,28 +1820,141 @@ def _verify_copy(real, trial, mutate):
     return verify_mod.verify(d, db_path(trial))
 
 
-def test_ak21_confirmed_hop_changed_to_unconfirmed_blocks_lock(real):
-    assert _verify_copy(real, "s02_t00", lambda d: None)["lock_ready"] is True
+def _blockers(rep) -> list[str]:
+    return sorted(b["hop_id"] for b in rep["lock_blockers"])
+
+
+@pytest.mark.parametrize("trial", TRIALS)
+def test_ak21_verify_json_lock_fields_on_real_drafts(real, trial):
+    repo = real[trial][0] if trial in real else pytest.skip("db missing")
+    cmd_verify(trial, repo)
+    on_disk = json.loads((repo / "out" / "answer_key" / trial / "verify.json").read_text(encoding="utf-8"))
+    assert on_disk["lock_ready"] is True and on_disk["lock_blockers"] == []
+    d = read_draft(repo, trial)
+    owner = owner_entries().get(trial, {})
+    for h in d["hops"]:
+        e = owner.get(h["hop_id"], {})
+        assert h["excluded"] is bool(e.get("excluded", False)) and h["excluded"] is False
+        assert h["reviewed"] is bool(e.get("reviewed", False)), (trial, h["hop_id"])
+        if h["role"] == "background":
+            assert h["reviewed"] is True and h["excluded"] is False, (trial, h["hop_id"])
+        else:
+            assert h["reviewed"] is False, (trial, h["hop_id"])
+            assert h["status"] == "confirmed"
+
+
+def test_ak21_owner_file_covers_exactly_the_four_background_hops():
+    own = owner_entries()
+    assert {t: sorted(v) for t, v in own.items()} == {t: [h] for t, h in BACKGROUND_HOPS.items()}
+    for v in own.values():
+        for e in v.values():
+            assert e["reviewed"] is True and e["excluded"] is False and e["excluded_reason"] is None
+
+
+@pytest.mark.parametrize("trial", TRIALS)
+def test_ak21_exclusion_fields_present_with_defaults_on_every_hop(real, trial):
+    for h in draft_of(real, trial)["hops"]:
+        for k in ("reviewed", "reviewed_note", "excluded", "excluded_reason"):
+            assert k in h, (trial, h["hop_id"], k)
+        assert h["excluded"] is False and h["excluded_reason"] is None
+        assert isinstance(h["reviewed"], bool)
+        if h["role"] != "background":
+            assert h["reviewed_note"] is None
+
+
+def test_ak21_clearing_reviewed_on_background_hop_blocks(real):
+    assert _verify_copy(real, "s04_t00", lambda d: None)["lock_ready"] is True
+    rep = _verify_copy(real, "s04_t00", lambda d: hop_by_id(d, "s04-t1").update(reviewed=False))
+    assert rep["lock_ready"] is False and _blockers(rep) == ["s04-t1"] and rep["lock_blockers"][0]["reason"]
+
+
+def test_ak21_confirmed_attack_hop_changed_to_unconfirmed_blocks(real):
     rep = _verify_copy(real, "s02_t00", lambda d: d["hops"][0].update(status="unconfirmed"))
-    assert rep["lock_ready"] is False and [b["hop_id"] for b in rep["lock_blockers"]] == ["s02-h1"]
+    assert d_role(real, "s02_t00", "s02-h1") == "attack"
+    assert rep["lock_ready"] is False and _blockers(rep) == ["s02-h1"]
 
 
-def test_ak21_all_hops_confirmed_makes_lock_ready(real):
-    def allc(d):
-        for h in d["hops"]:
-            h["status"] = "confirmed"
-    rep = _verify_copy(real, "s04_t00", allc)
+def d_role(real, trial, hid):
+    return hop_by_id(draft_of(real, trial), hid)["role"]
+
+
+def test_ak21_unconfirmed_benign_hop_blocks(real):
+    assert d_role(real, "s06_t00", "s06-winrm-1") == "benign"
+    rep = _verify_copy(real, "s06_t00", lambda d: hop_by_id(d, "s06-winrm-1").update(status="unconfirmed"))
+    assert rep["lock_ready"] is False and _blockers(rep) == ["s06-winrm-1"]
+
+
+def test_ak21_excluded_without_reason_blocks_and_with_reason_stops_blocking(real):
+    for reason in (None, "", "   "):
+        rep = _verify_copy(real, "s02_t00", lambda d: d["hops"][0].update(excluded=True, excluded_reason=reason))
+        assert rep["lock_ready"] is False and _blockers(rep) == ["s02-h1"], repr(reason)
+    rep = _verify_copy(real, "s02_t00", lambda d: d["hops"][0].update(excluded=True, excluded_reason="owner: out of scope"))
     assert rep["lock_ready"] is True and rep["lock_blockers"] == []
 
 
-def test_ak21_hop_without_valid_role_blocks_lock(real):
-    rep = _verify_copy(real, "s02_t00", lambda d: d["hops"][0].pop("role"))
-    assert rep["lock_ready"] is False
+def test_ak21_excluded_hop_skips_status_and_review_rules(real):
+    def mut(d):
+        hop_by_id(d, "s02-h1").update(status="unconfirmed", excluded=True, excluded_reason="owner")
+    assert _verify_copy(real, "s02_t00", mut)["lock_ready"] is True
+
+    def mut_bg(d):
+        hop_by_id(d, "s04-t1").update(reviewed=False, excluded=True, excluded_reason="owner")
+    assert _verify_copy(real, "s04_t00", mut_bg)["lock_ready"] is True
+
+
+@pytest.mark.parametrize("excluded", [False, True])
+def test_ak21_hop_without_valid_role_blocks_lock_even_if_excluded(real, excluded):
+    def mut(d):
+        d["hops"][0].pop("role")
+        d["hops"][0].update(excluded=excluded, excluded_reason="owner" if excluded else None)
+    rep = _verify_copy(real, "s02_t00", mut)
+    assert rep["lock_ready"] is False and _blockers(rep) == ["s02-h1"]
+
+
+def test_ak21_invalid_role_value_blocks(real):
+    rep = _verify_copy(real, "s02_t00", lambda d: d["hops"][0].update(role="bogus"))
+    assert rep["lock_ready"] is False and _blockers(rep) == ["s02-h1"]
 
 
 def test_ak21_lock_gate_is_informational_verify_still_ok(real):
-    rep = cmd_verify("s04_t00", real["s04_t00"][0])
+    d = json.loads(json.dumps(draft_of(real, "s04_t00")))
+    hop_by_id(d, "s04-t1")["reviewed"] = False
+    rep = verify_mod.verify(d, db_path("s04_t00"))
     assert rep["ok"] is True and rep["lock_ready"] is False
+    assert cmd_verify("s04_t00", real["s04_t00"][0])["ok"] is True
+
+
+def test_ak21_owner_entry_for_missing_hop_raises(tmp_path, monkeypatch):
+    need_db("s04_t00")
+    import answer_key.__main__ as m
+    alt = tmp_path / "owner_bad.json"
+    alt.write_text(json.dumps({"s04_t00": {"s04-t1": {"reviewed": True}, "s04-nope": {"reviewed": True}}}), encoding="utf-8")
+    monkeypatch.setattr(m, "OWNER_REVIEWS", alt)
+    repo = make_repo(tmp_path / "r", "s04_t00", link=True)
+    with pytest.raises(ValueError, match="s04-nope"):
+        m.cmd_build("s04_t00", repo)
+    assert not (repo / "ground_truth" / "drafts" / "s04_t00.yaml").exists()
+
+
+def test_ak21_build_deterministic_apart_from_owner_file(tmp_path, monkeypatch):
+    need_db("s04_t00")
+    import answer_key.__main__ as m
+    base = make_repo(tmp_path / "a", "s04_t00", link=True)
+    m.cmd_build("s04_t00", base)
+    d1 = read_draft(base, "s04_t00")
+    alt = tmp_path / "owner_empty.json"
+    alt.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(m, "OWNER_REVIEWS", alt)
+    other = make_repo(tmp_path / "b", "s04_t00", link=True)
+    m.cmd_build("s04_t00", other)
+    d2 = read_draft(other, "s04_t00")
+    assert hop_by_id(d1, "s04-t1")["reviewed"] is True and hop_by_id(d2, "s04-t1")["reviewed"] is False
+    for d in (d1, d2):
+        hop_by_id(d, "s04-t1").update(reviewed=None, reviewed_note=None)
+    assert d1 == d2
+    assert verify_mod.lock_status(read_draft(other, "s04_t00"))["lock_ready"] is False
+    m.cmd_build("s04_t00", base)
+    assert read_draft(base, "s04_t00") == read_draft(base, "s04_t00")
 
 
 # ---- AK-22 run interval, manifest span, overlap

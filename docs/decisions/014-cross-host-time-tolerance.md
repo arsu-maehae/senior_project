@@ -5,6 +5,22 @@
 ## Context
 Log-check LC-09 (mutual-nearest 4624 ↔ DC 4769 pairs, p50 per host): ep-01 −1.1 to +3.4 s, ep-02 −1.7 to +2.7 s, ep-03 +4.0 to +4.5 s versus dc01 (medians; single pairs spread further, e.g. S07 ep-02 −4.1 to +8.5 s); dc01 against itself 5–6 ms; S04 flagged `dc01_skew_possible`. Offsets change per trial (snapshot revert). In the SMB hops the source command appears −3.1 to +1.1 s from the target 4624 (`docs/research/data_reality.md` §2.7). Security 4688 and Sysmon 1 agree on every host (median 0 ms). Sysmon record-time outliers on ep-02/ep-03 (decision 010).
 
+## Evidence added from the T5 keys (2026-11-10)
+The key's `time_delta_ms` is the target 4624 time minus the first agent command naming the target, in ms (`ground_truth/drafts/*.yaml`, hops with status `confirmed`). A target event cannot precede the command that causes it, so a negative value means the target host's clock is behind the source host's by at least that much (a lower bound; the true offset also includes the delay between command start and network use). Positive values mix clock offset with script start-up time and say nothing about offsets.
+
+| Source → target | Hop | `time_delta_ms` |
+|---|---|---|
+| ep-01 → ep-02 | s02-h1 | −793 |
+| ep-01 → ep-02 | s04-A-h1 | −1085 |
+| ep-01 → ep-02 | s04-B-h1 | −907 |
+| ep-01 → ep-02 | s06-winrm-1 | −370 |
+| ep-01 → ep-02 | s06-smb-1 | −3921 |
+| ep-01 → ep-02 | s05-h1 | +336 |
+| ep-01 → ep-02 | s07-h-x / s07-h-y | +3729 / +2339 |
+| ep-01 → ep-03, ep-02 → ep-03 | s03-h1, s05-h2, s06-winrm-2 | +2763, +2421, +6094 |
+
+On ep-01 → ep-02, target events are logged about 1 s before the source command on 2026-09-24 (S02, S04: −0.8 to −1.1 s) and up to 3.9 s before it on 2026-10-12 (S06 `s06-smb-1`), so ep-02's clock is behind ep-01's by at least those amounts. The largest observed lower bound (3.9 s) is inside the 5 s tolerance but close to it. These are lower bounds from single hops, not a measured offset per host pair.
+
 ## Options considered
 | Option | Pros | Cons |
 |---|---|---|

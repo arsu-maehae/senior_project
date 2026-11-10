@@ -58,6 +58,7 @@ Never tune code or weights on the test set.
 - [ ] 6.1 Spec from handoff §7.2
 - [ ] 6.2 Implement as specified; trigger list + stats per trial
 - [ ] 6.3 Tests + stage review
+- [ ] 6.4 Trial window clip (decision 026, owner 2026-11-10): the pipeline clips each trial DB to that trial's key window (`agent.run_interval` of its answer key) BEFORE gating and linking, so earlier trials' events and paths are never scored (the 07:05:15 admin_it logon appears in the s05, s06 and s07 DBs; files start 2026-09-17). Acceptance test: an event outside the window never reaches the gate or the stitcher (put the test in the gate spec 02_gate.md, and repeat it for the stitcher in 7.7)
 **Done when:** every movement in the development answer keys produces a trigger.
 
 ## T7. Cross-host linking — depends on: T6 — CRITICAL — spec: docs/specs/03_stitch.md
@@ -67,7 +68,7 @@ Never tune code or weights on the test set.
 - [ ] 7.4 Every link records method, candidate count, time gap, confidence
 - [ ] 7.5 Candidate paths from triggers; merge on shared nodes; never drop isolated paths
 - [ ] 7.6 Link accuracy vs development keys
-- [ ] 7.7 Tests + stage review
+- [ ] 7.7 Tests + stage review (includes: an event outside the trial's key window never reaches the stitcher)
 **Done when:** the attack path is among the candidates in every development trial.
 
 ## T8. Sigma labelling — depends on: T4 (alongside T7) — spec: docs/specs/04_label.md

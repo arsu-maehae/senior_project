@@ -288,7 +288,11 @@
       "confidence_tier": "A",
       "account_mismatch": true,
       "status": "confirmed",
-      "hop_id": "s06-winrm-1"
+      "hop_id": "s06-winrm-1",
+      "reviewed": false,
+      "excluded": false,
+      "excluded_reason": null,
+      "reviewed_note": null
     },
     {
       "protocol": "WinRM",
@@ -388,7 +392,11 @@
       "confidence_tier": "B",
       "account_mismatch": true,
       "status": "confirmed",
-      "hop_id": "s06-winrm-2"
+      "hop_id": "s06-winrm-2",
+      "reviewed": false,
+      "excluded": false,
+      "excluded_reason": null,
+      "reviewed_note": null
     },
     {
       "protocol": "SMB",
@@ -500,7 +508,11 @@
       "confidence_tier": "B",
       "account_mismatch": true,
       "status": "confirmed",
-      "hop_id": "s06-smb-1"
+      "hop_id": "s06-smb-1",
+      "reviewed": false,
+      "excluded": false,
+      "excluded_reason": null,
+      "reviewed_note": null
     },
     {
       "hop_id": "s06-t1",
@@ -560,6 +572,10 @@
       "target_logon_id": "0x2596ab",
       "authentication_package": "NTLM",
       "source_host_by_ip": "ep-01",
+      "reviewed": true,
+      "excluded": false,
+      "excluded_reason": null,
+      "reviewed_note": "owner reviewed the six-hop rows 2026-11-10; background hop",
       "shared_with_trials": []
     }
   ],

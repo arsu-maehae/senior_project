@@ -1,0 +1,7 @@
+{
+  "_note": "set only on the owner's instruction",
+  "s04_t00": {"s04-t1": {"reviewed": true, "reviewed_note": "owner reviewed the six-hop rows 2026-11-10; background hop", "excluded": false, "excluded_reason": null}},
+  "s05_t00": {"s05-t1": {"reviewed": true, "reviewed_note": "owner reviewed the six-hop rows 2026-11-10; background hop", "excluded": false, "excluded_reason": null}},
+  "s06_t00": {"s06-t1": {"reviewed": true, "reviewed_note": "owner reviewed the six-hop rows 2026-11-10; background hop", "excluded": false, "excluded_reason": null}},
+  "s07_t00": {"s07-t1": {"reviewed": true, "reviewed_note": "owner reviewed the six-hop rows 2026-11-10; background hop", "excluded": false, "excluded_reason": null}}
+}

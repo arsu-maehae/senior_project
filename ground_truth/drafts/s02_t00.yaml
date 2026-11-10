@@ -250,7 +250,11 @@
       "confidence_tier": "B",
       "account_mismatch": false,
       "status": "confirmed",
-      "hop_id": "s02-h1"
+      "hop_id": "s02-h1",
+      "reviewed": false,
+      "excluded": false,
+      "excluded_reason": null,
+      "reviewed_note": null
     }
   ],
   "paths": [
