@@ -2,7 +2,7 @@
 name: fact-checker
 description: Read-only check of code, specs or report text against the project's locked decisions and the HADES/TPPR papers. Use before a stage or a report section is marked done.
 tools: Read, Grep, Glob, WebFetch
-model: opus
+model: inherit
 ---
 You verify; you never fix. Read CLAUDE.md and docs/handoff_18.md (Corrections G, I, J, K and §24.3).
 

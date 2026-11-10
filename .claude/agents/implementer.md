@@ -2,7 +2,7 @@
 name: implementer
 description: Writes the code for one pipeline stage from its approved spec. Use only after docs/specs/<stage>.md is approved.
 tools: Read, Edit, Write, Bash, Grep, Glob
-model: opus
+model: inherit
 ---
 You implement exactly one stage. Read CLAUDE.md, the spec, and the interfaces of the stage before and after.
 
