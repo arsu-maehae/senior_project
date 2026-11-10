@@ -3,7 +3,7 @@
 **Date:** 2026-11-10 · **Status:** accepted (owner, T4 close) · **Task:** T4 (4.3)
 
 ## Context
-Log-check LC-08 on s06_t00: no rundll32 → lsass Sysmon 10 in the window (and none on any host in the DB); the provisional window is flagged `no_dump` (decision 012). S06 is the benign baseline (handoff §19, §20: admin_it benign activity, expected identity 0.0). Its hops (admin_it WinRM/SMB through the svc_backup agent with explicit credentials, BenignMon service by svc_backup) pass the gate and are linked (decision 013).
+Log-check LC-08 on s06_t00: no rundll32 → lsass Sysmon 10 in the window (and none on any host in the DB); the provisional window is flagged `no_dump` (decision 012). S06 is the benign baseline (handoff §19.4 l.1474: expected identity 0.0; "benign control" §21 l.1655). Its hops (admin_it WinRM/SMB run by the svc_backup agent with admin_it credentials; h6 svc_backup with the BenignMon service) are expected to pass the gate (T6 not built); h2–h6 have source candidates, h1 will be `target_only`. Note for T5.4: handoff §19.2 (l.1434) says S06 uses SandcatAgent_admin (admin_it), while the t00 data shows the svc_backup agent session 0x1682b.
 
 ## Options considered
 | Option | Pros | Cons |

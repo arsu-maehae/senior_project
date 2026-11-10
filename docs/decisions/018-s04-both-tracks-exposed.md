@@ -3,7 +3,7 @@
 **Date:** 2026-11-10 · **Status:** accepted (owner, T4 close) · **Task:** T4 (4.3)
 
 ## Context
-Log-check LC-08b on s04_t00: at the LSASS dump on ep-01 (10:56:56), admin_it had an agent session (0x17b18, type 4, since 10:54:47) and a desktop session (0xd6398/0xd663a, type 11, since 10:55:16) open; svc_backup had 0x17c46 (type 4). Track A (admin_it, HealthAgentSvc) and Track B (svc_backup, UpdaterService) both move to ep-02 after the dump, so both score 1 under Correction K. The same pattern holds at every dump: admin_it desktop sessions are open on the dump host in S02–S05 and S07. Handoff Correction H.2 (handoff_18.md:148, :204) predicted this under the "every account signed in at dump time" definition.
+Log-check LC-08b on s04_t00: at the LSASS dump on ep-01 (10:56:56), admin_it had an agent session (0x17b18, type 4, since 10:54:47) and a desktop session (0xd6398/0xd663a, type 11, since 10:55:16) open; svc_backup had 0x17c46 (type 4). Track A (admin_it, HealthAgentSvc) and Track B (svc_backup, UpdaterService) both move to ep-02 after the dump, so both score 1 under Correction K. The same pattern holds at every ep-01 dump (type-11 admin_it sessions open in S02–S05 and S07), but not at the S02 ep-02 dump (only svc_backup sessions) or the S05 ep-02 dump (admin_it type 3 and 4 only). Correction K item 3 (handoff_18.md:148) and Correction H.2 (handoff_18.md:204) predicted this under the "every account signed in at dump time" definition.
 
 ## Options considered
 | Option | Pros | Cons |
@@ -12,7 +12,7 @@ Log-check LC-08b on s04_t00: at the LSASS dump on ep-01 (10:56:56), admin_it had
 | B. Keep Correction K; report S04 Track A = Track B on identity as a known limitation | Honest; matches "exposed ≠ stolen" | The S04 ablation cannot show identity separating the tracks |
 
 ## Decision
-Option B (owner, 2026-11-10). Correction K is not changed. S04's identity values are reported as 1 and 1; the S04 ablation result is stated with this limitation (L12). Ties between the two tracks must not be broken arbitrarily in ranking: T9 reports them as ties.
+Option B (owner, 2026-11-10). Correction K is not changed. S04's identity values are reported as 1 and 1; the S04 ablation result is stated with this limitation (L12). The identity values tie; path scores may still differ through LengthScore and NodeScore. Only an equal path score is a tie, and T9 reports such ties as ties, never broken arbitrarily.
 
 ## Consequences
 S04 can no longer be presented as the case where the identity term separates attacker from admin. Ranking of the tracks rests on LengthScore and NodeScore (the dump node is on the attack path only if stitching attaches it). Report text must say "exposed", never "stolen".

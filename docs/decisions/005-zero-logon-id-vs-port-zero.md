@@ -3,7 +3,7 @@
 **Date:** 2026-11-10 · **Status:** accepted · **Task:** T3
 
 ## Context
-Evidence: `s01_t00/dc01/security.jsonl` line 2 is a 4688 with SubjectLogonId 0x5f3f3 and TargetLogonId 0x0. The current fallback chain (`normalize.py:289`) picks TargetLogonId first, so `session_id` becomes 0 instead of 0x5f3f3. Kerberos 4624 rows carry SubjectLogonId 0x0 and 4625 carries TargetLogonId 0x0. For ports: S01 EP-02 Security has 3 of 7 remote 4624 rows with IpPort 0 (Kerberos).
+Evidence: `s01_t00/dc01/security.jsonl` line 2 is a 4688 with SubjectLogonId 0x5f3f3 and TargetLogonId 0x0. The current fallback chain (`normalize.py:289`) picks TargetLogonId first, so `session_id` becomes 0 instead of 0x5f3f3. Kerberos 4624 rows carry SubjectLogonId 0x0 and 4625 carries TargetLogonId 0x0. For ports: S01 EP-02 Security has 4 of 7 remote 4624 rows with IpPort 0 (all 7 are NTLM; erratum 2026-11-10, earlier text said "3 … (Kerberos)").
 
 ## Options considered
 | Option | Pros | Cons |

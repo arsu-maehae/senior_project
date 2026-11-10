@@ -18,7 +18,7 @@ One SQLite file per trial: `data/processed/<scenario>_<trial>.sqlite3` (e.g. `s0
 |---|---|---|
 | NF-01 | Add `trial_id` (e.g. `t03`) from the `--trial` argument; every row carries `scenario_id` + `trial_id`, and the argument must match the folder name | Review fix 1 |
 | NF-02 | Remove hard-coded totals (85 files, 2,981,147 events) and fixed workspace paths from the NEW code; expected counts come from the trial's own `manifest.json`; paths come from CLI arguments. `full_import.py` is left as is | Review fix 1 (`full_import.py:25–26`, `cli.py`) |
-| NF-03 | `source_port` aliases include `IpPort` (4624/4625/4648). A port of 0 is stored as 0 but is **never a link key**: any join on ports requires port > 0 | Review fix 2 (`normalize.py:316`); S01 EP-02: 3 of 7 remote 4624 rows have IpPort 0 |
+| NF-03 | `source_port` aliases include `IpPort` (4624/4625/4648). A port of 0 is stored as 0 but is **never a link key**: any join on ports requires port > 0 | Review fix 2 (`normalize.py:316`); S01 EP-02: 4 of 7 remote 4624 rows (NTLM) have IpPort 0 (erratum 2026-11-10) |
 | NF-04 | New column `account_name` = bare username, lowercase: strip `DOMAIN\` and `@REALM`; **keep a trailing `$`** on machine accounts; keep `domain` separate; keep the original in `account` | Review fix 3 |
 | NF-05 | Read Sysmon 10 `SourceUser` (and `TargetUser`) into subject/target account | Review fix 3 |
 | NF-06 | Do not fall back to the XML `Execution ProcessID` for Security, System and WinRM channels | Review fix 6 (`normalize.py:322`) |

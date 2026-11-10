@@ -3,7 +3,7 @@
 **Date:** 2026-11-10 · **Status:** accepted (owner, T4 close) · **Task:** T4 (4.3)
 
 ## Context
-S01 t00 is target-side only (decision 001): its EP-01 and DC01 files are S02 exports. Target side present: 7 remote 4624 to ep-02 (Type 3, 3 with port 0) and 4 inbound `svchost.exe` Sysmon 3 rows to 3389 (`Initiated = false`). The Sysmon config logs any connection with destination port 3389 (`docs/research/sysmon_config_check.md` §1), so `mstsc.exe` → 3389 on the source will be logged. S01 t01 is not scheduled (owner).
+S01 t00 is target-side only (decision 001): its EP-01 and DC01 files are S02 exports. Target side present: 7 remote 4624 to ep-02 (Type 3, all NTLM; 4 with port 0, so at most 3 can enter a port join) and 4 inbound `svchost.exe` Sysmon 3 rows to 3389 (`Initiated = false`). The Sysmon config logs any connection with destination port 3389 (`docs/research/sysmon_config_check.md` §1), so `mstsc.exe` → 3389 on the source will be logged. S01 t01 is not scheduled (owner).
 
 ## Options considered
 | Option | Pros | Cons |

@@ -1,6 +1,6 @@
 # 011 — Link SMB hops without Sysmon 3
 
-**Date:** 2026-11-10 · **Status:** accepted (owner); Correction I under review, council in T4 · **Task:** T4 prep
+**Date:** 2026-11-10 · **Status:** accepted (owner); **partly superseded by decision 013** (2026-11-10): account is a supporting check, never a join condition; identity is computed for every hop including `target_only`; the source session may also come from a 4648 or a port join; 013's kill criteria replace this record's · **Task:** T4 prep
 
 ## Context
 Correction I (CLAUDE.md) links a cross-host hop from the target 4624 (IpAddress, IpPort, account, time) to a source Sysmon 3 (SourceIp/Port, DestinationIp/Port), then ProcessGuid → Sysmon 1 → LogonId session. Evidence (`docs/research/sysmon_config_check.md`, `docs/research/t3_data_findings.md` §1):
@@ -14,12 +14,12 @@ Correction I (CLAUDE.md) links a cross-host hop from the target 4624 (IpAddress,
 |---|---|---|
 | A. Re-run the SMB trials with a 445 rule | Correction I as written | Weeks of collection; owner decided against it |
 | B. Link SMB hops from target-side Security events plus the source command process | Uses data that exists in every SMB trial; matches how SMB attribution works anyway | No port-level join on the source side; more candidates when several sessions run commands naming the target |
-| C. Target side only, no source session | Simplest | No source session, so IdentityCoherence (Correction K) cannot be computed |
+| C. Target side only, no source session | Simplest | No source session; *(013: identity is still computed from the moving account and the source host, so this con no longer holds)* |
 
 ## Decision
 Option B (owner, 2026-11-10). The SMB trials are not re-run. An SMB hop is linked through:
 1. **Target side:** 4624 (source IP, IpPort, account, time) and the SMB activity of that logon session: 5140/5145 (share access) and 7045 (service install; 4697 where present).
-2. **Source side:** the logon session whose command process (Sysmon 1, or Security 4688 where Sysmon 1 is missing) has a command line naming the target (host name or IP), with the account and time consistent with the target 4624.
+2. **Source side:** the logon session whose command process (Sysmon 1, or Security 4688 where Sysmon 1 is missing) has a command line naming the target (host name or IP), with the account and time consistent with the target 4624. *(Superseded by 013: the account is recorded as `account_match`, not required.)*
 3. Kerberos hops are still confirmed by DC 4769 ↔ 4624 LogonGuid.
 
 Even with Sysmon 3 the SMB connection is owned by `System` (kernel SMB client), so session attribution always comes from the command process in the session. Sysmon 3 would only have added the source port for the join; it would never have named the session. Every link records `method`, `candidate_count`, `time_delta_ms`, `confidence_tier` and supporting `event_uid`s (CLAUDE.md code rules).

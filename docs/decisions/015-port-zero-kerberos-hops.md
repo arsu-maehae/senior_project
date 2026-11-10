@@ -3,7 +3,7 @@
 **Date:** 2026-11-10 · **Status:** accepted (owner, T4 close) · **Task:** T4 (4.3)
 
 ## Context
-Remote 4624 with `IpPort = 0` (decision 005: stored as 0, never a link key) are Kerberos logons: s01 32, s02 26, s03 64, s04 36, s05 53, s06 52, s07 40 in the whole DBs (t3 findings §4). Log-check LC-04c: 0% of the SMB hop instances in S02–S07 t00 have port 0 (all SMB hops are NTLM by IP, with a port). LC-03: most lab-IPv4 remote 4624 carry a LogonGuid that matches a DC 4769 (58/61, 117/119, 73/80, 146/152, 109/113, 88/94).
+Remote 4624 with `IpPort = 0` (decision 005: stored as 0, never a link key) are almost all Kerberos logons (exception: 4 NTLM rows in s01): s01 32, s02 26, s03 64, s04 36, s05 53, s06 52, s07 40 in the whole DBs (t3 findings §4). Log-check LC-04c: 0% of the SMB hop instances in S02–S07 t00 have port 0 (all SMB hops are NTLM by IP, with a port). LC-03: most lab-IPv4 remote 4624 carry a LogonGuid that matches a DC 4769 (58/61, 117/119, 73/80, 146/152, 109/113, 88/94).
 
 ## Options considered
 | Option | Pros | Cons |
