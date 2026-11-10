@@ -54,3 +54,6 @@ A summary block at the end of each big task. Newest at the bottom.
 - **Tests:** 380 passed, 1 xfailed. Data-checker re-derived 5 numbers × 6 trials independently: all match. DB hashes unchanged.
 - **Open:** RDP source side until S01 t01; "right session" unverifiable until T5 keys (S04 Track A → desktop 0xd6398 vs agent 0x17b18); S07 svc_sql path not visible (T5.4); S06 agent account differs from the handoff (T5.4); T7 requirements listed in the review (hop grouping, S07 session reuse, IpPort not unique, IpAddress `-` hops).
 - **Check by hand:** 10 rows of `out/log_check/s04_t00/hop_candidates.csv` (shown in the T4 report) and the per-hop table in `docs/research/data_reality.md`.
+2026-11-10 · T5 0 · dev/test split fixed in PLAN.md and CLAUDE.md · see commit · 019
+2026-11-10 · T5 1-2 · docs/research/agent_evidence.md: splunkd.exe is the Caldera agent (Sysmon 3 to 192.168.50.50:8888; attack commands are its grandchildren); s02 has a stray ep-02 SYSTEM run (self-target, not a hop); decision 020 key provenance; draft spec 07 · see commit · 020
+- TODO (cross-check, not a source of truth): when the Caldera files are copied (S05 definitions in s05-backup-20261031_052818, other ability/adversary YAMLs in data/, the 140 result files in data/results), compare them with the log-based keys and record mismatches in decision 020.
