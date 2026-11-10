@@ -47,7 +47,7 @@ Never tune code or weights on the test set.
 
 ## T5. Answer keys — depends on: T1 (alongside T3–T7)
 - [ ] 5.1 YAML format (steps → event ids, paths, benign paths, expected identity per hop)
-- [ ] 5.2 Draft helper from Caldera operation logs + time windows
+- [ ] 5.2 Draft helper from the agent process tree (splunkd.exe) + handoff intended steps + target-side events (decision 020; Caldera logs lost)
 - [ ] 5.3 Development key drafts → user approves → ground_truth/approved/
 - [ ] 5.4 Settle S04-A identity, S05 hop 2, S07 accounts, S06 benign paths
 - [ ] 5.5 Every listed event exists in the logs

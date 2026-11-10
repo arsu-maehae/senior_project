@@ -57,3 +57,4 @@ A summary block at the end of each big task. Newest at the bottom.
 2026-11-10 · T5 0 · dev/test split fixed in PLAN.md and CLAUDE.md · see commit · 019
 2026-11-10 · T5 1-2 · docs/research/agent_evidence.md: splunkd.exe is the Caldera agent (Sysmon 3 to 192.168.50.50:8888; attack commands are its grandchildren); s02 has a stray ep-02 SYSTEM run (self-target, not a hop); decision 020 key provenance; draft spec 07 · see commit · 020
 - TODO (cross-check, not a source of truth): when the Caldera files are copied (S05 definitions in s05-backup-20261031_052818, other ability/adversary YAMLs in data/, the 140 result files in data/results), compare them with the log-based keys and record mismatches in decision 020.
+2026-11-10 · T5 5.1 · spec 07 attacker + fact-check fixes (tolerance direction, moving account = 4624 account, source host by IP, window, schema, flags/roles); PLAN 5.2 wording; 019/agent_evidence corrections · see commit · 019, 020

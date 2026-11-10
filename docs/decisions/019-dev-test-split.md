@@ -15,11 +15,11 @@ The old split was development = t00 for S02–S07 + t01 for S01, test = trials 2
 Option B (owner, 2026-11-10). Development = t00 for S02–S07 plus t01 for all seven scenarios. Test = t02–t10 for all seven scenarios. S01 t00 stays excluded. Weights, λ and code are tuned on development trials only; test keys are locked (`answer-keys-locked`) before T10.
 
 ## Consequences
-Development keys for this run cover S02–S07 t00 only. t01 keys are built when those trials are ingested. PLAN.md header and CLAUDE.md `data/sample` line are updated to match.
+Development keys for this run cover S02–S07 t00 only. t01 keys are built when those trials are ingested. PLAN.md header and the CLAUDE.md split and `data/sample` lines are updated to match. Trial count: test = t02–t10 is 9 trials per scenario, 63 in total; t00 is the dry run, so the CLAUDE.md phrase "all 70 trials" (7 × 10) is a different count; the owner reconciles the numbering when the ×10 trials are ingested.
 
 ## Kill criteria
 If t01 of a scenario turns out unusable (under-fired, missing hosts), record it as excluded here and keep t00 as that scenario's only development trial.
 
 ## Committee answer
-**EN:** We tune only on trials 0 and 1 of each scenario and score once on trials 2 to 10, so the test result is not tuned.
+**EN:** We tune only on trial 0 (dry run) and trial 1 of each scenario (S01: trial 1 only) and score once on trials 2 to 10, so the test result is not tuned.
 **TH:** เราปรับค่าเฉพาะบนรอบที่ 0 และ 1 ของแต่ละสถานการณ์ และวัดผลครั้งเดียวบนรอบที่ 2 ถึง 10 ผลทดสอบจึงไม่ถูกปรับแต่ง
