@@ -32,7 +32,7 @@ from answer_key.__main__ import cmd_build, cmd_verify, main as cli_main, safe_dr
 PROCESSED = REPO / "data" / "processed"
 SRC_AK = REPO / "src" / "answer_key"
 TRIALS = ["s02_t00", "s03_t00", "s04_t00", "s05_t00", "s06_t00", "s07_t00"]
-PASSWORD = "Project123"
+PASSWORD = "FakePw-0001"
 LAB_IP_HOST = {"192.168.50.21": "ep-01", "192.168.50.22": "ep-02", "192.168.50.23": "ep-03"}
 
 HOP_FIELDS = ["hop_id", "protocol", "source_host", "target_host", "account", "move_time_utc", "basis", "status",
@@ -792,14 +792,14 @@ def test_account_normalisation_and_machine_accounts():
 
 
 def test_credential_account_parsed_before_masking():
-    assert targets.credential_account([r"net use \\ep-02\c$ /user:LAB\admin_it Project123"]) == "admin_it"
+    assert targets.credential_account([r"net use \\ep-02\c$ /user:LAB\admin_it FakePw-0001"]) == "admin_it"
     assert targets.credential_account(["New-Object PSCredential('LAB\\svc_backup', $pw)"]) == "svc_backup"
 
 
 @pytest.mark.parametrize("cmd", [
-    r"net use \\ep-02\c$ /user:LAB\admin_it Project123!",
-    r"x.exe -Password Project123 y",
-    r"x.exe /p:Project123 y",
+    r"net use \\ep-02\c$ /user:LAB\admin_it FakePw-0001!",
+    r"x.exe -Password FakePw-0001 y",
+    r"x.exe /p:FakePw-0001 y",
     r"echo $env:LAB_PW and $env:SVCPWD",
 ])
 def test_mask_command(cmd):
@@ -1201,16 +1201,13 @@ def test_ak12_window_from_all_non_agent_start_steps(real, trial):
 
 # ====================================================================== (13) fields, masking
 
-@pytest.mark.parametrize("trial", TRIALS)
-def test_drafts_never_contain_lab_password(real, trial):
-    text = (real[trial][0] / "ground_truth" / "drafts" / f"{trial}.yaml").read_text(encoding="utf-8") if trial in real else pytest.skip("db missing")
-    assert PASSWORD not in text
-    for m in re.finditer(r"(?i)-(?:e|enc|ec|encodedcommand)\s+([A-Za-z0-9+/]{16,}={0,2})", text):
-        try:
-            dec = base64.b64decode(m.group(1) + "=" * (-len(m.group(1)) % 4)).decode("utf-16-le")
-        except Exception:
-            continue
-        assert PASSWORD not in dec, "password inside an -enc payload left in the draft"
+# The real lab password is never stored in the repo. Value-independent checks below look at the
+# STRUCTURE (the token after /user:<account>, -Password, /p: must be ***). If the owner exports the real
+# value as LAB_PASSWORD, the same tests also search for that value; otherwise that extra check is skipped.
+REAL_PASSWORD = os.environ.get("LAB_PASSWORD") or None
+
+
+def _assert_structurally_masked(text: str) -> None:
     for m in re.finditer(r"(?i)/user:\S+\s+(\S+)", text):
         assert m.group(1).startswith("***"), f"unmasked /user: password {m.group(0)[:40]}"
     assert not re.search(r"(?i)-Password\s+(?!\*\*\*)\S", text)
@@ -1218,28 +1215,50 @@ def test_drafts_never_contain_lab_password(real, trial):
     assert not re.search(r"(?i)\$env:[A-Za-z0-9_]*PW", text)
 
 
+@pytest.mark.parametrize("trial", TRIALS)
+def test_drafts_never_contain_lab_password(real, trial):
+    text = (real[trial][0] / "ground_truth" / "drafts" / f"{trial}.yaml").read_text(encoding="utf-8") if trial in real else pytest.skip("db missing")
+    _assert_structurally_masked(text)
+    for m in re.finditer(r"(?i)-(?:e|enc|ec|encodedcommand)\s+([A-Za-z0-9+/]{16,}={0,2})", text):
+        try:
+            dec = base64.b64decode(m.group(1) + "=" * (-len(m.group(1)) % 4)).decode("utf-16-le")
+        except Exception:
+            continue
+        _assert_structurally_masked(dec)
+        if REAL_PASSWORD:
+            assert REAL_PASSWORD not in dec, "password inside an -enc payload left in the draft"
+    if REAL_PASSWORD:
+        assert REAL_PASSWORD not in text
+
+
 def test_committed_drafts_in_repo_also_mask_password():
     for p in (REPO / "ground_truth" / "drafts").glob("s0[2-7]_t00.yaml"):
-        assert PASSWORD not in p.read_text(encoding="utf-8"), p.name
+        text = p.read_text(encoding="utf-8")
+        _assert_structurally_masked(text)
+        if REAL_PASSWORD:
+            assert REAL_PASSWORD not in text, p.name
 
 
 def test_password_premise_exists_in_a_db(real):
-    """Control: if no DB command line holds the password, the masking tests prove nothing."""
+    """Control: if no DB command line carries a /user: credential, the masking tests prove nothing."""
     hit = False
     for trial in real:
-        if rows(trial, "SELECT 1 FROM events_dedup WHERE command_line LIKE ? LIMIT 1", (f"%{PASSWORD}%",)):
+        if rows(trial, "SELECT 1 FROM events_dedup WHERE command_line LIKE '%/user:%' LIMIT 1"):
             hit = True
     if not hit:
-        pytest.skip("no command line with the lab password in these DBs; masking checked on unit strings only")
+        pytest.skip("no command line with /user: credentials in these DBs; masking checked on unit strings only")
 
 
 @pytest.mark.parametrize("trial", ["s04_t00", "s06_t00"])
 def test_agent_commands_masked_when_password_in_db(real, trial):
     d = draft_of(real, trial)
-    pw_rows = rows(trial, "SELECT command_line FROM events_dedup WHERE command_line LIKE ?", (f"%{PASSWORD}%",))
+    cred_rows = rows(trial, "SELECT command_line FROM events_dedup WHERE command_line LIKE '%/user:%'")
     cmds = find(d, "agent_command")
-    assert all(PASSWORD not in c for c in cmds)
-    if pw_rows:
+    for c in cmds:
+        _assert_structurally_masked(c)
+        if REAL_PASSWORD:
+            assert REAL_PASSWORD not in c
+    if cred_rows:
         assert any("***" in c for c in cmds) or not cmds
 
 

@@ -1709,7 +1709,7 @@ attack-success is now confirmed by the `links` count + presence of anchor events
 `ground_truth.yaml` was rewritten against `findings_s01_s04/_s05/_s06/_s07.md`. All placeholder
 identities resolved and **four structural path errors** fixed.
 
-**Identities (real accounts, pw `Project123`, Domain Admins):**
+**Identities (real accounts, pw `***`, Domain Admins):**
 `svc_backup` (foothold: S01/S02/S04-TrackB/S05-hop1/S07-X), `admin_it` (foothold_admin:
 S03/S04-TrackA/S05-hop2/S06), `svc_sql` (foothold_sql: S07-Y).
 

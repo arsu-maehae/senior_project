@@ -218,15 +218,15 @@ def build_main() -> tuple[Builder, dict]:
     u["dump_ep02"] = b.dump("10:58:20.000", "ep-02", "0x1fffff", acct="svc_sql")
     # two tracks 3 s apart, both naming \\192.168.50.22 (LCT-02)
     u["cmd_admin"] = b.sysmon1("10:57:34.000", "ep-01", 0xD6398,
-                               r"cmd.exe /c net use \\192.168.50.22\ADMIN$ /user:LAB\admin_it Project123",
+                               r"cmd.exe /c net use \\192.168.50.22\ADMIN$ /user:LAB\admin_it FakePw-0001",
                                acct="admin_it", pid=100)
     u["cmd_admin_4688"] = b.sec4688("10:57:34.100", "ep-01", 0xD6398,
-                                    r"cmd.exe /c net use \\192.168.50.22\ADMIN$ /user:LAB\admin_it Project123", pid=100)
+                                    r"cmd.exe /c net use \\192.168.50.22\ADMIN$ /user:LAB\admin_it FakePw-0001", pid=100)
     u["tool_admin"] = b.sysmon1("10:57:34.300", "ep-01", 0xD6398,
-                                r"net.exe use \\192.168.50.22\ADMIN$ /user:LAB\admin_it Project123", acct="admin_it",
+                                r"net.exe use \\192.168.50.22\ADMIN$ /user:LAB\admin_it FakePw-0001", acct="admin_it",
                                 pid=101, image=r"C:\Windows\System32\net.exe")
     u["cmd_svc"] = b.sysmon1("10:57:38.355", "ep-01", 0x17C46,
-                             r"net.exe use \\ep-02.lab.local\ADMIN$ /user:LAB\svc_backup Project123",
+                             r"net.exe use \\ep-02.lab.local\ADMIN$ /user:LAB\svc_backup FakePw-0001",
                              acct="svc_backup", pid=102, image=r"C:\Windows\System32\net.exe")
     # target 4624s on ep-02
     for hms, port, lid in (("10:57:35.000", 49700, 0xE0001), ("10:57:35.400", 49701, 0xE0002), ("10:57:36.000", 0, 0xE0003)):
@@ -1094,7 +1094,7 @@ def test_lc12_problem_when_expected_evidence_missing(tmp_path):
 # --------------------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("cmd,secret", [
-    (r"net use \\192.168.50.22\c$ /user:LAB\x Project123", "Project123"),
+    (r"net use \\192.168.50.22\c$ /user:LAB\x FakePw-0001", "FakePw-0001"),
     (r"powershell -Command New-PSCredential -User x -Password hunter2pass", "hunter2pass"),
     (r"tool.exe /p:Pa55word77 /s:srv", "Pa55word77"),
 ])
@@ -1105,17 +1105,17 @@ def test_lct12_mask_command_line_rules(cmd, secret):
 
 def test_lct12_passwords_masked_in_every_output(tmp_path):
     b = hop_builder(sessions=((0x100, "svc_backup"), (0x101, "svc_backup"), (0x102, "svc_backup"), (0x103, "svc_backup")))
-    cmd_at(b, 1, r"net use \\192.168.50.22\IPC$ /user:LAB\svc_backup Project123", session=0x100)
+    cmd_at(b, 1, r"net use \\192.168.50.22\IPC$ /user:LAB\svc_backup FakePw-0001", session=0x100)
     cmd_at(b, 2, r"powershell -Command Copy-Item x \\192.168.50.22\c$ -Password S3cr3tPW9", session=0x101)
     cmd_at(b, 3, r"cmd /c copy x \\192.168.50.22\c$ /p:Pa55word77", session=0x102)
-    cmd_at(b, 4, r"cmd /c echo Project123 \\192.168.50.22\c$", session=0x103)       # secret appears literally elsewhere
+    cmd_at(b, 4, r"cmd /c echo FakePw-0001 \\192.168.50.22\c$", session=0x103)       # secret appears literally elsewhere
     out, db = run(b, tmp_path, "mask")
     texts = {"json": (Path(out.files[0]).parent / "report.json").read_text(encoding="utf-8"),
              "md": (Path(out.files[0]).parent / "report.md").read_text(encoding="utf-8"),
              "csv": (Path(out.files[0]).parent / "hop_candidates.csv").read_text(encoding="utf-8"),
              "in_memory": out.markdown + out.csv_text + json.dumps(out.report)}
     for name, text in texts.items():
-        for secret in ("Project123", "S3cr3tPW9", "Pa55word77"):
+        for secret in ("FakePw-0001", "S3cr3tPW9", "Pa55word77"):
             assert secret not in text, f"{secret} leaked into {name}"
     assert "***" in texts["json"]
 
@@ -1223,8 +1223,8 @@ def test_real_s05_has_smb_and_winrm_hops_and_no_password_leak(real_runs):
     assert "SMB" in protos
     for name in ("s04", "s05", "s02"):
         o = real_runs[name][0]
-        assert "Project123" not in o.markdown and "Project123" not in o.csv_text
-        assert "Project123" not in json.dumps(o.report)
+        assert "FakePw-0001" not in o.markdown and "FakePw-0001" not in o.csv_text
+        assert "FakePw-0001" not in json.dumps(o.report)
 
 
 # --------------------------------------------------------------------------------------------------

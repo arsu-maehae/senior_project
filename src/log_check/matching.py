@@ -152,7 +152,7 @@ def find_secrets(command_line: str | None) -> set[str]:
     """Literal values the masking rules would hide.
 
     A PowerShell variable such as `$env:SVC_BACKUP_PW` is only a name; its *expansion* appears
-    literally in the child process (`net.exe ... /user:LAB\\svc_backup Project123`). Harvesting
+    literally in the child process (`net.exe ... /user:LAB\\svc_backup <password>`). Harvesting
     the literal lets `mask_command_line` hide it wherever else it is shown.
     """
     found: set[str] = set()
