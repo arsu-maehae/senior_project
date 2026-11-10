@@ -25,7 +25,7 @@ CSV_COLUMNS = [
     "candidate_count_sessions_after_4648_bridge",  # LC-04e, appended at the end
 ]
 
-CHECK_ORDER = ["LC-01", "LC-02", "LC-03", "LC-04", "LC-04b", "LC-04c", "LC-04d", "LC-05",
+CHECK_ORDER = ["LC-01", "LC-02", "LC-03", "LC-04", "LC-04b", "LC-04c", "LC-04d", "LC-04h", "LC-05",
                "LC-06", "LC-07", "LC-08", "LC-08b", "LC-09", "LC-10", "LC-11"]
 
 
@@ -87,6 +87,26 @@ def _dump_lines(result: dict) -> list[str]:
     return lines
 
 
+def _coverage_lines(result: dict) -> list[str]:
+    """LC-04h: one line per hop, then one per 4648 session (session, accounts, cmdline match)."""
+    lines = []
+    for h in result["hops"]:
+        lines.append(f"- {h['hop_id']} {h['protocol']} {h['account_name']}@{h['target_host']} from "
+                     f"{h['source_host']}: n_4648 {h['n_4648']}, sessions {h['n_sessions']} "
+                     f"(direct {h['n_sessions_direct']}), credentials {h['credentials_accounts']}, "
+                     f"cmdline {h['cmdline_sessions_account_consistent']} → {h['comparison']}"
+                     + (f" ({h['reason']})" if h["reason"] else ""))
+        for s in h["sessions"]:
+            lines.append(f"  - {s['session_id']} subject {s['subject_account']} creds {s['credentials_accounts']} "
+                         f"({s['account_match']}) type {s['logon_type']} n {s['n_4648']} "
+                         f"Δ {s['time_delta_ms']} ms servers {s['target_servers']}")
+    for scope, block in result["summary"].items():
+        lines.append(f"- summary ({scope}): with {len(block['with_naming_4648'])}, without "
+                     f"{len(block['without_naming_4648'])}, differs {block['session_differs_from_cmdline']}, "
+                     f"no cmdline session {block['naming_4648_but_no_cmdline_session']}")
+    return lines
+
+
 def _detail(c: CheckResult) -> list[str]:
     lines = [f"### {c.check_id} — {c.title}", "", f"**{c.status}** — {_md_escape(c.summary)}", "",
              f"Effect: {c.effect}", ""]
@@ -121,6 +141,8 @@ def _detail(c: CheckResult) -> list[str]:
                              f"{s['subject_logon_ids_4697']} {s['subject_hops_4697']}")
         lines.append(f"- service match counts: {r['service_match_counts']}; SMB hops with port 0: "
                      f"{r['smb_hops_port0']}/{r['smb_hops']}")
+    elif c.check_id == "LC-04h":
+        lines += _coverage_lines(r)
     elif c.check_id == "LC-06":
         for h in r["winrm_hops"]:
             lines.append(f"- {h['hop_id']} {h['account_name']}@{h['target_host']} from {h['source_host']}: "

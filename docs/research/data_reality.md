@@ -42,3 +42,15 @@ Method codes: **port** = Correction I join (target 4624 IpAddress/IpPort ↔ sou
 | WinRM | S03, S05 h3, S06 h2/h4 | port (Correction I) and cmd | A |
 | RDP | S01 | target side only now | not measurable until S01 t01 |
 | none | admin_it background SMB logons (S04–S07 h1) | no source evidence | ranked low, never dropped |
+
+## 4. 4648 coverage (log-check LC-04h, added after decision 013)
+| Trial | SMB/WinRM hops | With a 4648 naming the target | Without | 4648 session ≠ command-line session |
+|---|---|---|---|---|
+| s02 | 1 | 0 | 1 | 0 |
+| s03 | 1 | 1 | 0 | 0 |
+| s04 | 3 | 0 | 3 | 0 |
+| s05 | 3 | 1 | 2 | 0 |
+| s06 | 5 | 4 | 1 | 0 |
+| s07 | 3 | 0 | 3 | 0 |
+- **No SMB attack hop by IP has a naming 4648** (S02 h1, S04 h2/h3, S05 h2, S07 h2/h3): on ep-01 there is no 4648 in the 300 s before or 60 s after these hops, apart from machine-account rows in S04. These hops rely on the command-line method alone (decision 013 kill criterion 3 and limitation L11 apply).
+- 4648 exists for the WinRM hops (S03 h1, S05 h3) and for S06's explicit-credential hops (h2, h4, h5), and its session always equals the command-line session (tier B). S06 h6 (svc_backup hop) has a 4648 in the same session but with admin_it credentials, so `account_match = none` → tier D for that row.

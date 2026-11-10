@@ -241,17 +241,22 @@ def evaluate_hop(hop: HopInstance, commands_by_host: dict[str, list[dict[str, An
     return ev
 
 
-def confidence_tier(method: str, account_ok: bool, n_after: int) -> str:
-    """Provisional tiers (not defined in the spec; see report open questions).
+PORT_JOIN_METHODS = frozenset({"sysmon3_port"})  # LC-06 METHOD_PORT; kept here to avoid a cycle
 
-    A port-level join with a unique, account-consistent session; B command-line join with a
-    unique account-consistent session; C account-consistent but ambiguous (> 1 session);
-    D candidate whose session account differs from the 4624 account.
+
+def confidence_tier(method: str, account_ok: bool, n_after: int) -> str:
+    """LC-04g tiers (measurement only, not the T7 rule).
+
+    A port-level join with a unique, account-consistent session; B a name join (command
+    line, or a 4648 target server for LC-04h) with a unique account-consistent session;
+    C account-consistent but ambiguous (> 1 session); D candidate whose account differs
+    from the 4624 account. Only a port join earns A: a name join can be met by any
+    session that mentions the target, a port join only by the connecting process.
     """
     if not account_ok:
         return "D"
     if n_after == 1:
-        return "A" if method != METHOD_CMDLINE else "B"
+        return "A" if method in PORT_JOIN_METHODS else "B"
     return "C"
 
 

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .bridge import EXPLICIT_SQL, load_explicit
+from .checks_4648 import run_lc04h
 from .checks_clock import run_lc09
 from .checks_counts import run_lc01, run_lc02, run_lc03, run_lc07
 from .checks_dumps import load_dump_data, run_lc08, run_lc08b
@@ -76,13 +77,15 @@ def run_checks(ctx: Context, keys_dir: Path | None) -> tuple[list[CheckResult], 
     lc04, evals = run_lc04(ctx, hops, by_host, logon_index, excluded, explicit)
     ctx.db.record("LC-06", normalise_sql(EXPLICIT_SQL))  # LC-06 reuses the LC-04e 4648 rows
     lc06, winrm_rows = run_lc06(ctx, hops, winrm_ev, logon_index, explicit)
+    lc04h, rows_4648 = run_lc04h(ctx, hops, explicit, logon_index, evals)
     dump_data = load_dump_data(ctx)
     lc08, dump_sessions = run_lc08(ctx, dump_data)
     checks = [run_lc01(ctx), run_lc02(ctx), run_lc03(ctx), lc04, run_lc04b(ctx),
-              run_lc04c(ctx, hops, shares, by_hop, services), run_lc04d(ctx, hops, by_host, logon_index),
+              run_lc04c(ctx, hops, shares, by_hop, services), run_lc04d(ctx, hops, by_host, logon_index), lc04h,
               run_lc05(ctx, rdp_ev), lc06, run_lc07(ctx), lc08, run_lc08b(ctx, dump_data, dump_sessions),
               run_lc09(ctx), run_lc10(ctx, keys_dir)]
-    csv_rows = [row for h in hops for row in hop_csv_rows(ctx.trial_id, h, evals[h.hop_id])] + winrm_rows
+    csv_rows = [row for h in hops for row in hop_csv_rows(ctx.trial_id, h, evals[h.hop_id])]
+    csv_rows += winrm_rows + rows_4648  # LC-04h rows last: existing row order unchanged
     return checks, csv_rows
 
 
