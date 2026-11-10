@@ -1,6 +1,6 @@
 # 021 — S04 Track A: source session and status in the development key
 
-**Date:** 2026-11-10 · **Status:** proposed, needs owner approval · **Task:** T5 (5.4)
+**Date:** 2026-11-10 · **Status:** accepted for the source session (owner, 2026-11-10, on the evidence below); the hop status follows the new basis · **Task:** T5 (5.4)
 
 ## Context
 Decision 018 fixes S04 Track A (`admin_it`, benign) at identity 1. The key needs the session behind Track A and a status. Evidence in `ground_truth/drafts/s04_t00.yaml` (hop `s04-A-h1`, read from `events_dedup` of `s04_t00`; the key code does not use `log_check`):
@@ -16,13 +16,13 @@ Decision 018 fixes S04 Track A (`admin_it`, benign) at identity 1. The key needs
 |---|---|---|
 | A. Source session `0xd6398`, status `unconfirmed` (owner rule: not in the agent tree), `proposed_role: benign` | Follows the evidence and the owner's independence rule | Track A is a benign hop with no `confirmed` label |
 | B. Source session `0x17b18` (agent) | Same account | No command naming ep-02 runs in it |
-| C. Add status `confirmed_benign` | Clear negatives for evaluation | Changes the owner's two-value `basis` rule; owner decides (spec section 8) |
+| C. New basis `manual_command_names_target` (owner, 2026-11-10) | Track A is a manual step (and S01 is manual RDP with no agent); the same command-names-target evidence, read from the source logon session | One more basis value; the hop is `confirmed` on a manual command, not an agent command |
 
 ## Decision
-Option A, marked for owner approval. Identity value 1 (decision 018). The evaluation policy for `unconfirmed` benign hops is the owner's open question in spec 07 section 8.
+Option C (owner, 2026-11-10). Basis `manual_command_names_target`: a process in the source logon session (matched by logon id) that is not in the splunkd tree names the target host/IP AND matches a handoff step. Checked on `s04_t00` ep-01: Sysmon 1 `session_id` and 4688 `SubjectLogonId` 877464 (= `0xd6398`) run `net use \\192.168.50.22\ADMIN$ …`, `sc.exe \\192.168.50.22 create HealthAgentSvc …` and `sc.exe \\192.168.50.22 start HealthAgentSvc` at 10:57:35.275–.500, six rows counting 1 and 4688 once each. The owner approves `0xd6398` as the source session on this evidence. `s04-A-h1`: basis `manual_command_names_target`, role `benign`, identity 1 (decision 018). Role is a separate field (`attack | benign | background`); benign and background hops are negatives in evaluation (spec 07 AK-19).
 
 ## Consequences
-Track A and Track B tie on identity (decision 018). T9 reports ties as ties.
+Track A and Track B tie on identity (decision 018). T9 reports ties as ties. The same basis serves S01 (manual RDP, no agent) when its trials arrive.
 
 ## Kill criteria
 If `0x17b18` is shown to have run a command naming ep-02 near 10:57:34, or the t01 trial shows `admin_it` with no open session at the dump, revise the key (018's kill criterion).

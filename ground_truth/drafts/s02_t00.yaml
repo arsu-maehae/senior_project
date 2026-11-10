@@ -38,6 +38,12 @@
       "start_utc": "2026-09-24T05:23:10.870Z",
       "end_utc": "2026-09-24T05:47:46.705Z"
     },
+    "manifest_span": {
+      "start_utc": "2026-09-24T04:54:12.860319Z",
+      "end_utc": "2026-09-24T05:50:15.462124Z",
+      "source": "data/manifest.csv",
+      "files": 9
+    },
     "run_day_rule": "run = the latest splunkd root plus every earlier root reached by walking back while consecutive roots are <= 6 h apart (roots = Sysmon 1 children of the agent splunkd.exe in Users/Public plus pid_match_4688 roots); run days = UTC days from the earliest to the latest of those roots; run_interval start = earliest root of a walk-back with a 30 min gap (trials of one day share a DB) - 60 s, end = last step + 300 s; older roots belong to other runs"
   },
   "steps": [
@@ -135,6 +141,7 @@
       "command_host": "ep-01",
       "target_host": "ep-02",
       "basis": "command_names_target",
+      "source_session_logon_id": null,
       "agent_account": "svc_backup",
       "cmd_credential_account": null,
       "agent_command": "powershell.exe -ExecutionPolicy Bypass -C \"Copy-Item C:\\Users\\Public\\PktDrop.exe \\\\192.168.50.22\\ADMIN$\\PktDrop.exe -Force; sc.exe \\\\192.168.50.22 create PktDropService binPath= \\\"C:\\Windows\\PktDrop.exe\\\" start= demand; sc.exe \\\\192.168.50.22 start PktDropService\"",
@@ -181,7 +188,7 @@
       "handoff_step": "s02-h1",
       "handoff_account": "svc_backup",
       "role": "attack",
-      "proposed_role": null,
+      "path_role": "attack",
       "stray": false,
       "method": "command_names_target+artifact",
       "source_ip": "192.168.50.21",
@@ -190,6 +197,7 @@
       "move_time_utc": "2026-09-24T05:42:45.911549Z",
       "target_logon_id": "0x1a9231",
       "authentication_package": "NTLM",
+      "target_4624_content_sha256": "8455e7eaa4c5bfeba7ae41a25c702d92c2a7cd06b70b441c37543bb79d283b41",
       "target_event_uids": [
         "4de3971d250b63533421a5be49d9e1d94ef0b362d376d9eeafa5ce668f00ea95",
         "b4fc04c018dbab1e5261439f8766c52315c464957ddf585488d9e2efa66a999e",

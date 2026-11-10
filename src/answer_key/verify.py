@@ -94,11 +94,25 @@ def _same_time(a: str | None, b: str | None) -> bool:
         return a == b
 
 
+def lock_status(draft: dict) -> dict:
+    """Lock readiness (informational): no hop may be unconfirmed and every hop needs a valid role.
+
+    WHY: no unconfirmed hop may remain in an approved key before the lock tag.
+    """
+    blockers = []
+    for h in draft.get("hops", []):
+        if h.get("status") != "confirmed":
+            blockers.append({"hop_id": h.get("hop_id"), "reason": f"status {h.get('status')}: {h.get('reason')}"})
+        if h.get("role") not in ("attack", "benign", "background"):
+            blockers.append({"hop_id": h.get("hop_id"), "reason": f"role missing or invalid: {h.get('role')}"})
+    return {"lock_ready": not blockers, "lock_blockers": blockers}
+
+
 def verify(draft: dict, db_path: Path) -> dict:
     """Return the verification report (a dict); ``ok`` is False on any failure."""
     report: dict = {"trial_id": draft.get("trial_id"), "db_sha256_draft": draft.get("db_sha256"),
                     "db_sha256_now": sha256_file(db_path), "failures": [], "out_of_window": 0, "checked": 0,
-                    "per_kind": {}}
+                    "per_kind": {}, **lock_status(draft)}
     if report["db_sha256_draft"] != report["db_sha256_now"]:
         report["failures"].append({"type": "db_hash_mismatch"})
         report["ok"] = False
@@ -145,8 +159,10 @@ def to_markdown(rep: dict) -> str:
     """Short human-readable verify report."""
     lines = [f"# Verify {rep['trial_id']}", "", f"- ok: {rep['ok']}", f"- uid references checked: {rep['checked']}",
              f"- out-of-window (counted, not failed): {rep['out_of_window']}",
-             f"- failures: {len(rep['failures'])}", "", "## Per kind", ""]
+             f"- failures: {len(rep['failures'])}", f"- lock_ready: {rep['lock_ready']}", "", "## Per kind", ""]
     lines += [f"- {k}: {v}" for k, v in rep["per_kind"].items()]
+    if rep["lock_blockers"]:
+        lines += ["", "## Lock blockers (informational)", ""] + [f"- {b['hop_id']}: {b['reason']}" for b in rep["lock_blockers"]]
     if rep["failures"]:
         lines += ["", "## Failures", ""] + [f"- {json.dumps(f)}" for f in rep["failures"][:50]]
     return "\n".join(lines) + "\n"

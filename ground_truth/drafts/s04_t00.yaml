@@ -40,7 +40,13 @@
     "run_day": "2026-09-24",
     "run_interval": {
       "start_utc": "2026-09-24T10:53:55.893Z",
-      "end_utc": "2026-09-24T11:02:37.762Z"
+      "end_utc": "2026-09-24T11:00:07.787Z"
+    },
+    "manifest_span": {
+      "start_utc": "2026-09-24T04:54:18.744946Z",
+      "end_utc": "2026-09-24T11:00:07.787007Z",
+      "source": "data/manifest.csv",
+      "files": 8
     },
     "run_day_rule": "run = the latest splunkd root plus every earlier root reached by walking back while consecutive roots are <= 6 h apart (roots = Sysmon 1 children of the agent splunkd.exe in Users/Public plus pid_match_4688 roots); run days = UTC days from the earliest to the latest of those roots; run_interval start = earliest root of a walk-back with a 30 min gap (trials of one day share a DB) - 60 s, end = last step + 300 s; older roots belong to other runs"
   },
@@ -113,8 +119,8 @@
       "host": "ep-01",
       "time_utc": "2026-09-24T10:57:35.275000Z",
       "account": "admin_it",
-      "status": "unconfirmed",
-      "source": "target_side",
+      "status": "confirmed",
+      "source": "manual_session",
       "event_uids": [
         "1888ce6cb7bbf08ed937a961fb9e544b6f5161f32c14b1ce319b1d4a2fbf0760",
         "2a51d5df122e295e9379ea4572c7d28f3af675c6bfdfe77fb9e355d5cf5898a6",
@@ -128,7 +134,7 @@
       "host": "ep-02",
       "time_utc": "2026-09-24T10:57:34.337852Z",
       "account": null,
-      "status": "unconfirmed",
+      "status": "confirmed",
       "source": "target_side",
       "event_uids": [
         "ca55452759b6b5a49e467cd03e38c0e220d15b3d774e094e494c69a7c7371784",
@@ -173,7 +179,8 @@
       "source_host": "ep-01",
       "command_host": "ep-01",
       "target_host": "ep-02",
-      "basis": "time_account_only",
+      "basis": "manual_command_names_target",
+      "source_session_logon_id": "0xd6398",
       "agent_account": "admin_it",
       "cmd_credential_account": "admin_it",
       "agent_command": "\"C:\\WINDOWS\\system32\\net.exe\" use \\\\192.168.50.22\\ADMIN$ /user:LAB\\admin_it ***",
@@ -184,11 +191,15 @@
         "2a51d5df122e295e9379ea4572c7d28f3af675c6bfdfe77fb9e355d5cf5898a6",
         "3cfbdebe501de1d31b20687c4d6a74eb1836fcbfad0ec73a2bd27710a5629c69"
       ],
-      "agent_corroboration_4688_uids": [],
+      "agent_corroboration_4688_uids": [
+        "35427feb8f69506cd32645c4cd7dc98452ae18bbbfc0178fc2b916d29bed9cb4",
+        "62149136d55ed4d808c0767c78d899bf95ad5397eb87329eeba8b25f9f49457c",
+        "7ca77cad4343c22801c46dcd8a25dd7e0360c44ee8468434178fb19f6cbdc4a9"
+      ],
       "candidate_count": 1,
       "candidate_count_before_absorption": 1,
       "flags": [],
-      "needs_owner_approval": true,
+      "needs_owner_approval": false,
       "candidates": [
         {
           "account": "admin_it",
@@ -212,19 +223,20 @@
       "related_logon_uids": [],
       "port_join_event_uids": [],
       "target_binding": "logon_id_artifact",
-      "reason": "command_not_under_agent_tree",
+      "reason": null,
       "handoff_step": "s04-A-h1",
       "handoff_account": "admin_it",
-      "role": "distractor",
-      "proposed_role": "benign",
+      "role": "benign",
+      "path_role": "benign",
       "stray": false,
-      "method": "time_account_only+artifact",
+      "method": "manual_command_names_target+artifact",
       "source_ip": "192.168.50.21",
       "account": "admin_it",
       "logon_account": "admin_it",
       "move_time_utc": "2026-09-24T10:57:34.190266Z",
       "target_logon_id": "0x184c7f",
       "authentication_package": "NTLM",
+      "target_4624_content_sha256": "4aa1ed9da2fa6d551507831809cd44d2623583d3d45e96f15eceab94bcb837db",
       "target_event_uids": [
         "4e7dd39149e92b0cce316731607ea7a4a8e46b4c05cef6fe9758d42c490246f1",
         "66726d4520986bf54be7971643e3d6274972ba865cf832f17665991e23cae676",
@@ -293,10 +305,11 @@
         "end_unknown": []
       },
       "port_join_sysmon3": false,
-      "confidence_tier": "D",
+      "confidence_tier": "B",
       "account_mismatch": false,
-      "status": "unconfirmed",
+      "status": "confirmed",
       "hop_id": "s04-A-h1",
+      "owner_note": "decision 021, owner approved the source session 2026-11-10 on this evidence",
       "session_evidence": {
         "session_id": "0xd6398",
         "session_logon_type": 11,
@@ -357,6 +370,7 @@
       "command_host": "ep-01",
       "target_host": "ep-02",
       "basis": "command_names_target",
+      "source_session_logon_id": null,
       "agent_account": "svc_backup",
       "cmd_credential_account": "svc_backup",
       "agent_command": "powershell.exe -ExecutionPolicy Bypass -C \"net use \\\\192.168.50.22\\IPC$ /user:LAB\\svc_backup *** Copy-Item C:\\Users\\Public\\Stage.exe \\\\192.168.50.22\\ADMIN$\\Stage.exe -Force; sc.exe \\\\192.168.50.22 create UpdaterService binPath= \\\"C:\\Windows\\Stage.exe\\\" start= demand; sc.exe \\\\192.168.50.22 start UpdaterService\"",
@@ -421,8 +435,8 @@
       "reason": null,
       "handoff_step": "s04-B-h1",
       "handoff_account": "svc_backup",
-      "role": "attack_pair",
-      "proposed_role": null,
+      "role": "attack",
+      "path_role": "attack_pair",
       "stray": false,
       "method": "command_names_target+artifact",
       "source_ip": "192.168.50.21",
@@ -431,6 +445,7 @@
       "move_time_utc": "2026-09-24T10:57:36.855353Z",
       "target_logon_id": "0x188634",
       "authentication_package": "NTLM",
+      "target_4624_content_sha256": "6a5cdccd95194181086e06d32e1f0ee3a58804c6ee42b9c7cf81f323b43a6958",
       "target_event_uids": [
         "ff849f72a9dd17cbfb9288fd2b9f9b6f3c8dc7d60322b73567b19c72ae2a845e",
         "df1ea3004c767c625f498007cc547d22cf1d2dc33d5ec6a5a2c0d2c03fad5370",
@@ -506,7 +521,7 @@
       "move_time_utc": "2026-09-24T10:55:28.260501Z",
       "basis": "time_account_only",
       "status": "unconfirmed",
-      "reason": "no_agent_command_names_target; logon lies inside the trial run interval 2026-09-24T10:53:55.893Z .. 2026-09-24T11:02:37.762Z",
+      "reason": "no_agent_command_names_target; logon lies inside the trial run interval 2026-09-24T10:53:55.893Z .. 2026-09-24T11:00:07.787Z",
       "agent_event_uids": [],
       "target_event_uids": [
         "7f42fa756b0e9174159139738e137126c8c293050b4674291fa878e4f516ab73",
@@ -535,16 +550,18 @@
       "confidence_tier": "D",
       "target_binding": "time_account",
       "candidate_count": 1,
+      "target_4624_content_sha256": "771b38e5f7d33191ac7331aa83ff9207b6f60be36d761bd549664753915b2b04",
       "credential_logon_uids": [],
       "related_logon_uids": [],
       "port_join_event_uids": [],
       "needs_owner_approval": false,
       "flags": [],
-      "role": null,
-      "proposed_role": null,
+      "role": "background",
+      "path_role": null,
       "target_logon_id": "0x1442aa",
       "authentication_package": "NTLM",
-      "source_host_by_ip": "ep-01"
+      "source_host_by_ip": "ep-01",
+      "shared_with_trials": []
     }
   ],
   "paths": [
@@ -564,41 +581,16 @@
       "hop_ids": [
         "s04-A-h1"
       ],
-      "status": "unconfirmed",
-      "proposed_role": "benign",
+      "status": "confirmed",
       "note": null
     }
   ],
   "unconfirmed": [
     {
       "kind": "hop",
-      "id": "s04-A-h1",
-      "role": "benign",
-      "reason": "command_not_under_agent_tree",
-      "flags": [],
-      "event_uids": [
-        "1888ce6cb7bbf08ed937a961fb9e544b6f5161f32c14b1ce319b1d4a2fbf0760",
-        "2a51d5df122e295e9379ea4572c7d28f3af675c6bfdfe77fb9e355d5cf5898a6",
-        "3cfbdebe501de1d31b20687c4d6a74eb1836fcbfad0ec73a2bd27710a5629c69",
-        "4e7dd39149e92b0cce316731607ea7a4a8e46b4c05cef6fe9758d42c490246f1",
-        "66726d4520986bf54be7971643e3d6274972ba865cf832f17665991e23cae676",
-        "aadc8e668a063784a899815d6771ae07af3c187d93f92d24341397ba9c5ee8b8",
-        "52e2432596e756326e243c64545a11a325bb83530d12b08828acab0a012994d9",
-        "7b940c7d6caf8925df845281c8580fe5244bd3c0f9b94eff777b3442486d180b",
-        "a10d24e5b88280d7a980818afad0bc00925452e535f5f45233b075addac85c79",
-        "9855cda08f34e7df90c57c8f08876970e746dfa6801dddd5cd222b019dce1768",
-        "ed6d87e3f335e145e35fc680dd014294a2c76c1d686696da041a558c47a71c0d",
-        "e3b1675a5e943a71669f9da77c5b82b2db86773cbe751d7919b91f6d6e0385dd",
-        "7adf7915919bcdf8dbfab870238c5c0399b98299d2c02456f678995cb37fdd7c",
-        "ca55452759b6b5a49e467cd03e38c0e220d15b3d774e094e494c69a7c7371784",
-        "3e539d7e8b4bef6cf89c4996618619177990b310f14e4c7bb810a427f6f48963"
-      ]
-    },
-    {
-      "kind": "hop",
       "id": "s04-t1",
-      "role": null,
-      "reason": "no_agent_command_names_target; logon lies inside the trial run interval 2026-09-24T10:53:55.893Z .. 2026-09-24T11:02:37.762Z",
+      "role": "background",
+      "reason": "no_agent_command_names_target; logon lies inside the trial run interval 2026-09-24T10:53:55.893Z .. 2026-09-24T11:00:07.787Z",
       "flags": [],
       "event_uids": [
         "7f42fa756b0e9174159139738e137126c8c293050b4674291fa878e4f516ab73",
@@ -613,7 +605,7 @@
   "system_dumps_ignored": [],
   "flags": [],
   "open_points": [
-    "S04 Track A source session (desktop vs agent) chosen from evidence in hops[].session_evidence; owner approval needed (AK-08)."
+    "S04 Track A source session: owner approved on the evidence in hops[].session_evidence (decision 021, 2026-11-10)."
   ],
   "event_keys": {
     "0ec91a4d8561ee894f68adbeaa13deacefd86cc3c3ee79519a9fa3b145bdae41": {
@@ -686,6 +678,13 @@
       "record_id": 1702820,
       "time_utc": "2026-09-24T10:55:28.486549Z"
     },
+    "35427feb8f69506cd32645c4cd7dc98452ae18bbbfc0178fc2b916d29bed9cb4": {
+      "host": "ep-01",
+      "channel": "Security",
+      "event_id": 4688,
+      "record_id": 2344694,
+      "time_utc": "2026-09-24T10:57:35.500776Z"
+    },
     "387018f9c27e89823b12feba94a5c7506c6328340a5ff1529823a559f90b6995": {
       "host": "ep-01",
       "channel": "Sysmon",
@@ -742,6 +741,13 @@
       "record_id": 1703546,
       "time_utc": "2026-09-24T10:57:34.194503Z"
     },
+    "62149136d55ed4d808c0767c78d899bf95ad5397eb87329eeba8b25f9f49457c": {
+      "host": "ep-01",
+      "channel": "Security",
+      "event_id": 4688,
+      "record_id": 2344688,
+      "time_utc": "2026-09-24T10:57:35.275929Z"
+    },
     "66726d4520986bf54be7971643e3d6274972ba865cf832f17665991e23cae676": {
       "host": "ep-02",
       "channel": "Security",
@@ -790,6 +796,13 @@
       "event_id": 5145,
       "record_id": 1703547,
       "time_utc": "2026-09-24T10:57:34.206429Z"
+    },
+    "7ca77cad4343c22801c46dcd8a25dd7e0360c44ee8468434178fb19f6cbdc4a9": {
+      "host": "ep-01",
+      "channel": "Security",
+      "event_id": 4688,
+      "record_id": 2344690,
+      "time_utc": "2026-09-24T10:57:35.437362Z"
     },
     "7e34cb400062dd06f988cbcffb9a6acd5c782b563eb546aae23b1af731a0c28e": {
       "host": "ep-02",

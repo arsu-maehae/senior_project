@@ -40,6 +40,12 @@
       "start_utc": "2026-09-24T09:36:11.277Z",
       "end_utc": "2026-09-24T09:46:36.205Z"
     },
+    "manifest_span": {
+      "start_utc": "2026-09-17T08:33:40.770552Z",
+      "end_utc": "2026-09-24T09:49:14.037840Z",
+      "source": "data/manifest.csv",
+      "files": 12
+    },
     "run_day_rule": "run = the latest splunkd root plus every earlier root reached by walking back while consecutive roots are <= 6 h apart (roots = Sysmon 1 children of the agent splunkd.exe in Users/Public plus pid_match_4688 roots); run days = UTC days from the earliest to the latest of those roots; run_interval start = earliest root of a walk-back with a 30 min gap (trials of one day share a DB) - 60 s, end = last step + 300 s; older roots belong to other runs"
   },
   "steps": [
@@ -140,6 +146,7 @@
       "command_host": "ep-01",
       "target_host": "ep-03",
       "basis": "command_names_target",
+      "source_session_logon_id": null,
       "agent_account": "admin_it",
       "cmd_credential_account": "admin_it",
       "agent_command": "powershell.exe -ExecutionPolicy Bypass -C \"$c=New-Object System.Management.Automation.PSCredential(\\\"LAB\\admin_it\\\",(ConvertTo-SecureString *** -AsPlainText -Force)); Invoke-Command -ComputerName Endpoint-03.lab.local -Credential $c -ScriptBlock { Get-WmiObject Win32_OperatingSystem | Select-Object CSName,Version; Get-LocalGroupMember -Group Administrators }\"",
@@ -191,7 +198,7 @@
       "handoff_step": "s03-h1",
       "handoff_account": "admin_it",
       "role": "attack",
-      "proposed_role": null,
+      "path_role": "attack",
       "stray": false,
       "method": "command_names_target+artifact",
       "source_ip": "192.168.50.21",
@@ -200,6 +207,7 @@
       "move_time_utc": "2026-09-24T09:41:36.205857Z",
       "target_logon_id": "0x1ed2fe",
       "authentication_package": "Kerberos",
+      "target_4624_content_sha256": "e7745c50a4d2e6243638619510dce8524de7416273439b84e4a1383ea69cc9d3",
       "target_event_uids": [
         "3722496c752e30025a8b4aec3dfa398c434e7e18d187f9e0918a9b63f8ad6666",
         "b8afa5b0acc79db52f93ed6da04d4a591e7d89e23b79bee5ce9c6a531e083fd1",

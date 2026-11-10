@@ -14,6 +14,9 @@ Key: two hops `s07-h-x`, `s07-h-y`, separate `attack_pair` paths, moving account
 ## Consequences
 The under-fire test no longer has two different moving accounts. The report states that S07 tests two paths of one account (limitation); it does not claim two identities.
 
+## Deviation from the design (owner, 2026-11-10)
+The S07 design has two identities (`svc_backup`, `svc_sql`); the collected t00 data has one. This is recorded as a deviation. TODO: check S07 t01–t10 for any `svc_sql` 4624 on ep-02 once ingested. If no trial has one, it becomes a limitation for the report (S07 tests two paths of one account, not two identities).
+
 ## Kill criteria
 If a t01 trial shows a `svc_sql` 4624 on ep-02, split the hops by account.
 

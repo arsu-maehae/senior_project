@@ -67,7 +67,7 @@ def manual_actions(rows: Sequence[Mapping], tree_uids: set[str], days: Collectio
     for r in rows:
         if (r["channel"] == "Sysmon" and r["event_id"] == 1 and r["event_uid"] not in tree_uids
                 and (r["t_utc"] or "")[:10] in days and r.get("command_line")
-                and targets.is_user_account(r.get("account_name"))):
+                and r.get("session_id") is not None and targets.is_user_account(r.get("account_name"))):
             named, failed = targets.find_targets([r["command_line"]], ip_to_host)
             named.discard(r["host"])
             if named:
@@ -88,6 +88,27 @@ def manual_actions(rows: Sequence[Mapping], tree_uids: set[str], days: Collectio
             acts.append(Action(r["host"], p, [p], False, r.get("session_id"), set(named), failed))
         last = (key, r["ts"])
     return acts
+
+
+def attach_manual_4688(acts: Sequence[Action], rows4688: Sequence[Mapping], tol_s: float = 3.0) -> None:
+    """Corroborate manual commands by Security 4688 in the SAME logon session (SubjectLogonId = session).
+
+    WHY: a manual command has no splunkd parent, so the only independent tie is the logon
+    session: Sysmon 1 session_id and 4688 SubjectLogonId must be the same logon id.
+    """
+    from dataclasses import replace
+    for a in acts:
+        if a.in_agent_tree:
+            continue
+        new = []
+        for p in a.procs:
+            t0 = parse_utc(p.time_utc).timestamp()
+            uids = tuple(r["event_uid"] for r in rows4688
+                         if r["host"] == a.host and r["command_line"] == p.command_line
+                         and r.get("subject_logon_id") == a.session_id and abs(r["ts"] - t0) <= tol_s)
+            new.append(replace(p, corroborating_4688=uids))
+        a.procs = new
+        a.root = new[0]
 
 
 def annotate_targets(acts: Sequence[Action], ip_to_host: Mapping[str, str]) -> None:
@@ -202,7 +223,8 @@ def _empty_hop(a: Action, target: str, ctx: "Ctx", agent_account: str, cred: str
     """Hop record before a burst is chosen: command facts plus every candidate (AK-02, AK-03)."""
     t0 = a.root.time_utc
     return {"protocol": protocol, "source_host": a.host, "command_host": a.host, "target_host": target,
-            "basis": "command_names_target" if a.in_agent_tree else "time_account_only",
+            "basis": "command_names_target" if a.in_agent_tree else "manual_command_names_target",
+            "source_session_logon_id": hex(a.session_id) if a.session_id is not None else None,
             "agent_account": agent_account, "cmd_credential_account": cred,
             "agent_command": targets.mask_command(a.root.command_line)[:600],
             "agent_command_time_utc": t0, "agent_root_link": a.root.root_link,
@@ -213,7 +235,7 @@ def _empty_hop(a: Action, target: str, ctx: "Ctx", agent_account: str, cred: str
             "candidates": [collect.describe_burst(b, ar) for b, ar in zip(bursts, arts)],
             "credential_logon_uids": [], "related_logon_uids": [], "port_join_event_uids": [],
             "target_binding": None, "reason": None, "handoff_step": None, "handoff_account": None,
-            "role": None, "proposed_role": None, "stray": False, "_names": names, "_anchor_ts": None,
+            "role": None, "path_role": None, "stray": False, "_names": names, "_anchor_ts": None,
             "_absorbed_uids": []}
 
 
@@ -266,6 +288,7 @@ def build_hop(a: Action, target: str, ctx: "Ctx", next_cmd_ts: float | None = No
         "account": logon_account, "logon_account": logon_account, "target_binding": binding,
         "move_time_utc": anchor["t_utc"], "target_logon_id": hex(anchor["target_logon_id"]),
         "authentication_package": anchor.get("authentication_package"),
+        "target_4624_content_sha256": anchor.get("duplicate_content_sha256"),
         "target_event_uids": list(dict.fromkeys(tgt_uids)), "service_candidates_by_name": len(svc),
         "time_delta_ms": delta_ms(t0, anchor["t_utc"]), "select_how": how,
         "source_host_by_ip": source_by_ip, "identity_expected": ident["identity_expected"],
@@ -289,9 +312,7 @@ def build_hop(a: Action, target: str, ctx: "Ctx", next_cmd_ts: float | None = No
         hop["identity_basis"]["dump_before_agent_command_source_clock"] = before
         if before != hop["identity_basis"]["move_after_dump"]:
             hop["flags"].append("clock_order_disagree")
-    hop["status"] = "confirmed" if a.in_agent_tree else "unconfirmed"
-    if not a.in_agent_tree:
-        hop["reason"] = "command_not_under_agent_tree"
+    hop["status"] = "confirmed"          # manual basis is downgraded by the caller if no intended step matches
     return hop
 
 
@@ -353,7 +374,7 @@ def window_from_steps(steps: Sequence[Mapping]) -> tuple[str, str] | None:
 
 
 def build_draft(rows: list[dict], trial_id: str, intended: Mapping, db_sha256: str,
-                provisional: Mapping | None = None) -> dict:
+                provisional: Mapping | None = None, manifest_span: Mapping | None = None) -> dict:
     """Return the draft key (a plain dict) for one trial. See spec 07 section 3."""
     scenario = trial_id.split("_")[0]
     sc = intended["scenarios"][scenario]
@@ -381,6 +402,7 @@ def build_draft(rows: list[dict], trial_id: str, intended: Mapping, db_sha256: s
     ctx = Ctx(idx, ip_host, host_ip, dumps, state, stray_ranges)
     tree_uids = {p.event_uid for p in tree}
     manual = manual_actions(rows, tree_uids, days, ip_host)
+    attach_manual_4688(manual, [r for r in rows if r["event_id"] == 4688 and r["channel"] == "Security"])
     by_guid = {(r["process_guid"] or "").lower(): r for r in rows if r["channel"] == "Sysmon" and r["event_id"] == 1}
     rows4688 = [r for r in rows if r["event_id"] == 4688 and r["channel"] == "Security"]
 
@@ -497,6 +519,8 @@ def build_draft(rows: list[dict], trial_id: str, intended: Mapping, db_sha256: s
         if hop["status"] == "confirmed" and not st:
             hop["status"] = "unconfirmed"
             hop["reason"] = "no_intended_step"
+        if not a.in_agent_tree and not st:
+            _downgrade_manual(hop)
 
     # leftover bursts: time/account only, bounded to the trial's own run interval (AK-04):
     # [earliest splunkd root of the run - 60 s, last step/command in the draft + 300 s]
@@ -508,6 +532,11 @@ def build_draft(rows: list[dict], trial_id: str, intended: Mapping, db_sha256: s
             ends += [parse_utc(h[k]).timestamp() for k in ("agent_command_time_utc", "move_time_utc") if h.get(k)]
         t_lo = t_start - RUN_INTERVAL_BEFORE_S
         t_hi = max(ends + [t_start]) + RUN_INTERVAL_AFTER_S
+        if manifest_span:       # outer clip: the export files never held events outside their span
+            m_lo = parse_utc(manifest_span["start_utc"]).timestamp()
+            m_hi = parse_utc(manifest_span["end_utc"]).timestamp()
+            if max(t_lo, m_lo) < min(t_hi, m_hi):
+                t_lo, t_hi = max(t_lo, m_lo), min(t_hi, m_hi)
         run_interval = {"start_utc": fmt_utc(datetime.fromtimestamp(t_lo, tz=timezone.utc)),
                         "end_utc": fmt_utc(datetime.fromtimestamp(t_hi, tz=timezone.utc))}
         for src, tgt, b in leftover_bursts(ctx, used_logons, t_lo, t_hi):
@@ -517,7 +546,20 @@ def build_draft(rows: list[dict], trial_id: str, intended: Mapping, db_sha256: s
             hops.append(hop)
     flags = ["run_day_spans_midnight"] if spans_midnight else []
     return _finish(scenario, trial_id, sc, isteps, rows, steps, hops, unconfirmed, open_points, dumps, net, tree,
-                   stray_acts, db_sha256, provisional, days, by_guid, rows4688, manual, sys_dumps, flags, run_interval)
+                   stray_acts, db_sha256, provisional, days, by_guid, rows4688, manual, sys_dumps, flags, run_interval, manifest_span)
+
+
+def _downgrade_manual(hop: dict) -> None:
+    """A manual-session command that matches no intended step is only time/account evidence (AK-04)."""
+    hop["basis"] = "time_account_only"
+    hop["method"] = "time_account_only+" + (hop.get("method") or "").split("+", 1)[-1]
+    hop["confidence_tier"] = "D"
+    hop["status"] = "unconfirmed"
+    hop["reason"] = "manual_command_without_intended_step"
+    hop["role"] = "background"
+
+
+STEP_ROLE_TO_HOP_ROLE = {"attack": "attack", "attack_pair": "attack", "distractor": "benign", "benign": "benign"}
 
 
 def _attach_step(hop: dict, st: Mapping | None, isteps: Sequence[Mapping], consumed: set[str], counters: dict,
@@ -527,6 +569,7 @@ def _attach_step(hop: dict, st: Mapping | None, isteps: Sequence[Mapping], consu
         counters["x"] += 1
         hop["hop_id"] = f"{scenario}-x{counters['x']}"
         hop["flags"].append("no_intended_step")
+        hop["role"], hop["path_role"] = "background", None   # no intended step: neither attack nor benign by the key
         if hop["status"] != "unconfirmed" or not hop["reason"]:
             hop["status"], hop["reason"] = "unconfirmed", "no_intended_step"
         return
@@ -537,7 +580,8 @@ def _attach_step(hop: dict, st: Mapping | None, isteps: Sequence[Mapping], consu
         hop["hop_id"] = f"{st['id']}-{counters[st['id']]}"
     hop["handoff_step"] = st["id"]
     hop["handoff_account"] = st.get("account")
-    hop["role"] = st.get("role")
+    hop["path_role"] = st.get("role")                       # attack | attack_pair | distractor (paths[] vocabulary)
+    hop["role"] = STEP_ROLE_TO_HOP_ROLE[st["role"]]         # attack | benign
     acct = hop.get("logon_account") or hop["agent_account"]
     if (st.get("source_host") and st["source_host"] != hop["source_host"]) \
             or (st.get("account") and st["account"] != acct) \
@@ -566,8 +610,9 @@ def _leftover_hop(b: Sequence[Mapping], src: str | None, tgt: str, ctx: Ctx, cou
             "reason": "no_agent_command_names_target", "agent_event_uids": [], "target_event_uids": list(dict.fromkeys(uids)),
             "identity_expected": ident["identity_expected"], "identity_basis": ident["identity_basis"],
             "time_delta_ms": None, "confidence_tier": "D", "target_binding": "time_account", "candidate_count": 1,
+            "target_4624_content_sha256": anchor.get("duplicate_content_sha256"),
             "credential_logon_uids": [], "related_logon_uids": [], "port_join_event_uids": [],
-            "needs_owner_approval": False, "flags": list(ident["flags"]), "role": None, "proposed_role": None,
+            "needs_owner_approval": False, "flags": list(ident["flags"]), "role": "background", "path_role": None,
             "target_logon_id": hex(anchor["target_logon_id"]), "authentication_package": anchor.get("authentication_package"),
             "source_host_by_ip": src, "_anchor_ts": anchor["ts"], "_burst_uids": [x["event_uid"] for x in b], "_names": {}}
 
@@ -577,8 +622,9 @@ def _finish(scenario: str, trial_id: str, sc: Mapping, isteps: Sequence[Mapping]
             dumps: Sequence[identity.Dump], net: Mapping, tree: Sequence[AgentProc], stray_acts: Sequence[Action],
             db_sha256: str, provisional: Mapping | None, days: Sequence[str], by_guid: Mapping[str, Mapping],
             rows4688: Sequence[Mapping], manual: Sequence[Action], sys_dumps: Sequence[Mapping],
-            flags: Sequence[str], run_interval: Mapping | None = None) -> dict:
+            flags: Sequence[str], run_interval: Mapping | None = None,
+            manifest_span: Mapping | None = None) -> dict:
     """Roles, S04-A evidence, decision checks, paths, window and the final dict (see build_draft)."""
     from . import finish
     return finish.finish(scenario, trial_id, sc, isteps, rows, steps, hops, unconfirmed, open_points, dumps, net, tree,
-                         stray_acts, db_sha256, provisional, days, by_guid, rows4688, manual, sys_dumps, flags, run_interval)
+                         stray_acts, db_sha256, provisional, days, by_guid, rows4688, manual, sys_dumps, flags, run_interval, manifest_span)

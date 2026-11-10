@@ -45,6 +45,12 @@
       "start_utc": "2026-10-12T07:02:46.721Z",
       "end_utc": "2026-10-12T07:17:48.154Z"
     },
+    "manifest_span": {
+      "start_utc": "2026-09-17T08:33:40.770552Z",
+      "end_utc": "2026-10-12T07:31:37.926531Z",
+      "source": "data/manifest.csv",
+      "files": 20
+    },
     "run_day_rule": "run = the latest splunkd root plus every earlier root reached by walking back while consecutive roots are <= 6 h apart (roots = Sysmon 1 children of the agent splunkd.exe in Users/Public plus pid_match_4688 roots); run days = UTC days from the earliest to the latest of those roots; run_interval start = earliest root of a walk-back with a 30 min gap (trials of one day share a DB) - 60 s, end = last step + 300 s; older roots belong to other runs"
   },
   "steps": [
@@ -189,6 +195,7 @@
       "command_host": "ep-01",
       "target_host": "ep-02",
       "basis": "command_names_target",
+      "source_session_logon_id": null,
       "agent_account": "svc_backup",
       "cmd_credential_account": "svc_backup",
       "agent_command": "powershell.exe -ExecutionPolicy Bypass -C \"$pw = [Environment]::GetEnvironmentVariable('SVC_BACKUP_PW','Machine'); net use \\\\192.168.50.22\\IPC$ /user:LAB\\svc_backup *** Copy-Item C:\\Users\\Public\\PktDrop.exe \\\\192.168.50.22\\ADMIN$\\PktDrop.exe -Force; sc.exe \\\\192.168.50.22 create PktDropService binPath= \\\"C:\\Windows\\PktDrop.exe\\\" start= demand; sc.exe \\\\192.168.50.22 start PktDropService\"",
@@ -237,7 +244,7 @@
       "handoff_step": "s05-h1",
       "handoff_account": "svc_backup",
       "role": "attack",
-      "proposed_role": null,
+      "path_role": "attack",
       "stray": false,
       "method": "command_names_target+artifact",
       "source_ip": "192.168.50.21",
@@ -246,6 +253,7 @@
       "move_time_utc": "2026-10-12T07:10:47.476731Z",
       "target_logon_id": "0x25a334",
       "authentication_package": "NTLM",
+      "target_4624_content_sha256": "6054a6a56bec63d0b6614fd8be19c3594b6aad535d61e76f7a8955d64017c136",
       "target_event_uids": [
         "617e1298cd1643ca160791c4e8c1b2cff829d38b98cd9c9feb975d418baf410c",
         "b31784e6dffb793459c174abf81a56f565db36a52689d49b3a57419240c75b99",
@@ -309,6 +317,7 @@
       "command_host": "ep-02",
       "target_host": "ep-03",
       "basis": "command_names_target",
+      "source_session_logon_id": null,
       "agent_account": "admin_it",
       "cmd_credential_account": "admin_it",
       "agent_command": "powershell.exe -ExecutionPolicy Bypass -C \"$pw = [Environment]::GetEnvironmentVariable('ADMIN_IT_PW','Machine'); $c = New-Object System.Management.Automation.PSCredential(\\\"LAB\\admin_it\\\",(ConvertTo-SecureString $pw -AsPlainText -Force)); Invoke-Command -ComputerName Endpoint-03.lab.local -Credential $c -ScriptBlock { Get-Service -Name *SQL* | Select-Object Status,Name }\"",
@@ -359,7 +368,7 @@
       "handoff_step": "s05-h2",
       "handoff_account": "admin_it",
       "role": "attack",
-      "proposed_role": null,
+      "path_role": "attack",
       "stray": false,
       "method": "command_names_target+artifact",
       "source_ip": "192.168.50.22",
@@ -368,6 +377,7 @@
       "move_time_utc": "2026-10-12T07:12:48.154931Z",
       "target_logon_id": "0x279684",
       "authentication_package": "Kerberos",
+      "target_4624_content_sha256": "49f872dc2a2215c82ac322f859f122b38567d482dd36d433b1388a9bebad6ca4",
       "target_event_uids": [
         "fc7238ecccbab37f8f6c663223a1af93ae880e1f1abd3ce474ffc73f3682b0fe",
         "ac7ec7a62e74e677b7019176fb656de93be5bcc55a19141113da6920bd05cd7e",
@@ -476,16 +486,23 @@
       "confidence_tier": "D",
       "target_binding": "time_account",
       "candidate_count": 1,
+      "target_4624_content_sha256": "7c072ec4cf9a418fc1f53f634e42a705062287da7c1b5895aba7ca73a3c34988",
       "credential_logon_uids": [],
       "related_logon_uids": [],
       "port_join_event_uids": [],
       "needs_owner_approval": false,
-      "flags": [],
-      "role": null,
-      "proposed_role": null,
+      "flags": [
+        "shared_with_trial"
+      ],
+      "role": "background",
+      "path_role": null,
       "target_logon_id": "0x138d2f",
       "authentication_package": "NTLM",
-      "source_host_by_ip": "ep-01"
+      "source_host_by_ip": "ep-01",
+      "shared_with_trials": [
+        "s06_t00",
+        "s07_t00"
+      ]
     }
   ],
   "paths": [
@@ -504,9 +521,11 @@
     {
       "kind": "hop",
       "id": "s05-t1",
-      "role": null,
+      "role": "background",
       "reason": "no_agent_command_names_target; logon lies inside the trial run interval 2026-10-12T07:02:46.721Z .. 2026-10-12T07:17:48.154Z",
-      "flags": [],
+      "flags": [
+        "shared_with_trial"
+      ],
       "event_uids": [
         "99d66c99408102578e3dc969e69cdbeb8aaba73e977530f62c2c9095ae0d73b6",
         "b0d8440458f179617e6d886602107d4f95575ca865b89ea63261e731844e9bc8",

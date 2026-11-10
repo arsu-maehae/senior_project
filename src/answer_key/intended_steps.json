@@ -35,7 +35,7 @@
          "account": "svc_backup", "service": null, "design_only": false, "role": "attack_pair",
          "cite": "handoff_18.md:1471 (S04-B svc_backup->EP-02, paired attack); :1721 (Track B true path); :1433"},
         {"id": "s04-A-h1", "kind": "move", "protocol": "SMB", "source_host": "ep-01", "target_host": "ep-02",
-         "account": "admin_it", "service": null, "design_only": false, "role": "distractor", "manual": true,
+         "account": "admin_it", "service": null, "design_only": false, "role": "benign", "manual": true,
          "cite": "handoff_18.md:1470 (S04-A admin_it->EP-02 benign over-fire control); :1416 (Track A executed manually, not via Caldera); :1721 (Track A distractor); :204 (admin_it task on EP-01)",
          "note": "Handoff l.1470 expects w3 0.0; decision 018 settles 1 under Correction K."}
       ]

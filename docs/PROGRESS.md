@@ -67,3 +67,6 @@ A summary block at the end of each big task. Newest at the bottom.
 - **Tests:** 159 answer-key tests + 373 others pass, 1 xfailed; DB hashes unchanged.
 - **Not done:** 5.3–5.5 are NOT ticked (waiting for approval); 5.6 (test keys) and 5.7 (lock) wait for the ×10 trials; t01 keys wait for t01 ingest.
 - **Check by hand:** 10 hops across `ground_truth/drafts/*.yaml` (hop id, basis, status, identity, target uids), especially s04-A-h1, s06-smb-1, s07-h-y, s03-h1.
+- TODO (decision 023): when S07 t01–t10 are ingested, check for any svc_sql 4624 on ep-02; if none, state the S07 one-account deviation as a limitation in the report.
+- TODO (decision 026): recheck run intervals with `python -m answer_key check-overlap` on the ×10 trials; prefer manifest spans when they become tighter.
+- TODO (lock gate, AK-21): before the lock tag every hop is confirmed or explicitly excluded by the owner; no unconfirmed hop remains in an approved key.

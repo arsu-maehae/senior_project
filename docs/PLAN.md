@@ -52,7 +52,7 @@ Never tune code or weights on the test set.
 - [ ] 5.4 (records 021–025 proposed, waiting for approval) Settle S04-A identity, S05 hop 2, S07 accounts, S06 benign paths
 - [ ] 5.5 Every listed event exists in the logs  (verify ok on 6 drafts; waiting for approval)
 - [ ] 5.6 Test key drafts → user approves
-- [ ] 5.7 Lock test keys: git tag `answer-keys-locked` (before T10)
+- [ ] 5.7 Lock test keys: git tag `answer-keys-locked` (before T10). Gate (AK-21): every hop in an approved key is `confirmed` or explicitly excluded by the owner; no `unconfirmed` hop may remain; every hop has `role` (attack | benign | background)
 
 ## T6. Gate — depends on: T4 — spec: docs/specs/02_gate.md (create with /stage-spec)
 - [ ] 6.1 Spec from handoff §7.2
@@ -91,6 +91,7 @@ Never tune code or weights on the test set.
 - [ ] 10.3 Dry run of the evaluation on the development set
 - [ ] 10.4 `/eval-run` on the test set, once
 - [ ] 10.5 Weight sensitivity; results tables; fact-checked summary
+- [ ] 10.6 Ablation independent of the key's evidence: run the stitcher with the command-line source-session method disabled (ports and 4648 only) and score it against the same keys, so at least one result does not rest on the evidence the key uses (decision 020, spec 07 limits)
 
 ## T11. Output, demo, report — depends on: T10
 - [ ] 11.1 HTML/CSV report per trial (ranked paths, identity per hop, evidence)

@@ -39,7 +39,7 @@ HOP_FIELDS = ["hop_id", "protocol", "source_host", "target_host", "account", "mo
               "agent_event_uids", "target_event_uids", "identity_expected", "identity_basis", "time_delta_ms",
               "confidence_tier", "handoff_step", "handoff_account", "agent_account", "cmd_credential_account",
               "logon_account", "account_mismatch", "target_binding", "candidate_count", "needs_owner_approval",
-              "flags"]
+              "flags", "role"]
 IDENTITY_BASIS_FIELDS = ["dump_event_uid", "open_session_ids", "dump_time_utc", "move_after_dump"]
 TOP_FIELDS = ["trial_id", "scenario", "status", "provenance", "db_sha256", "window", "agent", "steps", "hops",
               "paths", "benign_paths", "unconfirmed", "open_points"]
@@ -242,7 +242,8 @@ def test_hop_fields_and_enums(real, trial):
             assert f in h, f"{h['hop_id']} missing {f}"
         for f in IDENTITY_BASIS_FIELDS:
             assert f in h["identity_basis"], f"{h['hop_id']} identity_basis.{f}"
-        assert h["basis"] in {"command_names_target", "time_account_only"}            # test (1)
+        assert h["basis"] in {"command_names_target", "manual_command_names_target", "time_account_only"}   # AK-20
+        assert h["role"] in {"attack", "benign", "background"}                          # AK-19
         assert h["status"] in {"confirmed", "unconfirmed"}
         assert h["identity_expected"] in (0, 1)
         assert h["confidence_tier"] in {"A", "B", "C", "D"}
@@ -264,7 +265,8 @@ def test_steps_fields_and_paths(real, trial):
             assert f in s, f"step {s.get('step_id')} missing {f}"
         assert s["kind"] in {"agent_start", "lsass_dump", "move", "service_exec", "benign"}
         assert s["status"] in {"confirmed", "unconfirmed"}
-        assert s["source"] in {"agent_tree", "target_side"}
+        # spec 3 lists agent_tree|target_side; the manual basis (AK-20) needs a third source value (spec gap, reported)
+        assert s["source"] in {"agent_tree", "target_side", "manual_session"}
     hop_ids = {h["hop_id"] for h in d["hops"]}
     for p in d["paths"]:
         assert p["role"] in {"attack", "attack_pair", "distractor"}
@@ -321,13 +323,15 @@ def test_time_account_only_never_confirmed_and_confirmed_names_target(real, tria
         if h["basis"] == "time_account_only":
             assert h["status"] != "confirmed", h["hop_id"]
         if h["status"] == "confirmed":
-            assert h["basis"] == "command_names_target"
+            assert h["basis"] in {"command_names_target", "manual_command_names_target"}   # AK-02 / AK-20
             assert h["agent_event_uids"], f"{h['hop_id']} confirmed without agent command"
             assert h["source_host"] != h["target_host"]
             texts = [t for u in h["agent_event_uids"] for t in all_texts(ev[u]["command_line"] or "")]
             assert any(names_target_independent(t, h["target_host"]) for t in texts), \
                 f"{h['hop_id']}: no agent command names {h['target_host']}"
             assert h["agent_account"] not in ("system", None) and not h["agent_account"].endswith("$")
+            if h["basis"] == "manual_command_names_target":
+                assert h["handoff_step"], f"{h['hop_id']}: manual basis needs an intended step (AK-20)"
 
 
 def agent_ancestor_reached(trial: str, uid: str) -> bool:
@@ -355,6 +359,8 @@ def agent_ancestor_reached(trial: str, uid: str) -> bool:
 def test_confirmed_hop_agent_commands_are_in_splunkd_tree(real, trial):
     d = draft_of(real, trial)
     for h in confirmed(d):
+        if h["basis"] == "manual_command_names_target":
+            continue                      # AK-20: manual hops are the opposite case, tested separately (NOT in the splunkd tree)
         for u in h["agent_event_uids"]:
             r = by_uid(trial, [u])[u]
             assert (r["channel"], r["event_id"]) == ("Sysmon", 1), "agent record must be Sysmon 1"
@@ -555,10 +561,10 @@ def test_s02_stray_dump_not_used_for_identity(real):
 
 def test_s04_track_b_confirmed_identity_1(real):
     d = draft_of(real, "s04_t00")
-    c = confirmed(d)
-    assert len(c) == 1
+    c = [h for h in confirmed(d) if h["basis"] == "command_names_target"]   # Track A is confirmed too, by manual basis (AK-20)
+    assert len(c) == 1 and c[0]["hop_id"] == "s04-B-h1"
     b = c[0]
-    assert b["account"] == "svc_backup" and b["identity_expected"] == 1 and b["basis"] == "command_names_target"
+    assert b["role"] == "attack" and b["account"] == "svc_backup" and b["identity_expected"] == 1
     assert any(b["hop_id"] in p["hop_ids"] for p in d["paths"])
     assert any(p["role"] == "attack_pair" for p in d["paths"] if b["hop_id"] in p["hop_ids"])
 
@@ -570,12 +576,12 @@ def track_a(d: dict) -> dict:
     return cands[0]
 
 
-def test_s04_track_a_unconfirmed_benign_identity_1_no_conflict(real):
+def test_s04_track_a_confirmed_manual_benign_identity_1_no_conflict(real):
     d = draft_of(real, "s04_t00")
     a = track_a(d)
-    assert a["status"] == "unconfirmed"
-    assert find(a, "proposed_role") and "benign" in find(a, "proposed_role")
-    assert a["needs_owner_approval"] is True
+    assert a["status"] == "confirmed" and a["basis"] == "manual_command_names_target"   # AK-20, decision 021
+    assert a["role"] == "benign"                                                         # AK-19
+    assert a["needs_owner_approval"] is False
     assert a["identity_expected"] == 1                       # decision 018
     assert a["identity_basis"]["move_after_dump"] is True and a["identity_basis"]["open_session_ids"]
     assert all("decision_conflict" not in h["flags"] for h in d["hops"])
@@ -589,7 +595,7 @@ def test_s04_track_a_session_evidence_recorded_from_data(real):
     sid = find(a, "session_id")
     assert sid and sid[0] in {"0xd6398", "0xd663a", "0x17b18"}, sid
     assert find(a, "session_logon_type") and find(a, "splunkd_ancestor")
-    assert find(a, "splunkd_ancestor")[0] is False            # no splunkd command naming ep-02 under admin_it (AK-08)
+    assert find(a, "splunkd_ancestor")[0] is False            # manual session, not in the splunkd tree (AK-20)
 
 
 def test_s04_window_and_out_of_window_counted_not_failed(real):
@@ -1244,8 +1250,11 @@ def test_dec021_s04_track_a_source_session_is_desktop_0xd6398(real):
     a = hop_by_id(d, "s04-A-h1")
     assert (a["source_host"], a["target_host"], a["account"]) == ("ep-01", "ep-02", "admin_it")
     assert find(a, "session_id") == ["0xd6398"] and find(a, "session_logon_type") == [11]
-    assert a["status"] == "unconfirmed" and a["identity_expected"] == 1 and a["needs_owner_approval"] is True
-    assert a["proposed_role"] == "benign" and find(a, "splunkd_ancestor") == [False]
+    assert a["status"] == "confirmed" and a["basis"] == "manual_command_names_target" and a["role"] == "benign"
+    assert a["identity_expected"] == 1 and a["needs_owner_approval"] is False
+    assert a["source_session_logon_id"] == "0xd6398"
+    assert "decision 021" in a["owner_note"]
+    assert find(a, "splunkd_ancestor") == [False]
     assert "0xd6398" in a["identity_basis"]["open_session_ids"]
     # independent DB evidence for the session: a type 11 admin_it 4624 on ep-01 with logon id 0xd6398
     r = rows("s04_t00", "SELECT account_name, logon_type FROM events_dedup WHERE host='ep-01' AND event_id=4624 AND target_logon_id=?", (0xd6398,))
@@ -1572,3 +1581,427 @@ def test_verify_checks_logon_uid_lists(real):
     types = {(f["type"], f["uid"]) for f in rep["failures"]}
     assert ("wrong_event_type", u5145) in types and ("missing_uid", "0" * 64) in types
     assert rep["ok"] is False
+
+
+# ====================================================================== 2026-11-10 rules: AK-19 .. AK-22
+# Written from spec 07 (AK-19..AK-22) and decisions 021 / 026, not from the code.
+
+DRAFTS = REPO / "ground_truth" / "drafts"
+MANIFEST = REPO / "data" / "manifest.csv"
+BACKGROUND_HOPS = {"s04_t00": "s04-t1", "s05_t00": "s05-t1", "s06_t00": "s06-t1", "s07_t00": "s07-t1"}
+
+
+def committed(trial: str) -> dict:
+    p = DRAFTS / f"{trial}.yaml"
+    if not p.exists():
+        pytest.skip(f"{p} missing")
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="module")
+def full(tmp_path_factory):
+    """One temp repo holding all six DBs + manifest + provisional windows, every draft built in it."""
+    root = tmp_path_factory.mktemp("full")
+    built = []
+    for trial in TRIALS:
+        if db_path(trial).exists():
+            make_repo(root, trial, link=True)
+            built.append(trial)
+    (root / "docs" / "research").mkdir(parents=True, exist_ok=True)
+    (root / "data").mkdir(exist_ok=True)
+    if MANIFEST.exists():
+        shutil.copy(MANIFEST, root / "data" / "manifest.csv")
+    prov = REPO / "docs" / "research" / "provisional_windows.csv"
+    if prov.exists():
+        shutil.copy(prov, root / "docs" / "research" / "provisional_windows.csv")
+    for trial in built:
+        cmd_build(trial, root)
+    return root, built
+
+
+# ---- AK-19 role
+
+@pytest.mark.parametrize("trial", TRIALS)
+def test_ak19_every_hop_has_role_in_vocabulary(real, trial):
+    d = draft_of(real, trial)
+    assert d["hops"]
+    for h in d["hops"]:
+        assert h.get("role") in {"attack", "benign", "background"}, (trial, h["hop_id"], h.get("role"))
+
+
+def test_ak19_role_is_separate_from_status(real):
+    d = draft_of(real, "s04_t00")
+    pairs = {(h["role"], h["status"]) for h in d["hops"]}
+    assert ("benign", "confirmed") in pairs and ("background", "unconfirmed") in pairs     # not the same axis
+
+
+@pytest.mark.parametrize("trial,hid", sorted(BACKGROUND_HOPS.items()))
+def test_ak19_leftover_hops_are_background_unconfirmed_time_account_only(real, trial, hid):
+    h = hop_by_id(draft_of(real, trial), hid)
+    assert (h["role"], h["status"], h["basis"]) == ("background", "unconfirmed", "time_account_only")
+    assert h["agent_event_uids"] == []
+
+
+def test_ak19_s06_named_hops_benign_leftover_background(real):
+    d = draft_of(real, "s06_t00")
+    for h in d["hops"]:
+        assert h["role"] == ("background" if h["hop_id"] == "s06-t1" else "benign"), h["hop_id"]
+    assert {h["hop_id"] for h in d["hops"] if h["role"] == "benign"} == {"s06-winrm-1", "s06-winrm-2", "s06-smb-1"}
+
+
+@pytest.mark.parametrize("trial,ids", [("s02_t00", ["s02-h1"]), ("s03_t00", ["s03-h1"]), ("s05_t00", ["s05-h1", "s05-h2"]),
+                                       ("s07_t00", ["s07-h-x", "s07-h-y"])])
+def test_ak19_attack_hops_role_attack(real, trial, ids):
+    d = draft_of(real, trial)
+    for hid in ids:
+        assert hop_by_id(d, hid)["role"] == "attack", hid
+
+
+def test_ak19_s04_roles(real):
+    d = draft_of(real, "s04_t00")
+    assert hop_by_id(d, "s04-A-h1")["role"] == "benign"
+    assert hop_by_id(d, "s04-B-h1")["role"] == "attack"        # paths[] role stays attack_pair, hop role is attack
+    assert any(p["role"] == "attack_pair" and p["hop_ids"] == ["s04-B-h1"] for p in d["paths"])
+
+
+def test_ak19_no_negative_hop_sits_on_an_attack_path(real):
+    """Evaluation counts benign + background as negatives: none may be on paths[]."""
+    for trial in real:
+        d = draft_of(real, trial)
+        on_attack = {x for p in d["paths"] for x in p["hop_ids"]}
+        for h in d["hops"]:
+            if h["role"] in ("benign", "background"):
+                assert h["hop_id"] not in on_attack, (trial, h["hop_id"])
+
+
+def _intended_with(tmp_path, monkeypatch, edit) -> None:
+    import answer_key.__main__ as m
+    intended = json.loads(m.INTENDED.read_text(encoding="utf-8"))
+    edit(intended)
+    alt = tmp_path / "intended_edit.json"
+    alt.write_text(json.dumps(intended), encoding="utf-8")
+    monkeypatch.setattr(m, "INTENDED", alt)
+
+
+def test_ak19_build_fails_when_a_hop_has_no_valid_role(tmp_path, monkeypatch):
+    """Synthetic: an intended step whose role is outside the vocabulary must make the build fail, not write a draft."""
+    need_db("s02_t00")
+
+    def edit(intended):
+        for st in intended["scenarios"]["s02"]["steps"]:
+            if st["kind"] == "move":
+                st["role"] = "bogus"
+    _intended_with(tmp_path, monkeypatch, edit)
+    import answer_key.__main__ as m
+    repo = make_repo(tmp_path / "r", "s02_t00", link=False)
+    with pytest.raises((ValueError, KeyError)):
+        m.cmd_build("s02_t00", repo)
+    assert not (repo / "ground_truth" / "drafts" / "s02_t00.yaml").exists(), "a draft was written despite the invalid role"
+
+
+# ---- AK-20 manual basis (decision 021)
+
+def track_a_command_uids() -> set[str]:
+    """Independent: Sysmon 1 commands in the approved session 877464 on ep-01 that name ep-02 (by IP)."""
+    return {r["event_uid"] for r in rows("s04_t00", "SELECT event_uid FROM events_dedup WHERE channel='Sysmon' AND event_id=1 AND "
+                                                    "host='ep-01' AND session_id=877464 AND command_line LIKE '%192.168.50.22%'")}
+
+
+def test_ak20_s04_track_a_pinned(real):
+    d = draft_of(real, "s04_t00")
+    a = hop_by_id(d, "s04-A-h1")
+    assert a["basis"] == "manual_command_names_target" and a["status"] == "confirmed" and a["role"] == "benign"
+    assert a["identity_expected"] == 1
+    assert a["source_session_logon_id"] == "0xd6398" and int(a["source_session_logon_id"], 16) == 877464
+    assert a["needs_owner_approval"] is False
+    assert "decision 021" in a["owner_note"]
+    assert a["handoff_step"] == "s04-A-h1"
+    assert "no_intended_step" not in a["flags"] and "decision_conflict" not in a["flags"]
+    assert [s for s in d["steps"] if s["step_id"] == "s04-A-h1-move"][0]["status"] == "confirmed"
+
+
+def test_ak20_s04_track_a_commands_matched_by_logon_id_and_not_in_splunkd_tree(real):
+    d = draft_of(real, "s04_t00")
+    a = hop_by_id(d, "s04-A-h1")
+    ev = by_uid("s04_t00", a["agent_event_uids"])
+    assert set(ev) == set(a["agent_event_uids"]) and ev
+    for u, r in ev.items():
+        assert (r["channel"], r["event_id"]) == ("Sysmon", 1)
+        assert r["session_id"] == 877464, f"{u}: Sysmon 1 session_id is not the approved session"      # logon-id match
+        assert r["account_name"] == "admin_it"
+        assert names_target_independent(r["command_line"] or "", "ep-02")
+        assert not agent_ancestor_reached("s04_t00", u), f"{u} has a splunkd ancestor"
+    cmds = " ".join((r["command_line"] or "").lower() for r in ev.values())
+    for word in ("net", "use", "create", "start", "healthagentsvc"):
+        assert word in cmds, word
+    assert track_a_command_uids() == set(ev)                  # nothing from the session is lost
+    assert find(a, "splunkd_ancestor") == [False] and find(a, "session_id") == ["0xd6398"]
+
+
+def test_ak20_s04_track_b_stays_agent_command_basis(real):
+    b = hop_by_id(draft_of(real, "s04_t00"), "s04-B-h1")
+    assert (b["basis"], b["role"], b["status"]) == ("command_names_target", "attack", "confirmed")
+    assert b["agent_account"] == "svc_backup"
+
+
+@pytest.mark.parametrize("trial", TRIALS)
+def test_ak20_manual_basis_only_with_step_match_and_confirmed(real, trial):
+    d = draft_of(real, trial)
+    manual = []
+    for h in d["hops"]:
+        if h["basis"] == "manual_command_names_target":
+            manual.append(h["hop_id"])
+            assert h["handoff_step"] and h["status"] == "confirmed" and "no_intended_step" not in h["flags"], h["hop_id"]
+        if h["status"] == "unconfirmed":
+            assert h["basis"] != "manual_command_names_target", f"{h['hop_id']}: unconfirmed with manual basis"
+    assert manual == (["s04-A-h1"] if trial == "s04_t00" else [])
+
+
+def test_ak20_manual_command_matching_no_intended_step_is_downgraded(tmp_path, monkeypatch):
+    """Synthetic: the Track A step now targets ep-03, so the manual command naming ep-02 matches no step."""
+    need_db("s04_t00")
+
+    def edit(intended):
+        for st in intended["scenarios"]["s04"]["steps"]:
+            if st["id"] == "s04-A-h1":
+                st["target_host"] = "ep-03"
+    _intended_with(tmp_path, monkeypatch, edit)
+    import answer_key.__main__ as m
+    repo = make_repo(tmp_path / "r", "s04_t00", link=False)
+    m.cmd_build("s04_t00", repo)
+    d = read_draft(repo, "s04_t00")
+    orig = track_a_command_uids()
+    hit = [h for h in d["hops"] if set(h["agent_event_uids"]) & orig]
+    assert hit, "the manual commands vanished from the key instead of being downgraded"
+    for h in hit:
+        assert (h["basis"], h["status"], h["role"]) == ("time_account_only", "unconfirmed", "background"), h["hop_id"]
+        assert h["confidence_tier"] == "D"
+    assert not [h for h in d["hops"] if h["basis"] == "manual_command_names_target"]
+    assert {h["hop_id"] for h in hit} <= {u["id"] for u in d["unconfirmed"]}               # kept for review, never dropped
+    assert not ({h["hop_id"] for h in hit} & {x for p in d["paths"] for x in p["hop_ids"]})
+    assert hop_by_id(d, "s04-B-h1")["status"] == "confirmed"                                 # Track B unaffected
+
+
+def test_ak20_manual_command_in_agent_tree_session_is_not_manual_basis(tmp_path):
+    """Synthetic: re-parent the Track A session's powershell.exe under admin_it's splunkd; its commands are agent-tree now."""
+    need_db("s04_t00")
+    ps = rows("s04_t00", "SELECT process_guid FROM events_dedup WHERE event_uid LIKE '61646f10%'")
+    spl = rows("s04_t00", "SELECT process_guid FROM events_dedup WHERE channel='Sysmon' AND event_id=1 AND host='ep-01' AND "
+                          "account_name='admin_it' AND image LIKE '%splunkd.exe'")
+    assert ps and spl, "data premise changed (powershell.exe parent of the Track A commands / admin_it splunkd)"
+    guid, sp = ps[0]["process_guid"], spl[0]["process_guid"]
+
+    def edit(con):
+        con.execute("UPDATE events SET parent_process_guid=?, parent_image='C:\\Users\\Public\\splunkd.exe' "
+                    "WHERE channel='Sysmon' AND event_id=1 AND process_guid=?", (sp, guid))
+
+    _, d = synth(tmp_path, "s04_t00", edit)
+    uids = track_a_command_uids()
+    for h in d["hops"]:
+        if set(h["agent_event_uids"]) & uids:
+            assert h["basis"] != "manual_command_names_target", f"{h['hop_id']}: agent-tree command labelled manual"
+    assert not [h for h in d["hops"] if h["basis"] == "manual_command_names_target"]
+
+
+# ---- AK-21 lock gate
+
+@pytest.mark.parametrize("trial", TRIALS)
+def test_ak21_verify_json_lock_fields_on_real_drafts(real, trial):
+    repo = real[trial][0] if trial in real else pytest.skip("db missing")
+    cmd_verify(trial, repo)
+    on_disk = json.loads((repo / "out" / "answer_key" / trial / "verify.json").read_text(encoding="utf-8"))
+    assert "lock_ready" in on_disk and "lock_blockers" in on_disk
+    d = read_draft(repo, trial)
+    expect = sorted(h["hop_id"] for h in d["hops"] if h["status"] != "confirmed")         # recomputed from the draft
+    assert sorted(b["hop_id"] for b in on_disk["lock_blockers"]) == expect
+    assert on_disk["lock_ready"] is (not expect)
+    if trial in BACKGROUND_HOPS:                                                           # actual drafts: one background hop each
+        assert on_disk["lock_ready"] is False and [b["hop_id"] for b in on_disk["lock_blockers"]] == [BACKGROUND_HOPS[trial]]
+    else:
+        assert trial in ("s02_t00", "s03_t00") and on_disk["lock_ready"] is True and on_disk["lock_blockers"] == []
+    assert all(b.get("reason") for b in on_disk["lock_blockers"])
+
+
+def _verify_copy(real, trial, mutate):
+    d = json.loads(json.dumps(read_draft(real[trial][0], trial)))
+    mutate(d)
+    return verify_mod.verify(d, db_path(trial))
+
+
+def test_ak21_confirmed_hop_changed_to_unconfirmed_blocks_lock(real):
+    assert _verify_copy(real, "s02_t00", lambda d: None)["lock_ready"] is True
+    rep = _verify_copy(real, "s02_t00", lambda d: d["hops"][0].update(status="unconfirmed"))
+    assert rep["lock_ready"] is False and [b["hop_id"] for b in rep["lock_blockers"]] == ["s02-h1"]
+
+
+def test_ak21_all_hops_confirmed_makes_lock_ready(real):
+    def allc(d):
+        for h in d["hops"]:
+            h["status"] = "confirmed"
+    rep = _verify_copy(real, "s04_t00", allc)
+    assert rep["lock_ready"] is True and rep["lock_blockers"] == []
+
+
+def test_ak21_hop_without_valid_role_blocks_lock(real):
+    rep = _verify_copy(real, "s02_t00", lambda d: d["hops"][0].pop("role"))
+    assert rep["lock_ready"] is False
+
+
+def test_ak21_lock_gate_is_informational_verify_still_ok(real):
+    rep = cmd_verify("s04_t00", real["s04_t00"][0])
+    assert rep["ok"] is True and rep["lock_ready"] is False
+
+
+# ---- AK-22 run interval, manifest span, overlap
+
+def manifest_span_independent(trial: str) -> tuple[datetime, datetime, int]:
+    import csv
+    scenario, tr = trial.split("_")
+    with open(MANIFEST, newline="", encoding="utf-8") as fh:
+        rs = [r for r in csv.DictReader(fh) if r["scenario"] == scenario and r["trial"] == tr
+              and r["first_event_utc"] and r["last_event_utc"]]
+    assert rs, f"no manifest rows for {trial}"
+    return (min(parse(r["first_event_utc"]) for r in rs), max(parse(r["last_event_utc"]) for r in rs), len(rs))
+
+
+@pytest.mark.parametrize("trial", TRIALS)
+def test_ak22_manifest_span_matches_manifest_csv_committed_draft(trial):
+    if not MANIFEST.exists():
+        pytest.skip("manifest missing")
+    d = committed(trial)
+    lo, hi, n = manifest_span_independent(trial)
+    ms = d["agent"]["manifest_span"]
+    assert parse(ms["start_utc"]) == lo and parse(ms["end_utc"]) == hi, (ms, lo, hi)
+    ri = d["agent"]["run_interval"]
+    assert lo <= parse(ri["start_utc"]) <= parse(ri["end_utc"]) <= hi, (ri, ms)
+    assert ms.get("files") == n
+
+
+@pytest.mark.parametrize("trial", TRIALS)
+def test_ak22_manifest_span_matches_manifest_csv_fresh_build(full, trial):
+    root, built = full
+    if trial not in built or not MANIFEST.exists():
+        pytest.skip("db or manifest missing")
+    d = read_draft(root, trial)
+    lo, hi, _ = manifest_span_independent(trial)
+    ms = d["agent"]["manifest_span"]
+    assert parse(ms["start_utc"]) == lo and parse(ms["end_utc"]) == hi
+    ri = d["agent"]["run_interval"]
+    assert lo <= parse(ri["start_utc"]) and parse(ri["end_utc"]) <= hi
+    for h in d["hops"]:
+        assert parse(ri["start_utc"]) <= parse(h["move_time_utc"]) <= parse(ri["end_utc"]), h["hop_id"]
+
+
+def _copy_drafts(dst: Path, trials=TRIALS) -> Path:
+    (dst / "ground_truth" / "drafts").mkdir(parents=True, exist_ok=True)
+    (dst / "ground_truth" / "approved").mkdir(parents=True, exist_ok=True)
+    for t in trials:
+        if (DRAFTS / f"{t}.yaml").exists():
+            shutil.copy(DRAFTS / f"{t}.yaml", dst / "ground_truth" / "drafts" / f"{t}.yaml")
+    return dst
+
+
+def test_ak22_check_overlap_writes_files_and_reports_no_overlap_for_six_drafts(tmp_path):
+    repo = _copy_drafts(tmp_path)
+    assert run_cli("check-overlap", "--repo", str(repo)) == 0
+    oj, om = repo / "out" / "answer_key" / "overlap.json", repo / "out" / "answer_key" / "overlap.md"
+    assert oj.exists() and om.exists() and om.read_text(encoding="utf-8").strip()
+    rep = json.loads(oj.read_text(encoding="utf-8"))
+    assert rep["overlapping_pairs"] == []
+    iv = {}
+    for t in TRIALS:                                          # independent recomputation of the six intervals
+        d = committed(t)
+        iv[t] = (parse(d["agent"]["run_interval"]["start_utc"]), parse(d["agent"]["run_interval"]["end_utc"]))
+    for a in TRIALS:
+        for b in TRIALS:
+            if a < b:
+                assert not (iv[a][0] < iv[b][1] and iv[b][0] < iv[a][1]), (a, b)
+    assert set(rep["run_intervals"]) == set(TRIALS)
+
+
+def test_ak22_check_overlap_reports_a_pair_when_intervals_overlap(tmp_path):
+    repo = _copy_drafts(tmp_path)
+    p5 = repo / "ground_truth" / "drafts" / "s05_t00.yaml"
+    d5 = json.loads(p5.read_text(encoding="utf-8"))
+    d6 = json.loads((repo / "ground_truth" / "drafts" / "s06_t00.yaml").read_text(encoding="utf-8"))
+    d5["agent"]["run_interval"] = dict(d6["agent"]["run_interval"])          # synthetic: s05 now runs when s06 runs
+    p5.write_text(json.dumps(d5), encoding="utf-8")
+    assert run_cli("check-overlap", "--repo", str(repo)) == 0
+    rep = json.loads((repo / "out" / "answer_key" / "overlap.json").read_text(encoding="utf-8"))
+    assert [sorted(p["trials"]) for p in rep["overlapping_pairs"]] == [["s05_t00", "s06_t00"]]
+    assert "s05_t00" in (repo / "out" / "answer_key" / "overlap.md").read_text(encoding="utf-8")
+
+
+def test_ak22_partial_overlap_of_30_seconds_is_reported(tmp_path):
+    repo = _copy_drafts(tmp_path, ["s05_t00", "s06_t00"])
+    p5 = repo / "ground_truth" / "drafts" / "s05_t00.yaml"
+    d5 = json.loads(p5.read_text(encoding="utf-8"))
+    d6 = json.loads((repo / "ground_truth" / "drafts" / "s06_t00.yaml").read_text(encoding="utf-8"))
+    s6 = parse(d6["agent"]["run_interval"]["start_utc"])
+    d5["agent"]["run_interval"] = {"start_utc": fmt(s6 - timedelta(minutes=5)), "end_utc": fmt(s6 + timedelta(seconds=30))}
+    p5.write_text(json.dumps(d5), encoding="utf-8")
+    run_cli("check-overlap", "--repo", str(repo))
+    rep = json.loads((repo / "out" / "answer_key" / "overlap.json").read_text(encoding="utf-8"))
+    assert len(rep["overlapping_pairs"]) == 1
+
+
+def test_ak22_s05_t1_shared_with_s06_and_s07_committed_draft():
+    h = hop_by_id(committed("s05_t00"), "s05-t1")
+    assert h["shared_with_trials"] == ["s06_t00", "s07_t00"] and "shared_with_trial" in h["flags"]
+
+
+def test_ak22_s05_t1_shared_fresh_build_and_independent_content_check(full):
+    root, built = full
+    if not {"s05_t00", "s06_t00", "s07_t00"} <= set(built):
+        pytest.skip("need s05, s06, s07 DBs")
+    h = hop_by_id(read_draft(root, "s05_t00"), "s05-t1")
+    assert h["shared_with_trials"] == ["s06_t00", "s07_t00"] and "shared_with_trial" in h["flags"]
+    sha = h["target_4624_content_sha256"]                    # independent: its 4624 content exists in the other two DBs
+    for other in ("s06_t00", "s07_t00"):
+        assert rows(other, "SELECT 1 FROM events_dedup WHERE duplicate_content_sha256=? AND event_id=4624", (sha,)), other
+    for trial in built:
+        for hh in read_draft(root, trial)["hops"]:
+            assert trial not in hh.get("shared_with_trials", [])
+            assert bool(hh.get("shared_with_trials")) == ("shared_with_trial" in hh["flags"]), hh["hop_id"]
+            if hh.get("shared_with_trials"):
+                assert hh["role"] == "background", "only background hops are flagged as shared"
+
+
+def test_ak22_overlap_json_lists_shared_background_hop(full):
+    root, built = full
+    if not {"s05_t00", "s06_t00", "s07_t00"} <= set(built):
+        pytest.skip("need s05, s06, s07 DBs")
+    run_cli("check-overlap", "--repo", str(root))
+    rep = json.loads((root / "out" / "answer_key" / "overlap.json").read_text(encoding="utf-8"))
+    assert rep["overlapping_pairs"] == []
+    assert [(s["trial"], s["hop_id"], s["shared_with_trials"]) for s in rep["shared_background_hops"]
+            if s["hop_id"] == "s05-t1"] == [("s05_t00", "s05-t1", ["s06_t00", "s07_t00"])]
+
+
+# ---- AK-14 re-check after the new CLI action
+
+def _tree(root: Path) -> dict[str, str]:
+    return {p.relative_to(root).as_posix(): sha256(p) for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+def test_ak14_check_overlap_writes_nothing_under_approved(tmp_path):
+    repo = _copy_drafts(tmp_path)
+    (repo / "ground_truth" / "approved" / "keep.txt").write_text("owner file", encoding="utf-8")
+    before = _tree(repo / "ground_truth" / "approved")
+    run_cli("check-overlap", "--repo", str(repo))
+    assert _tree(repo / "ground_truth" / "approved") == before
+    written = {p.relative_to(repo).as_posix() for p in repo.rglob("*") if p.is_file()}
+    assert {w for w in written if w.startswith("out/")} == {"out/answer_key/overlap.json", "out/answer_key/overlap.md"}
+    assert {w for w in written if w.startswith("ground_truth/")} == \
+        {"ground_truth/approved/keep.txt"} | {f"ground_truth/drafts/{t}.yaml" for t in TRIALS if (DRAFTS / f"{t}.yaml").exists()}
+
+
+def test_ak14_safe_draft_path_refuses_approved_and_verify_leaves_approved_empty(real, tmp_path):
+    (tmp_path / "ground_truth" / "approved").mkdir(parents=True)
+    (tmp_path / "ground_truth" / "drafts").mkdir(parents=True)
+    with pytest.raises(SystemExit):
+        safe_draft_path(tmp_path, "../approved/s02_t00")
+    for trial in real:
+        repo = real[trial][0]
+        cmd_verify(trial, repo)
+        assert list((repo / "ground_truth" / "approved").iterdir()) == []
