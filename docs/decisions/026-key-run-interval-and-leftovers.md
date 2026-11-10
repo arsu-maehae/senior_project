@@ -1,6 +1,6 @@
 # 026 — Answer key: run interval, leftover logons and what the key does not claim
 
-**Date:** 2026-11-10 · **Status:** proposed, needs owner approval · **Task:** T5 (5.2)
+**Date:** 2026-11-10 · **Status:** accepted (owner, 2026-11-10); accepted for t00; recheck on the x10 trials (window overlap and the 30-minute gap) · **Task:** T5 (5.2)
 
 ## Context
 A trial DB holds host logs from other days and neighbouring trials: s05, s06 and s07 share the ep-01 admin_it logon at 07:05:15.541 on 2026-10-12; ep-03 holds splunkd roots from 2026-09-11…22; s05–s07 hold the ep-02 `pivot_admin` agent start at 07:06:28 (`docs/research/agent_evidence.md`, finding 2). The review of the first drafts (fact-checker and attacker) found that a search for `time_account_only` logons anchored at the first step missed S07's 09:11:08 admin_it logon, and a whole-day search pulled in other trials' logons.

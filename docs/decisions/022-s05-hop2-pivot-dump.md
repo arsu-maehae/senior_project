@@ -1,6 +1,6 @@
 # 022 — S05 hop 2: ep-02 → ep-03 over WinRM, identity from the ep-02 pivot dump
 
-**Date:** 2026-11-10 · **Status:** proposed, needs owner approval · **Task:** T5 (5.4)
+**Date:** 2026-11-10 · **Status:** accepted (owner, 2026-11-10) · **Task:** T5 (5.4)
 
 ## Context
 `ground_truth/drafts/s05_t00.yaml`, hop `s05-h2`, from `events_dedup` of `s05_t00`:

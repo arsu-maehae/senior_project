@@ -1,6 +1,6 @@
 # 023 — S07: both paths move as `svc_backup`; the key follows the data
 
-**Date:** 2026-11-10 · **Status:** proposed, needs owner approval · **Task:** T5 (5.4)
+**Date:** 2026-11-10 · **Status:** accepted (owner, 2026-11-10) · **Task:** T5 (5.4)
 
 ## Context
 The handoff (§19.2, §21.5) names path X `svc_backup` and path Y `svc_sql`; handoff item 0d and l.1933 say to fix the key to the data. Evidence in `ground_truth/drafts/s07_t00.yaml` and `events_dedup` of `s07_t00`:

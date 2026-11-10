@@ -1,6 +1,6 @@
 # 024 — S06: benign paths in the key and the agent account
 
-**Date:** 2026-11-10 · **Status:** proposed, needs owner approval · **Task:** T5 (5.4)
+**Date:** 2026-11-10 · **Status:** accepted (owner, 2026-11-10) · **Task:** T5 (5.4)
 
 ## Context
 `ground_truth/drafts/s06_t00.yaml`, from `events_dedup` of `s06_t00` (decision 017: no dump anywhere, identity 0):

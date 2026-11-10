@@ -1,6 +1,6 @@
 # 025 — S02 stray run and S03 source host: the key follows the data
 
-**Date:** 2026-11-10 · **Status:** proposed, needs owner approval · **Task:** T5 (5.4)
+**Date:** 2026-11-10 · **Status:** accepted (owner, 2026-11-10) · **Task:** T5 (5.4)
 
 ## Context
 - **S02.** Two executions of the S02 ability exist in `s02_t00` (`docs/research/agent_evidence.md`, finding 1): the legacy ep-02 `system` agent (dump 05:41:32, `sc \\192.168.50.22` to its own IP, 5140/5145 with SubjectLogonId 999 and `PktDropService` 7045/4697 at 05:42:05) and the real ep-01 `svc_backup` run (dump 05:42:00, 4624 on ep-02 at 05:42:45.9 from 192.168.50.21, 5145 writing `PktDrop.exe` under logon 1741361, `sc` at 05:42:47). SQL on `events_dedup` of `s02_t00` (ep-02, 05:41:00–05:44:00): the stray run has no 4624 at all (its 5140/5145 carry SubjectLogonId 999, account `endpoint-02$`, source IP 192.168.50.22); the only `PktDropService` 7045 and 4697 anywhere in the DB are the stray's at 05:42:05; the three ep-02 4624s after it (05:42:45.9, 46.05, 46.12, logons 1741361, 1741492, 1741529) are `svc_backup` from 192.168.50.21. There is no 7045/4697 for the real run: the stray run had already created `PktDropService`, so the real `sc create` found it existing (inference; the error text is not in the logs).
