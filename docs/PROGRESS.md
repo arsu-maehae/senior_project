@@ -84,3 +84,4 @@ A summary block at the end of each big task. Newest at the bottom.
 - x10 C3: docs/research/x10_design_validation.md (per-trial a-i, verdicts: S02 pass, S03 replace 1, S04 full rerun, S06 replace 2, S07 full rerun; S05 quarantine claim supported; 6 owner questions). STOP for owner review.
 - x10 rerun plan: docs/lab/rerun_plan.md (S03 x1, S06 x2, S04 x10, S07 x10, S05 x10, S01 x10; 1-trial acceptance rule: run, ingest, validate, proceed only on no FAIL).
 - x10: decision 031 (criterion f window rules adjusted after the data; no verdict depends on f; nothing scored).
+- x10: decision 032 (clock sync before reruns, offset checks, proposed per-trial correction on development data, tolerance not widened, collector IPs .97/.98/.99).
