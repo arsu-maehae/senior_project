@@ -90,3 +90,4 @@ A summary block at the end of each big task. Newest at the bottom.
 - x10: rerun plan updated for decision 034 (x10_v2 folder for full reruns, trial_11+ for S03/S06, dev/test mapping).
 - x10: decision 035 (S01 design for the validator: manual RDP ep-01 -> ep-02 as svc_backup, from handoff 21.5/21.8, 016).
 - x10: validator S01 design + RDP support (src/x10_validate/rdp.py, notes N16-N20); 66 existing trials re-run, 0 status differences; 92 validator tests pass.
+- x10: decision 036 (S01 includes a dump step on ep-01; type 3 + 3389 within 5 s kept; run RDP by hostname).

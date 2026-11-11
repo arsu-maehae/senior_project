@@ -42,3 +42,5 @@ If the first S01 trial shows no `mstsc.exe` → 3389 on ep-01 (decision 016's ki
 ## Committee answer
 **EN:** We wrote down the S01 design exactly as the handoff states it, a manual RDP hop from EP-01 to EP-02 as svc_backup, so the S01 repeats can be checked with the same pass criteria as the other scenarios.
 **TH:** เราบันทึกการออกแบบ S01 ตามที่ handoff ระบุ คือการเชื่อมต่อ RDP ด้วยมือจาก EP-01 ไป EP-02 ด้วยบัญชี svc_backup เพื่อให้ตรวจรอบ S01 ที่รันซ้ำด้วยเกณฑ์ผ่านเดียวกับสถานการณ์อื่น
+
+Amended by decision 036 (S01 includes a dump step on ep-01; open points 1 and 2 closed; owner 2026-11-11).
