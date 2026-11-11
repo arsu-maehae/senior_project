@@ -23,10 +23,6 @@
     "server_port": 8888,
     "server_confirmed": true,
     "sysmon3_event_uids": [
-      "a3a57752159ec85b96d1793970ac98471968282cba746af8c71280dfaac72dbc",
-      "f982bfd9248cfcb22ca68f5f95f08deaf60df89ef8d8e0e95174b8fd4629c481",
-      "558929f177fd5357acb851d41da11ac024ae5e8555754c640c2eb05299bf981c",
-      "6de32964b5f3af5d8595311eeb3f3599c57e5a64de2484648ad3f33caf973902",
       "342ccc626281710152be1269efba92a4f90c05dc3d3d1d36bea253da241bf7f7",
       "b1dbe5083850cdb8544e899c860076c26525cd1a7a64c490fee36a2c55ab5cbf",
       "5032bd44487cbc021e3cb450d20c7e5c512a30dccc00d8ea8c8387526645ed36",
@@ -55,20 +51,6 @@
     "run_day_rule": "run = the latest splunkd root plus every earlier root reached by walking back while consecutive roots are <= 6 h apart (roots = Sysmon 1 children of the agent splunkd.exe in Users/Public plus pid_match_4688 roots); run days = UTC days from the earliest to the latest of those roots; run_interval start = earliest root of a walk-back with a 30 min gap (trials of one day share a DB) - 60 s, end = last step + 300 s; older roots belong to other runs"
   },
   "steps": [
-    {
-      "step_id": "s06-agent-ep-02-1",
-      "kind": "agent_start",
-      "host": "ep-02",
-      "time_utc": "2026-10-12T07:06:28.532000Z",
-      "account": "admin_it",
-      "status": "confirmed",
-      "source": "agent_tree",
-      "event_uids": [
-        "7b4d1cf6d536f204d685e5ffe739ed963c70c58e66e7083ed769208d7274a451",
-        "6147fc0c0dea49cb741a3fac981a1392de0e55bf5f54db0560f2ad04f99a56d1"
-      ],
-      "note": "splunkd.exe launch (Sysmon 1; 4688 corroborates)"
-    },
     {
       "step_id": "s06-agent-ep-01-2",
       "kind": "agent_start",
@@ -744,13 +726,6 @@
       "record_id": 63354,
       "time_utc": "2026-10-12T08:58:34.151000Z"
     },
-    "558929f177fd5357acb851d41da11ac024ae5e8555754c640c2eb05299bf981c": {
-      "host": "ep-02",
-      "channel": "Sysmon",
-      "event_id": 3,
-      "record_id": 49537,
-      "time_utc": "2026-10-12T07:07:40.385000Z"
-    },
     "5639dcadc2c52306c95813e929d94fd64536dfa86c0b73ed711678d81d85378e": {
       "host": "ep-01",
       "channel": "Sysmon",
@@ -779,13 +754,6 @@
       "record_id": 2345071,
       "time_utc": "2026-10-12T09:03:02.008770Z"
     },
-    "6147fc0c0dea49cb741a3fac981a1392de0e55bf5f54db0560f2ad04f99a56d1": {
-      "host": "ep-02",
-      "channel": "Security",
-      "event_id": 4688,
-      "record_id": 1705666,
-      "time_utc": "2026-10-12T07:06:28.532904Z"
-    },
     "69398193d158af67b2bffcc3fe8abd72bca726d0d92a07a5a96415209b1a05e2": {
       "host": "ep-01",
       "channel": "Sysmon",
@@ -807,13 +775,6 @@
       "record_id": 1708147,
       "time_utc": "2026-10-12T09:03:02.032756Z"
     },
-    "6de32964b5f3af5d8595311eeb3f3599c57e5a64de2484648ad3f33caf973902": {
-      "host": "ep-02",
-      "channel": "Sysmon",
-      "event_id": 3,
-      "record_id": 49551,
-      "time_utc": "2026-10-12T07:08:03.695000Z"
-    },
     "6e29d2c0d5be34669ccc98d185b14243eb1a461fe5447abb866b028634b045a6": {
       "host": "ep-02",
       "channel": "Security",
@@ -834,13 +795,6 @@
       "event_id": 4624,
       "record_id": 1708074,
       "time_utc": "2026-10-12T09:03:01.638190Z"
-    },
-    "7b4d1cf6d536f204d685e5ffe739ed963c70c58e66e7083ed769208d7274a451": {
-      "host": "ep-02",
-      "channel": "Sysmon",
-      "event_id": 1,
-      "record_id": 49473,
-      "time_utc": "2026-10-12T07:06:28.532000Z"
     },
     "8041da830561512df77f142fb9f81657bc831bccf6be99583816de1f0a2bef88": {
       "host": "ep-01",
@@ -869,13 +823,6 @@
       "event_id": 3,
       "record_id": 63845,
       "time_utc": "2026-10-12T09:03:00.415000Z"
-    },
-    "a3a57752159ec85b96d1793970ac98471968282cba746af8c71280dfaac72dbc": {
-      "host": "ep-02",
-      "channel": "Sysmon",
-      "event_id": 3,
-      "record_id": 49113,
-      "time_utc": "2026-10-12T07:03:46.685000Z"
     },
     "a3c6054d229ae2d0879c344b3e90a63f166bc4c821a49311c9fd57432c11422c": {
       "host": "ep-03",
@@ -1009,13 +956,6 @@
       "event_id": 5145,
       "record_id": 1707347,
       "time_utc": "2026-10-12T08:59:36.368304Z"
-    },
-    "f982bfd9248cfcb22ca68f5f95f08deaf60df89ef8d8e0e95174b8fd4629c481": {
-      "host": "ep-02",
-      "channel": "Sysmon",
-      "event_id": 3,
-      "record_id": 49485,
-      "time_utc": "2026-10-12T07:06:29.674000Z"
     },
     "fb7f746a85f8c24453a7373cd248618a9eb06b7d0953677c5300a6d20a710f40": {
       "host": "ep-02",
