@@ -55,10 +55,10 @@ Never tune code or weights on the test set.
 - [ ] 5.7 Lock test keys: git tag `answer-keys-locked` (before T10). Gate (AK-21): every hop in an approved key is `confirmed` or explicitly excluded by the owner; no `unconfirmed` hop may remain; every hop has `role` (attack | benign | background)
 
 ## T6. Gate — depends on: T4 — spec: docs/specs/02_gate.md (create with /stage-spec)
-- [ ] 6.1 Spec from handoff §7.2
+- [~] 6.1 Spec from handoff §7.2 — docs/specs/02_gate.md drafted, attacker-reviewed, owner answers Q1–Q4 applied; waiting for owner approval (decisions 037–039)
 - [ ] 6.2 Implement as specified; trigger list + stats per trial
 - [ ] 6.3 Tests + stage review
-- [ ] 6.4 Trial window clip (decision 026, owner 2026-11-10): the pipeline clips each trial DB to that trial's key window (`agent.run_interval` of its answer key) BEFORE gating and linking, so earlier trials' events and paths are never scored (the 07:05:15 admin_it logon appears in the s05, s06 and s07 DBs; files start 2026-09-17). Acceptance test: an event outside the window never reaches the gate or the stitcher (put the test in the gate spec 02_gate.md, and repeat it for the stitcher in 7.7)
+- [ ] 6.4 Trial window clip (decision 026, owner 2026-11-10; window source amended by decision 039, owner 2026-11-11): the pipeline clips each trial DB to that trial's window BEFORE gating and linking, so earlier trials' events and paths are never scored (the 07:05:15 admin_it logon appears in the s05, s06 and s07 DBs; files start 2026-09-17). The window is computed from the data by the decision 026 rule into `data/trial_windows.csv` (S01: operator-recorded start/end); the pipeline never reads `ground_truth/`; on the six t00 trials it must equal the key's `agent.run_interval`. Until the decision 032 clock correction exists, only t00 trials are gated. Acceptance test: an event outside the window never reaches the gate or the stitcher (tests in 02_gate.md; repeated for the stitcher in 7.7)
 **Done when:** every movement in the development answer keys produces a trigger.
 
 ## T7. Cross-host linking — depends on: T6 — CRITICAL — spec: docs/specs/03_stitch.md
@@ -68,7 +68,7 @@ Never tune code or weights on the test set.
 - [ ] 7.4 Every link records method, candidate count, time gap, confidence
 - [ ] 7.5 Candidate paths from triggers; merge on shared nodes; never drop isolated paths
 - [ ] 7.6 Link accuracy vs development keys
-- [ ] 7.7 Tests + stage review (includes: an event outside the trial's key window never reaches the stitcher)
+- [ ] 7.7 Tests + stage review (includes: an event outside the trial's window never reaches the stitcher as an anchor, trigger or path node; exception, decision 039: a source-host session open logged before the window may be looked up for the identity check only)
 **Done when:** the attack path is among the candidates in every development trial.
 
 ## T8. Sigma labelling — depends on: T4 (alongside T7) — spec: docs/specs/04_label.md
