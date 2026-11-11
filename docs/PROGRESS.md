@@ -92,3 +92,4 @@ A summary block at the end of each big task. Newest at the bottom.
 - x10: validator S01 design + RDP support (src/x10_validate/rdp.py, notes N16-N20); 66 existing trials re-run, 0 status differences; 92 validator tests pass.
 - x10: decision 036 (S01 includes a dump step on ep-01; type 3 + 3389 within 5 s kept; run RDP by hostname).
 - x10: S01 dump step added to the validator (decision 036); tests updated (102 pass); 66-trial regression 0 status differences.
+- x10: decision 036 note: no dump-before-RDP order check in the validator (cross-host clocks); order enforced at scoring after offset correction (decision 032).
