@@ -86,3 +86,4 @@ A summary block at the end of each big task. Newest at the bottom.
 - x10: decision 031 (criterion f window rules adjusted after the data; no verdict depends on f; nothing scored).
 - x10: decision 032 (clock sync before reruns, offset checks, proposed per-trial correction on development data, tolerance not widened, collector IPs .97/.98/.99).
 - x10: decision 033 (S07 cause: path Y reuses path X's svc_backup logon on ep-02 in 11/11 trials; proposed fix and 1-trial acceptance test).
+- x10: decision 034 (full reruns to data/incoming/x10_v2 as fresh t01-t10; old trials archived; partial replacements trial_11+; new t01 = development, t02-t10 = test).
