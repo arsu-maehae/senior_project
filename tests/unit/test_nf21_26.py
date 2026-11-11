@@ -218,6 +218,7 @@ def sysmon_deltas(conn) -> list[float]:
     return sorted(d)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("sc", SCENARIOS)
 def test_db_event_utc_never_null(sc):
     conn = ro(sc)
@@ -231,6 +232,7 @@ def host_deltas(conn, hosts) -> list[float]:
         f"where channel='Sysmon' and host in ({q})")]
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("sc", SCENARIOS)
 def test_db_sysmon_gap_bounded_on_dc01_ep01(sc):
     d = host_deltas(ro(sc), ["dc01", "ep-01"])
@@ -239,6 +241,7 @@ def test_db_sysmon_gap_bounded_on_dc01_ep01(sc):
     assert min(d) >= -0.001 and max(d) <= 60, f"min {min(d):.3f}s max {max(d):.3f}s"
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("sc", SCENARIOS)
 def test_db_sysmon_gap_finite_on_ep02_ep03(sc):
     # Outliers (negative gaps, up to ~59,944 s) on ep-02/ep-03 are a documented data finding (spec NF-23):
@@ -250,6 +253,7 @@ def test_db_sysmon_gap_finite_on_ep02_ep03(sc):
     assert all(math.isfinite(x) for x in host_deltas(conn, ["ep-02", "ep-03"]))
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("sc", SCENARIOS)
 def test_db_4688_has_both_pids(sc):
     bad = ro(sc).execute("select event_uid from events where channel='Security' and event_id=4688 and "
@@ -257,6 +261,7 @@ def test_db_4688_has_both_pids(sc):
     assert not bad, f"4688 rows missing a pid: {bad}"
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("sc", SCENARIOS)
 def test_db_winrm91_clientip_parsed(sc):
     conn = ro(sc)
@@ -266,6 +271,7 @@ def test_db_winrm91_clientip_parsed(sc):
     assert not bad, f"{len(bad)} WinRM 91 rows with clientIP but NULL source_ip/account_name, e.g. {bad[:5]}"
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("sc", SCENARIOS)
 def test_db_winrm91_ipv4_clientip_parsed(sc):
     """Spec NF-21 names only the IPv4 form a.b.c.d."""

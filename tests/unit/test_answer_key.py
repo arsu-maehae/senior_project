@@ -214,6 +214,7 @@ def run_cli(*args) -> int:
 
 # =========================================================================================== contract
 
+@pytest.mark.slow
 @pytest.mark.parametrize("trial", TRIALS)
 def test_top_level_fields_and_constants(real, trial):
     d = draft_of(real, trial)
@@ -232,6 +233,7 @@ def test_top_level_fields_and_constants(real, trial):
     assert d["agent"]["server_port"] == 8888
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("trial", TRIALS)
 def test_hop_fields_and_enums(real, trial):
     d = draft_of(real, trial)
@@ -257,6 +259,7 @@ def test_hop_fields_and_enums(real, trial):
             assert h["protocol"] in {"SMB", "WinRM", "RDP"}
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("trial", TRIALS)
 def test_steps_fields_and_paths(real, trial):
     d = draft_of(real, trial)
@@ -284,6 +287,7 @@ def test_steps_fields_and_paths(real, trial):
             assert h["hop_id"] in listed, f"{h['hop_id']} unconfirmed but not in unconfirmed[]"
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("trial", TRIALS)
 def test_build_is_deterministic_no_rows_lost_or_duplicated(real, trial, tmp_path):
     repo, d1, _ = real[trial] if trial in real else pytest.skip("db missing")
@@ -315,6 +319,7 @@ def all_texts(text: str) -> list[str]:
     return out
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("trial", TRIALS)
 def test_time_account_only_never_confirmed_and_confirmed_names_target(real, trial):
     d = draft_of(real, trial)
@@ -355,6 +360,7 @@ def agent_ancestor_reached(trial: str, uid: str) -> bool:
     return False
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("trial", ["s02_t00", "s04_t00", "s05_t00", "s07_t00"])
 def test_confirmed_hop_agent_commands_are_in_splunkd_tree(real, trial):
     d = draft_of(real, trial)
@@ -447,6 +453,7 @@ def test_ak14_refuses_approved_path(tmp_path):
     assert ok == (tmp_path / "ground_truth" / "drafts" / "s02_t00.yaml").resolve()
 
 
+@pytest.mark.slow
 def test_ak14_cli_build_refuses_approved_and_writes_nothing(tmp_path):
     repo = make_repo(tmp_path, "s02_t00", link=True)
     shutil.copy(db_path("s02_t00"), repo / "data" / "processed" / "evil.sqlite3") if False else None
@@ -460,6 +467,7 @@ def snapshot(root: Path) -> set[str]:
     return {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()}
 
 
+@pytest.mark.slow
 def test_ak14_build_writes_only_the_draft_and_verify_only_out(tmp_path):
     repo = make_repo(tmp_path, "s02_t00", link=True)
     before = snapshot(repo)
@@ -473,6 +481,7 @@ def test_ak14_build_writes_only_the_draft_and_verify_only_out(tmp_path):
     assert snapshot(repo / "ground_truth" / "approved") == set() if (repo / "ground_truth" / "approved").exists() else True
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("trial", TRIALS)
 def test_ak14_db_hash_unchanged_by_build_and_verify(tmp_path, trial):
     p = need_db(trial)
@@ -485,6 +494,7 @@ def test_ak14_db_hash_unchanged_by_build_and_verify(tmp_path, trial):
     assert rep["db_sha256_draft"] == h0 == rep["db_sha256_now"]
 
 
+@pytest.mark.slow
 def test_ak14_db_opened_read_only(tmp_path):
     from answer_key import db
     repo = make_repo(tmp_path, "s02_t00", link=False)
@@ -502,6 +512,7 @@ def stray_ep02_times() -> list[datetime]:
     return [parse(r["event_utc"]) for r in rs]
 
 
+@pytest.mark.slow
 def test_s02_exactly_one_confirmed_hop_svc_backup(real):
     d = draft_of(real, "s02_t00")
     c = confirmed(d)
@@ -513,6 +524,7 @@ def test_s02_exactly_one_confirmed_hop_svc_backup(real):
     assert [p["hop_ids"] for p in d["paths"]] == [[h["hop_id"]]] and d["paths"][0]["role"] == "attack"
 
 
+@pytest.mark.slow
 def test_s02_stray_ep02_run_flagged_and_excluded(real):
     d = draft_of(real, "s02_t00")
     h = confirmed(d)[0]
@@ -540,6 +552,7 @@ def test_s02_stray_ep02_run_flagged_and_excluded(real):
                 and t_of(r) < move], "stray 7045 in hop"
 
 
+@pytest.mark.slow
 def test_s02_stray_dump_not_used_for_identity(real):
     d = draft_of(real, "s02_t00")
     h = confirmed(d)[0]
@@ -559,6 +572,7 @@ def test_s02_stray_dump_not_used_for_identity(real):
 
 # ====================================================================== (5) S04
 
+@pytest.mark.slow
 def test_s04_track_b_confirmed_identity_1(real):
     d = draft_of(real, "s04_t00")
     c = [h for h in confirmed(d) if h["basis"] == "command_names_target"]   # Track A is confirmed too, by manual basis (AK-20)
@@ -576,6 +590,7 @@ def track_a(d: dict) -> dict:
     return cands[0]
 
 
+@pytest.mark.slow
 def test_s04_track_a_confirmed_manual_benign_identity_1_no_conflict(real):
     d = draft_of(real, "s04_t00")
     a = track_a(d)
@@ -589,6 +604,7 @@ def test_s04_track_a_confirmed_manual_benign_identity_1_no_conflict(real):
     assert not any(a["hop_id"] in p["hop_ids"] for p in d["paths"])
 
 
+@pytest.mark.slow
 def test_s04_track_a_session_evidence_recorded_from_data(real):
     d = draft_of(real, "s04_t00")
     a = track_a(d)
@@ -598,6 +614,7 @@ def test_s04_track_a_session_evidence_recorded_from_data(real):
     assert find(a, "splunkd_ancestor")[0] is False            # manual session, not in the splunkd tree (AK-20)
 
 
+@pytest.mark.slow
 def test_s04_window_and_out_of_window_counted_not_failed(real):
     d = draft_of(real, "s04_t00")
     oc = d["window"]["outside_counts"]
@@ -614,6 +631,7 @@ def lsass_dump_rows(trial: str):
                        "AND target_image LIKE '%lsass.exe'")
 
 
+@pytest.mark.slow
 def test_s06_no_dump_everywhere_all_identity_zero(real):
     assert lsass_dump_rows("s06_t00") == [], "data premise (decision 017) changed"
     d = draft_of(real, "s06_t00")
@@ -626,6 +644,7 @@ def test_s06_no_dump_everywhere_all_identity_zero(real):
     assert {h["hop_id"] for h in confirmed(d)} <= benign and benign
 
 
+@pytest.mark.slow
 def test_s06_account_mismatch_recorded(real):
     d = draft_of(real, "s06_t00")
     # fixed expectations: (agent_account, cmd_credential_account, logon_account) per hop (decisions 023/024, AK-02)
@@ -641,6 +660,7 @@ def test_s06_account_mismatch_recorded(real):
         assert {targets.normalise_account(r["account_name"]) for r in l4624} == {logon}, hid
 
 
+@pytest.mark.slow
 def test_s06_inserted_dump_flips_identity_and_raises_decision_conflict(tmp_path):
     need_db("s06_t00")
 
@@ -661,6 +681,7 @@ def test_s06_inserted_dump_flips_identity_and_raises_decision_conflict(tmp_path)
     assert len([s for s in d["steps"] if s["kind"] == "lsass_dump"]) == 1, "pair within 1 s must be one dump"
 
 
+@pytest.mark.slow
 def test_ak18_deleting_track_a_ep01_logons_flips_to_zero_with_decision_conflict(tmp_path):
     need_db("s04_t00")
 
@@ -682,6 +703,7 @@ def hop_service_and_logons(trial: str, h: dict):
     return svc, logons
 
 
+@pytest.mark.slow
 def test_s07_two_hops_distinct_logons_and_services(real):
     d = draft_of(real, "s07_t00")
     c = confirmed(d)
@@ -701,6 +723,7 @@ def test_s07_two_hops_distinct_logons_and_services(real):
     assert len({p["path_id"] for p in d["paths"]}) == 2
 
 
+@pytest.mark.slow
 def test_s07_account_mismatch_and_handoff_account(real):
     d = draft_of(real, "s07_t00")
     assert any(h["account_mismatch"] and "account_mismatch" in h["flags"] for h in d["hops"])
@@ -709,6 +732,7 @@ def test_s07_account_mismatch_and_handoff_account(real):
         assert h["account"] == h["logon_account"]
 
 
+@pytest.mark.slow
 def test_s07_records_which_ep01_dump_per_hop(real):
     d = draft_of(real, "s07_t00")
     for h in confirmed(d):
@@ -721,6 +745,7 @@ def test_s07_records_which_ep01_dump_per_hop(real):
 
 # ====================================================================== (8) S05
 
+@pytest.mark.slow
 def test_s05_hop2_uses_ep02_dump(real):
     d = draft_of(real, "s05_t00")
     c = confirmed(d)
@@ -825,6 +850,7 @@ def appears(draft: dict, uid: str) -> bool:
     return uid in json.dumps({k: v for k, v in draft.items() if k != "event_keys"})
 
 
+@pytest.mark.slow
 def test_akt17_command_naming_target_without_4624_is_attempt(tmp_path):
     need_db("s02_t00")
     holder = {}
@@ -840,6 +866,7 @@ def test_akt17_command_naming_target_without_4624_is_attempt(tmp_path):
     assert len(confirmed(d)) == 1, "real S02 hop must stay the only confirmed hop"
 
 
+@pytest.mark.slow
 def test_akt17_source_own_name_is_not_a_target(tmp_path):
     need_db("s02_t00")
     holder = {}
@@ -854,6 +881,7 @@ def test_akt17_source_own_name_is_not_a_target(tmp_path):
     assert len(confirmed(d)) == 1
 
 
+@pytest.mark.slow
 def test_akt17_two_targets_not_silently_first_picked(tmp_path):
     need_db("s02_t00")
     real_cmd_uid = {}
@@ -870,6 +898,7 @@ def test_akt17_two_targets_not_silently_first_picked(tmp_path):
     assert not [h for h in confirmed(d) if u in h["agent_event_uids"]], "ambiguous two-target command was confirmed"
 
 
+@pytest.mark.slow
 def test_akt17_decode_failure_makes_hop_unconfirmed(tmp_path):
     need_db("s02_t00")
     holder = {}
@@ -899,6 +928,7 @@ def s02_move_time() -> datetime:
     return parse(rs[0]["event_utc"])
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("dump_minus_move_s,identity,within", [(4, 1, True), (0, 1, True), (-4, 1, True), (-6, 1, False), (6, 0, False), (30, 0, False)])
 def test_akt19_move_vs_dump_tolerance(tmp_path, dump_minus_move_s, identity, within):
     uids = s02_dump_uids()
@@ -921,6 +951,7 @@ def test_akt19_move_vs_dump_tolerance(tmp_path, dump_minus_move_s, identity, wit
 
 # ====================================================================== (11) verify.py
 
+@pytest.mark.slow
 def test_verify_real_drafts_pass(real):
     for trial in real:
         rep = cmd_verify(trial, real[trial][0])
@@ -929,6 +960,7 @@ def test_verify_real_drafts_pass(real):
         assert isinstance(rep["out_of_window"], int)
 
 
+@pytest.mark.slow
 def test_verify_negative_control_wrong_existing_uid(real, tmp_path):
     repo, d, _ = real["s02_t00"] if "s02_t00" in real else pytest.skip("db missing")
     d = json.loads(json.dumps(d))
@@ -950,6 +982,7 @@ def test_verify_negative_control_wrong_existing_uid(real, tmp_path):
     assert verify_mod.verify(d3, db_path("s02_t00"))["ok"] is False
 
 
+@pytest.mark.slow
 def test_verify_missing_uid_detected(real):
     d = json.loads(json.dumps(draft_of(real, "s02_t00")))
     confirmed(d)[0]["target_event_uids"].append("0" * 64)
@@ -957,6 +990,7 @@ def test_verify_missing_uid_detected(real):
     assert rep["ok"] is False and any(f["type"] == "missing_uid" for f in rep["failures"])
 
 
+@pytest.mark.slow
 def test_verify_rejects_different_db_sha256(real):
     d = json.loads(json.dumps(draft_of(real, "s02_t00")))
     d["db_sha256"] = "0" * 64
@@ -964,6 +998,7 @@ def test_verify_rejects_different_db_sha256(real):
     assert rep["ok"] is False and any(f["type"] == "db_hash_mismatch" for f in rep["failures"])
 
 
+@pytest.mark.slow
 def test_akt21_reordered_reingest_rejects_old_key(tmp_path):
     repo = make_repo(tmp_path, "s02_t00", link=False)
     cmd_build("s02_t00", repo)
@@ -977,6 +1012,7 @@ def test_akt21_reordered_reingest_rejects_old_key(tmp_path):
     assert rep["ok"] is False and rep["failures"][0]["type"] == "db_hash_mismatch"
 
 
+@pytest.mark.slow
 def test_verify_out_of_window_counted_not_failed(real):
     d = json.loads(json.dumps(draft_of(real, "s02_t00")))
     base = verify_mod.verify(d, db_path("s02_t00"))
@@ -986,6 +1022,7 @@ def test_verify_out_of_window_counted_not_failed(real):
     assert rep["ok"] is True and rep["out_of_window"] > base["out_of_window"]
 
 
+@pytest.mark.slow
 def test_verify_counts_per_kind_match_db(real):
     d = draft_of(real, "s02_t00")
     rep = verify_mod.verify(d, db_path("s02_t00"))
@@ -994,6 +1031,7 @@ def test_verify_counts_per_kind_match_db(real):
         assert n >= 1 and rows("s02_t00", "SELECT count(*) c FROM events_dedup WHERE channel=? AND event_id=?", (ch, int(eid)))[0]["c"] >= 1
 
 
+@pytest.mark.slow
 def test_verify_every_uid_in_every_real_draft_exists(real):
     for trial, (repo, d, _) in real.items():
         refs = verify_mod.uids_with_context(d)
@@ -1005,6 +1043,7 @@ def test_verify_every_uid_in_every_real_draft_exists(real):
 
 # ====================================================================== (12) depth-3 chain, 4104
 
+@pytest.mark.slow
 def test_akt16_depth3_agent_chain_found(tmp_path):
     need_db("s02_t00")
     guids = {"w1": "feedface-0001-6ab4-0001-000000002200", "w2": "feedface-0002-6ab4-0001-000000002200"}
@@ -1028,6 +1067,7 @@ def test_akt16_depth3_agent_chain_found(tmp_path):
     assert c[0]["basis"] == "command_names_target" and (c[0]["source_host"], c[0]["target_host"]) == ("ep-01", "ep-02")
 
 
+@pytest.mark.slow
 def test_akt16_4104_alone_never_confirms(tmp_path):
     need_db("s02_t00")
 
@@ -1061,6 +1101,7 @@ def independent_dump_groups(trial: str) -> list[list[sqlite3.Row]]:
     return groups
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("trial", ["s02_t00", "s04_t00", "s05_t00", "s07_t00"])
 def test_ak10_one_dump_step_per_pair_and_only_rundll32(real, trial):
     d = draft_of(real, trial)
@@ -1076,6 +1117,7 @@ def test_ak10_one_dump_step_per_pair_and_only_rundll32(real, trial):
         assert s["host"] and s["time_utc"]
 
 
+@pytest.mark.slow
 def test_akt10_single_surviving_record_still_counts(tmp_path):
     need_db("s02_t00")
     uids = s02_dump_uids()
@@ -1090,6 +1132,7 @@ def test_akt10_single_surviving_record_still_counts(tmp_path):
     assert confirmed(d)[0]["identity_expected"] == 1
 
 
+@pytest.mark.slow
 def test_akt10b_non_user_lsass_access_never_a_dump(real):
     for trial in ("s02_t00", "s06_t00"):
         d = draft_of(real, trial)
@@ -1129,6 +1172,7 @@ KNOWN_IDENTITY = {"s02-h1": 1, "s03-h1": 1, "s04-A-h1": 1, "s04-B-h1": 1, "s04-t
                   "s06-winrm-1": 0, "s06-winrm-2": 0, "s06-smb-1": 0, "s06-t1": 0, "s07-h-x": 1, "s07-h-y": 1, "s07-t1": 0}
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("trial", TRIALS)
 def test_ak07_hop_account_and_source_host_from_target_4624(real, trial):
     d = draft_of(real, trial)
@@ -1147,6 +1191,7 @@ def test_ak07_hop_account_and_source_host_from_target_4624(real, trial):
         assert h["identity_expected"] == independent_identity(trial, h["source_host"], h["logon_account"], move), h["hop_id"]
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("trial", ["s02_t00", "s04_t00", "s05_t00", "s07_t00"])
 def test_ak07_open_sessions_belong_to_moving_account_on_source_host(real, trial):
     d = draft_of(real, trial)
@@ -1169,6 +1214,7 @@ def test_ak07_open_sessions_belong_to_moving_account_on_source_host(real, trial)
 
 # ====================================================================== AK-12 window
 
+@pytest.mark.slow
 @pytest.mark.parametrize("trial", TRIALS)
 def test_ak12_window_from_all_non_agent_start_steps(real, trial):
     d = draft_of(real, trial)
@@ -1215,6 +1261,7 @@ def _assert_structurally_masked(text: str) -> None:
     assert not re.search(r"(?i)\$env:[A-Za-z0-9_]*PW", text)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("trial", TRIALS)
 def test_drafts_never_contain_lab_password(real, trial):
     text = (real[trial][0] / "ground_truth" / "drafts" / f"{trial}.yaml").read_text(encoding="utf-8") if trial in real else pytest.skip("db missing")
@@ -1239,6 +1286,7 @@ def test_committed_drafts_in_repo_also_mask_password():
             assert REAL_PASSWORD not in text, p.name
 
 
+@pytest.mark.slow
 def test_password_premise_exists_in_a_db(real):
     """Control: if no DB command line carries a /user: credential, the masking tests prove nothing."""
     hit = False
@@ -1249,6 +1297,7 @@ def test_password_premise_exists_in_a_db(real):
         pytest.skip("no command line with /user: credentials in these DBs; masking checked on unit strings only")
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("trial", ["s04_t00", "s06_t00"])
 def test_agent_commands_masked_when_password_in_db(real, trial):
     d = draft_of(real, trial)
@@ -1264,6 +1313,7 @@ def test_agent_commands_masked_when_password_in_db(real, trial):
 
 # ====================================================================== decisions 021-025: pinned expectations on the real drafts
 
+@pytest.mark.slow
 def test_dec021_s04_track_a_source_session_is_desktop_0xd6398(real):
     d = draft_of(real, "s04_t00")
     a = hop_by_id(d, "s04-A-h1")
@@ -1281,6 +1331,7 @@ def test_dec021_s04_track_a_source_session_is_desktop_0xd6398(real):
     assert [p["hop_ids"] for p in d["benign_paths"]] == [["s04-A-h1"]]
 
 
+@pytest.mark.slow
 def test_dec022_s05_hop2_ep02_to_ep03_tier_a_uses_ep02_dump(real):
     d = draft_of(real, "s05_t00")
     h = hop_by_id(d, "s05-h2")
@@ -1293,6 +1344,7 @@ def test_dec022_s05_hop2_ep02_to_ep03_tier_a_uses_ep02_dump(real):
     assert [p["hop_ids"] for p in d["paths"]] == [["s05-h1", "s05-h2"]]
 
 
+@pytest.mark.slow
 def test_dec023_s07_two_hops_fixed_values(real):
     d = draft_of(real, "s07_t00")
     x, y = hop_by_id(d, "s07-h-x"), hop_by_id(d, "s07-h-y")
@@ -1308,6 +1360,7 @@ def test_dec023_s07_two_hops_fixed_values(real):
     assert y["account_mismatch"] is True and "account_mismatch" in y["flags"]
 
 
+@pytest.mark.slow
 def test_dec024_s06_all_hops_identity_zero_and_all_in_benign_paths(real):
     d = draft_of(real, "s06_t00")
     assert {h["hop_id"] for h in d["hops"]} == {"s06-winrm-1", "s06-winrm-2", "s06-smb-1", "s06-t1"}
@@ -1325,6 +1378,7 @@ def test_dec024_s06_all_hops_identity_zero_and_all_in_benign_paths(real):
     assert not (set(w1["related_logon_uids"]) & set(w1["target_event_uids"]))
 
 
+@pytest.mark.slow
 def test_dec025_s03_dedicated_winrm_hop(real):
     d = draft_of(real, "s03_t00")
     h = hop_by_id(d, "s03-h1")
@@ -1339,6 +1393,7 @@ def test_dec025_s03_dedicated_winrm_hop(real):
     assert l4624 and {r["source_ip"] for r in l4624} == {"192.168.50.21"} and {r["host"] for r in l4624} == {"ep-03"}
 
 
+@pytest.mark.slow
 def test_s02_stray_target_side_events_listed_and_not_in_hop(real):
     d = draft_of(real, "s02_t00")
     h = hop_by_id(d, "s02-h1")
@@ -1352,6 +1407,7 @@ def test_s02_stray_target_side_events_listed_and_not_in_hop(real):
     assert not (set(stray_ids) & set(h["target_event_uids"]))
 
 
+@pytest.mark.slow
 def test_ak17_leftover_hops_only_inside_run_interval(real):
     for trial in real:
         d = draft_of(real, trial)
@@ -1370,6 +1426,7 @@ def test_ak17_leftover_hops_only_inside_run_interval(real):
         assert h["basis"] == "time_account_only" and h["status"] == "unconfirmed" and h["account"] == "admin_it"
 
 
+@pytest.mark.slow
 def test_ak18_system_dumps_ignored_lists_s02_ep02_system_dump(real):
     d = draft_of(real, "s02_t00")
     db_sys = {r["event_uid"] for r in rows("s02_t00", "SELECT event_uid FROM events_dedup WHERE channel='Sysmon' AND event_id=10 AND host='ep-02' "
@@ -1388,6 +1445,7 @@ def s02_hop(d: dict) -> dict:
     return hop_by_id(d, "s02-h1")
 
 
+@pytest.mark.slow
 def test_ak18_logoff_with_reused_id_before_logon_does_not_close(tmp_path):
     need_db("s02_t00")
     assert rows("s02_t00", "SELECT 1 FROM events_dedup WHERE host='ep-01' AND event_id=4624 AND target_logon_id=? AND account_name='svc_backup'", (SESSION_ID,))
@@ -1401,6 +1459,7 @@ def test_ak18_logoff_with_reused_id_before_logon_does_not_close(tmp_path):
     assert h["identity_expected"] == 1 and "0x25cac3" in h["identity_basis"]["open_session_ids"]
 
 
+@pytest.mark.slow
 def test_ak18_logoff_after_logon_before_dump_closes_session(tmp_path):
     need_db("s02_t00")
 
@@ -1414,6 +1473,7 @@ def test_ak18_logoff_after_logon_before_dump_closes_session(tmp_path):
     assert h["identity_expected"] == 0 and h["identity_basis"]["identity_if_unknown_counted"] == 0
 
 
+@pytest.mark.slow
 def test_ak18_dropping_the_4634_of_a_closed_session_counts_it_open(tmp_path):
     need_db("s02_t00")
     closed_id = 2475862     # svc_backup type 4 on ep-01, logon 05:35:51.23, 4634 at 05:35:51.26 (before the 05:42 dump)
@@ -1430,6 +1490,7 @@ def test_ak18_dropping_the_4634_of_a_closed_session_counts_it_open(tmp_path):
     assert s02_hop(d)["identity_expected"] == 1 and ib["identity_if_unknown_counted"] == 1
 
 
+@pytest.mark.slow
 def test_ak18_boot_marker_makes_session_end_unknown_not_counted(tmp_path):
     need_db("s02_t00")
 
@@ -1452,6 +1513,7 @@ def retarget_source_ip(con, new_ip: str):
                 "AND event_utc BETWEEN '2026-09-24T05:42:30' AND '2026-09-24T05:43:00'", (new_ip,))
 
 
+@pytest.mark.slow
 def test_source_host_conflict_other_endpoint_ip(tmp_path):
     need_db("s02_t00")
     _, d = synth(tmp_path, "s02_t00", lambda con: retarget_source_ip(con, "192.168.50.23"))
@@ -1462,6 +1524,7 @@ def test_source_host_conflict_other_endpoint_ip(tmp_path):
     assert h["identity_expected"] == 0                           # ep-03 has no dump in S02
 
 
+@pytest.mark.slow
 def test_source_host_conflict_unmapped_ip_gives_null_source(tmp_path):
     need_db("s02_t00")
     _, d = synth(tmp_path, "s02_t00", lambda con: retarget_source_ip(con, "192.168.50.199"))
@@ -1472,6 +1535,7 @@ def test_source_host_conflict_unmapped_ip_gives_null_source(tmp_path):
 
 # ====================================================================== AKT-03 two services of one name (synthetic)
 
+@pytest.mark.slow
 def test_akt03_two_services_same_name_never_silent_first_pick(tmp_path):
     need_db("s07_t00")
     holder = {}
@@ -1514,6 +1578,7 @@ def test_is_splunkd_requires_exact_agent_path():
         assert not agent_tree.is_splunkd(bad), bad
 
 
+@pytest.mark.slow
 def test_child_of_other_splunkd_path_is_not_an_agent_command(tmp_path):
     need_db("s02_t00")
     holder = {}
@@ -1536,6 +1601,7 @@ def test_child_of_other_splunkd_path_is_not_an_agent_command(tmp_path):
 
 # ====================================================================== flags: clock_order_disagree, midnight
 
+@pytest.mark.slow
 def test_clock_order_disagree_is_an_allowed_flag_and_is_raised(tmp_path):
     assert "clock_order_disagree" in ALLOWED_FLAGS
     need_db("s02_t00")
@@ -1559,6 +1625,7 @@ def test_clock_order_disagree_is_an_allowed_flag_and_is_raised(tmp_path):
     assert "clock_order_disagree" in h["flags"] and set(h["flags"]) <= ALLOWED_FLAGS
 
 
+@pytest.mark.slow
 def test_run_day_spans_midnight_flag(tmp_path):
     need_db("s02_t00")
 
@@ -1574,6 +1641,7 @@ def test_run_day_spans_midnight_flag(tmp_path):
 
 # ====================================================================== verify: wrong_event_type, logon_uids
 
+@pytest.mark.slow
 def test_verify_rejects_uid_of_wrong_event_type(real):
     d = json.loads(json.dumps(draft_of(real, "s02_t00")))
     h = hop_by_id(d, "s02-h1")
@@ -1588,6 +1656,7 @@ def test_verify_rejects_uid_of_wrong_event_type(real):
     assert not [f for f in rep["failures"] if f["type"] != "wrong_event_type"]
 
 
+@pytest.mark.slow
 def test_verify_checks_logon_uid_lists(real):
     d = json.loads(json.dumps(draft_of(real, "s06_t00")))
     smb = hop_by_id(d, "s06-smb-1")
@@ -1640,6 +1709,7 @@ def full(tmp_path_factory):
 
 # ---- AK-19 role
 
+@pytest.mark.slow
 @pytest.mark.parametrize("trial", TRIALS)
 def test_ak19_every_hop_has_role_in_vocabulary(real, trial):
     d = draft_of(real, trial)
@@ -1648,12 +1718,14 @@ def test_ak19_every_hop_has_role_in_vocabulary(real, trial):
         assert h.get("role") in {"attack", "benign", "background"}, (trial, h["hop_id"], h.get("role"))
 
 
+@pytest.mark.slow
 def test_ak19_role_is_separate_from_status(real):
     d = draft_of(real, "s04_t00")
     pairs = {(h["role"], h["status"]) for h in d["hops"]}
     assert ("benign", "confirmed") in pairs and ("background", "unconfirmed") in pairs     # not the same axis
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("trial,hid", sorted(BACKGROUND_HOPS.items()))
 def test_ak19_leftover_hops_are_background_unconfirmed_time_account_only(real, trial, hid):
     h = hop_by_id(draft_of(real, trial), hid)
@@ -1661,6 +1733,7 @@ def test_ak19_leftover_hops_are_background_unconfirmed_time_account_only(real, t
     assert h["agent_event_uids"] == []
 
 
+@pytest.mark.slow
 def test_ak19_s06_named_hops_benign_leftover_background(real):
     d = draft_of(real, "s06_t00")
     for h in d["hops"]:
@@ -1668,6 +1741,7 @@ def test_ak19_s06_named_hops_benign_leftover_background(real):
     assert {h["hop_id"] for h in d["hops"] if h["role"] == "benign"} == {"s06-winrm-1", "s06-winrm-2", "s06-smb-1"}
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("trial,ids", [("s02_t00", ["s02-h1"]), ("s03_t00", ["s03-h1"]), ("s05_t00", ["s05-h1", "s05-h2"]),
                                        ("s07_t00", ["s07-h-x", "s07-h-y"])])
 def test_ak19_attack_hops_role_attack(real, trial, ids):
@@ -1676,6 +1750,7 @@ def test_ak19_attack_hops_role_attack(real, trial, ids):
         assert hop_by_id(d, hid)["role"] == "attack", hid
 
 
+@pytest.mark.slow
 def test_ak19_s04_roles(real):
     d = draft_of(real, "s04_t00")
     assert hop_by_id(d, "s04-A-h1")["role"] == "benign"
@@ -1683,6 +1758,7 @@ def test_ak19_s04_roles(real):
     assert any(p["role"] == "attack_pair" and p["hop_ids"] == ["s04-B-h1"] for p in d["paths"])
 
 
+@pytest.mark.slow
 def test_ak19_no_negative_hop_sits_on_an_attack_path(real):
     """Evaluation counts benign + background as negatives: none may be on paths[]."""
     for trial in real:
@@ -1702,6 +1778,7 @@ def _intended_with(tmp_path, monkeypatch, edit) -> None:
     monkeypatch.setattr(m, "INTENDED", alt)
 
 
+@pytest.mark.slow
 def test_ak19_build_fails_when_a_hop_has_no_valid_role(tmp_path, monkeypatch):
     """Synthetic: an intended step whose role is outside the vocabulary must make the build fail, not write a draft."""
     need_db("s02_t00")
@@ -1726,6 +1803,7 @@ def track_a_command_uids() -> set[str]:
                                                     "host='ep-01' AND session_id=877464 AND command_line LIKE '%192.168.50.22%'")}
 
 
+@pytest.mark.slow
 def test_ak20_s04_track_a_pinned(real):
     d = draft_of(real, "s04_t00")
     a = hop_by_id(d, "s04-A-h1")
@@ -1739,6 +1817,7 @@ def test_ak20_s04_track_a_pinned(real):
     assert [s for s in d["steps"] if s["step_id"] == "s04-A-h1-move"][0]["status"] == "confirmed"
 
 
+@pytest.mark.slow
 def test_ak20_s04_track_a_commands_matched_by_logon_id_and_not_in_splunkd_tree(real):
     d = draft_of(real, "s04_t00")
     a = hop_by_id(d, "s04-A-h1")
@@ -1757,12 +1836,14 @@ def test_ak20_s04_track_a_commands_matched_by_logon_id_and_not_in_splunkd_tree(r
     assert find(a, "splunkd_ancestor") == [False] and find(a, "session_id") == ["0xd6398"]
 
 
+@pytest.mark.slow
 def test_ak20_s04_track_b_stays_agent_command_basis(real):
     b = hop_by_id(draft_of(real, "s04_t00"), "s04-B-h1")
     assert (b["basis"], b["role"], b["status"]) == ("command_names_target", "attack", "confirmed")
     assert b["agent_account"] == "svc_backup"
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("trial", TRIALS)
 def test_ak20_manual_basis_only_with_step_match_and_confirmed(real, trial):
     d = draft_of(real, trial)
@@ -1776,6 +1857,7 @@ def test_ak20_manual_basis_only_with_step_match_and_confirmed(real, trial):
     assert manual == (["s04-A-h1"] if trial == "s04_t00" else [])
 
 
+@pytest.mark.slow
 def test_ak20_manual_command_matching_no_intended_step_is_downgraded(tmp_path, monkeypatch):
     """Synthetic: the Track A step now targets ep-03, so the manual command naming ep-02 matches no step."""
     need_db("s04_t00")
@@ -1801,6 +1883,7 @@ def test_ak20_manual_command_matching_no_intended_step_is_downgraded(tmp_path, m
     assert hop_by_id(d, "s04-B-h1")["status"] == "confirmed"                                 # Track B unaffected
 
 
+@pytest.mark.slow
 def test_ak20_manual_command_in_agent_tree_session_is_not_manual_basis(tmp_path):
     """Synthetic: re-parent the Track A session's powershell.exe under admin_it's splunkd; its commands are agent-tree now."""
     need_db("s04_t00")
@@ -1843,6 +1926,7 @@ def _blockers(rep) -> list[str]:
     return sorted(b["hop_id"] for b in rep["lock_blockers"])
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("trial", TRIALS)
 def test_ak21_verify_json_lock_fields_on_real_drafts(real, trial):
     repo = real[trial][0] if trial in real else pytest.skip("db missing")
@@ -1870,6 +1954,7 @@ def test_ak21_owner_file_covers_exactly_the_four_background_hops():
             assert e["reviewed"] is True and e["excluded"] is False and e["excluded_reason"] is None
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("trial", TRIALS)
 def test_ak21_exclusion_fields_present_with_defaults_on_every_hop(real, trial):
     for h in draft_of(real, trial)["hops"]:
@@ -1881,12 +1966,14 @@ def test_ak21_exclusion_fields_present_with_defaults_on_every_hop(real, trial):
             assert h["reviewed_note"] is None
 
 
+@pytest.mark.slow
 def test_ak21_clearing_reviewed_on_background_hop_blocks(real):
     assert _verify_copy(real, "s04_t00", lambda d: None)["lock_ready"] is True
     rep = _verify_copy(real, "s04_t00", lambda d: hop_by_id(d, "s04-t1").update(reviewed=False))
     assert rep["lock_ready"] is False and _blockers(rep) == ["s04-t1"] and rep["lock_blockers"][0]["reason"]
 
 
+@pytest.mark.slow
 def test_ak21_confirmed_attack_hop_changed_to_unconfirmed_blocks(real):
     rep = _verify_copy(real, "s02_t00", lambda d: d["hops"][0].update(status="unconfirmed"))
     assert d_role(real, "s02_t00", "s02-h1") == "attack"
@@ -1897,12 +1984,14 @@ def d_role(real, trial, hid):
     return hop_by_id(draft_of(real, trial), hid)["role"]
 
 
+@pytest.mark.slow
 def test_ak21_unconfirmed_benign_hop_blocks(real):
     assert d_role(real, "s06_t00", "s06-winrm-1") == "benign"
     rep = _verify_copy(real, "s06_t00", lambda d: hop_by_id(d, "s06-winrm-1").update(status="unconfirmed"))
     assert rep["lock_ready"] is False and _blockers(rep) == ["s06-winrm-1"]
 
 
+@pytest.mark.slow
 def test_ak21_excluded_without_reason_blocks_and_with_reason_stops_blocking(real):
     for reason in (None, "", "   "):
         rep = _verify_copy(real, "s02_t00", lambda d: d["hops"][0].update(excluded=True, excluded_reason=reason))
@@ -1911,6 +2000,7 @@ def test_ak21_excluded_without_reason_blocks_and_with_reason_stops_blocking(real
     assert rep["lock_ready"] is True and rep["lock_blockers"] == []
 
 
+@pytest.mark.slow
 def test_ak21_excluded_hop_skips_status_and_review_rules(real):
     def mut(d):
         hop_by_id(d, "s02-h1").update(status="unconfirmed", excluded=True, excluded_reason="owner")
@@ -1921,6 +2011,7 @@ def test_ak21_excluded_hop_skips_status_and_review_rules(real):
     assert _verify_copy(real, "s04_t00", mut_bg)["lock_ready"] is True
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("excluded", [False, True])
 def test_ak21_hop_without_valid_role_blocks_lock_even_if_excluded(real, excluded):
     def mut(d):
@@ -1930,11 +2021,13 @@ def test_ak21_hop_without_valid_role_blocks_lock_even_if_excluded(real, excluded
     assert rep["lock_ready"] is False and _blockers(rep) == ["s02-h1"]
 
 
+@pytest.mark.slow
 def test_ak21_invalid_role_value_blocks(real):
     rep = _verify_copy(real, "s02_t00", lambda d: d["hops"][0].update(role="bogus"))
     assert rep["lock_ready"] is False and _blockers(rep) == ["s02-h1"]
 
 
+@pytest.mark.slow
 def test_ak21_lock_gate_is_informational_verify_still_ok(real):
     d = json.loads(json.dumps(draft_of(real, "s04_t00")))
     hop_by_id(d, "s04-t1")["reviewed"] = False
@@ -1943,6 +2036,7 @@ def test_ak21_lock_gate_is_informational_verify_still_ok(real):
     assert cmd_verify("s04_t00", real["s04_t00"][0])["ok"] is True
 
 
+@pytest.mark.slow
 def test_ak21_owner_entry_for_missing_hop_raises(tmp_path, monkeypatch):
     need_db("s04_t00")
     import answer_key.__main__ as m
@@ -1955,6 +2049,7 @@ def test_ak21_owner_entry_for_missing_hop_raises(tmp_path, monkeypatch):
     assert not (repo / "ground_truth" / "drafts" / "s04_t00.yaml").exists()
 
 
+@pytest.mark.slow
 def test_ak21_build_deterministic_apart_from_owner_file(tmp_path, monkeypatch):
     need_db("s04_t00")
     import answer_key.__main__ as m
@@ -2001,6 +2096,7 @@ def test_ak22_manifest_span_matches_manifest_csv_committed_draft(trial):
     assert ms.get("files") == n
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("trial", TRIALS)
 def test_ak22_manifest_span_matches_manifest_csv_fresh_build(full, trial):
     root, built = full
@@ -2074,6 +2170,7 @@ def test_ak22_s05_t1_shared_with_s06_and_s07_committed_draft():
     assert h["shared_with_trials"] == ["s06_t00", "s07_t00"] and "shared_with_trial" in h["flags"]
 
 
+@pytest.mark.slow
 def test_ak22_s05_t1_shared_fresh_build_and_independent_content_check(full):
     root, built = full
     if not {"s05_t00", "s06_t00", "s07_t00"} <= set(built):
@@ -2091,6 +2188,7 @@ def test_ak22_s05_t1_shared_fresh_build_and_independent_content_check(full):
                 assert hh["role"] == "background", "only background hops are flagged as shared"
 
 
+@pytest.mark.slow
 def test_ak22_overlap_json_lists_shared_background_hop(full):
     root, built = full
     if not {"s05_t00", "s06_t00", "s07_t00"} <= set(built):
@@ -2120,6 +2218,7 @@ def test_ak14_check_overlap_writes_nothing_under_approved(tmp_path):
         {"ground_truth/approved/keep.txt"} | {f"ground_truth/drafts/{t}.yaml" for t in TRIALS if (DRAFTS / f"{t}.yaml").exists()}
 
 
+@pytest.mark.slow
 def test_ak14_safe_draft_path_refuses_approved_and_verify_leaves_approved_empty(real, tmp_path):
     (tmp_path / "ground_truth" / "approved").mkdir(parents=True)
     (tmp_path / "ground_truth" / "drafts").mkdir(parents=True)

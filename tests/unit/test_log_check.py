@@ -1154,6 +1154,7 @@ def _has_dump(out, host: str, when: str, day: str) -> bool:
     return any(h == host and abs((t - target).total_seconds()) <= 1.5 for h, t in _dump_times(out))
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("name", ["s02", "s04", "s05"])
 def test_real_reports_exist_lc01_totals_and_lc04b_zero(real_runs, name):
     out, db = real_runs[name]
@@ -1170,6 +1171,7 @@ def test_real_reports_exist_lc01_totals_and_lc04b_zero(real_runs, name):
     assert out.report["checks"]["LC-05"]["status"] == "NOT_MEASURABLE" or name == "s04"
 
 
+@pytest.mark.slow
 def test_real_lc08_dumps_at_spec_times(real_runs):
     assert _has_dump(real_runs["s02"][0], "ep-01", "05:42:00", "2026-09-24")
     assert _has_dump(real_runs["s04"][0], "ep-01", "10:56:56", "2026-09-24")
@@ -1177,6 +1179,7 @@ def test_real_lc08_dumps_at_spec_times(real_runs):
     assert _has_dump(real_runs["s05"][0], "ep-02", "07:11:49", "2026-10-12")
 
 
+@pytest.mark.slow
 def test_real_lct13_s02_ep02_dump_as_system(real_runs):
     out = real_runs["s02"][0]
     assert _has_dump(out, "ep-02", "05:41:32", "2026-09-24")
@@ -1184,6 +1187,7 @@ def test_real_lct13_s02_ep02_dump_as_system(real_runs):
     assert d["sessions"], "sessions must be listed by host even if the dumper is SYSTEM"
 
 
+@pytest.mark.slow
 def test_real_s04_two_tracks_two_before_one_after(real_runs):
     out = real_runs["s04"][0]
     track = [h for h in lc04_hops(out) if h["target_host"] == "ep-02" and h["source_ip"] == "192.168.50.21"
@@ -1200,6 +1204,7 @@ def test_real_s04_two_tracks_two_before_one_after(real_runs):
     assert any(c["session_id"] == "0xd6398" for c in adm["candidates"])
 
 
+@pytest.mark.slow
 def test_real_s04a_admin_it_open_at_dump(real_runs):
     out = real_runs["s04"][0]
     dump = [d for d in out.report["checks"]["LC-08"]["result"]["dumps"]
@@ -1210,6 +1215,7 @@ def test_real_s04a_admin_it_open_at_dump(real_runs):
     assert ans.lower().startswith("yes")
 
 
+@pytest.mark.slow
 def test_real_s02_svc_backup_hop_candidate_0x25cac3(real_runs):
     out = real_runs["s02"][0]
     hits = [r for r in csv_rows(out) if r["account_name"] == "svc_backup" and r["candidate_session_id"] == "0x25cac3"]
@@ -1217,6 +1223,7 @@ def test_real_s02_svc_backup_hop_candidate_0x25cac3(real_runs):
     assert all(r["candidate_count_sessions_after_account"] != "0" for r in hits)
 
 
+@pytest.mark.slow
 def test_real_s05_has_smb_and_winrm_hops_and_no_password_leak(real_runs):
     out = real_runs["s05"][0]
     protos = {h["protocol"] for h in lc04_hops(out) if h["account_name"] in ("svc_backup", "admin_it", "svc_sql")}
@@ -1313,6 +1320,7 @@ def test_lc04h_not_measurable_for_reference_trial(tmp_path):
     assert out.report["checks"]["LC-04h"]["status"] == "NOT_MEASURABLE"
 
 
+@pytest.mark.slow
 def test_real_lc04h_s05_winrm_hop_has_source_4648_0x1c63d2(real_runs):
     out = real_runs["s05"][0]
     rows = [r for r in _src4648(out) if r["protocol"] == "WinRM"]
@@ -1321,6 +1329,7 @@ def test_real_lc04h_s05_winrm_hop_has_source_4648_0x1c63d2(real_runs):
     assert out.report["checks"]["LC-04h"]["status"] == "INFO"
 
 
+@pytest.mark.slow
 def test_real_lc04h_s04_smb_hops_have_no_source_4648(real_runs):
     out = real_runs["s04"][0]
     assert [r for r in _src4648(out) if r["protocol"] == "SMB"] == []

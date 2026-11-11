@@ -737,12 +737,14 @@ def _real(trial: str):
     return cli.validate_one(REPO, trial, ingest)
 
 
+@pytest.mark.slow
 def test_real_s02_t01_has_no_fail():
     res = _real("s02_t01")
     fails = [c for c in "abcdefgh" if st(res, c) == "FAIL"]
     assert not fails, {c: res["criteria"][c]["evidence"].get("reason") for c in fails}
 
 
+@pytest.mark.slow
 def test_real_s02_t03_a_warn_and_g_na():
     res = _real("s02_t03")
     assert st(res, "a") == "WARN", res["criteria"]["a"]
