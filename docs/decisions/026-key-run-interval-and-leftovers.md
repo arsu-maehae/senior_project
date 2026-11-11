@@ -18,6 +18,8 @@ Option C. Run days (for the agent tree, dumps and agent network) come from a 6-h
 ## Amendment (owner, 2026-11-10)
 Keep the 30-minute gap for t00. `data/manifest.csv` has `first_event_utc` and `last_event_utc` per file, which are export spans, not trial start and end times; they are used as an outer clip of the run interval and recorded as `agent.manifest_span`. A check (`python -m answer_key check-overlap`, `out/answer_key/overlap.md`) flags any pair of trials whose run intervals overlap and marks a background hop `shared_with_trial` when the same event content exists in another trial's DB (the 07:05:15 admin_it logon is in s05, s06 and s07). Recheck on the ×10 trials.
 
+**Amendment (owner, 2026-11-12):** the walk-back gap is "30 minutes or less (≤ 1800 s)", matching the shared code (`answer_key.agent_tree.run_start_ts`, `TRIAL_GAP_S`) and spec 02_gate §2.1.
+
 ## Consequences
 Development leftovers: s04-t1 (10:55:28), s05-t1 (07:05:15), s06-t1 (08:59:36), s07-t1 (09:11:08), all admin_it ep-01 → ep-02 NTLM, with no agent command naming the target. Whether they are attack, benign or noise is the owner's open question (spec 07 section 8). The key window is used only to report where events fall (AK-12). Logons from a neighbouring trial that fall inside a run interval cannot be separated by the key alone.
 

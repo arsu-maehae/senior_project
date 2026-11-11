@@ -60,20 +60,6 @@
   },
   "steps": [
     {
-      "step_id": "s07-agent-ep-02-1",
-      "kind": "agent_start",
-      "host": "ep-02",
-      "time_utc": "2026-10-12T07:06:28.532000Z",
-      "account": "admin_it",
-      "status": "confirmed",
-      "source": "agent_tree",
-      "event_uids": [
-        "a765fe8d86bd60e989c3b7d0dcb1378d8ef7e82efca898e17ac5fc24d900182f",
-        "8b4a334a93862af93aad2b2b3593bacdcaf3866e1f993b638736d008a3064273"
-      ],
-      "note": "splunkd.exe launch (Sysmon 1; 4688 corroborates)"
-    },
-    {
       "step_id": "s07-agent-ep-01-2",
       "kind": "agent_start",
       "host": "ep-01",
@@ -861,13 +847,6 @@
       "record_id": 63947,
       "time_utc": "2026-10-12T09:17:06.238000Z"
     },
-    "8b4a334a93862af93aad2b2b3593bacdcaf3866e1f993b638736d008a3064273": {
-      "host": "ep-02",
-      "channel": "Security",
-      "event_id": 4688,
-      "record_id": 1705666,
-      "time_utc": "2026-10-12T07:06:28.532904Z"
-    },
     "9744ca66d21357a641c044debfc6e53cf11fda33b51fd789de35677b5f09c31e": {
       "host": "ep-02",
       "channel": "Sysmon",
@@ -916,13 +895,6 @@
       "event_id": 4688,
       "record_id": 2339387,
       "time_utc": "2026-10-12T09:10:40.254135Z"
-    },
-    "a765fe8d86bd60e989c3b7d0dcb1378d8ef7e82efca898e17ac5fc24d900182f": {
-      "host": "ep-02",
-      "channel": "Sysmon",
-      "event_id": 1,
-      "record_id": 49473,
-      "time_utc": "2026-10-12T07:06:28.532000Z"
     },
     "a82e79c4f31aa8a0f4b64e54c5b8f3c85d1a5631e2d6fdfb6c78e4e7e0d71d01": {
       "host": "ep-02",
