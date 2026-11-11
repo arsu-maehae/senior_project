@@ -702,10 +702,12 @@ def test_apply_cross_does_not_mutate_input_and_keeps_all_rows():
     assert [a, b] == snap and len(out) == 2 and [r["trial_id"] for r in out] == ["s02_t01", "s02_t02"]
 
 
-def test_design_for_s01_matches_035_and_s08_still_rejected():
+def test_design_for_s01_matches_035_036_and_s08_still_rejected():
     d = design_for("s01")
     assert tuple(d.path_hosts) == ("ep-01", "ep-02")
-    assert tuple(d.dumps) == ()
+    assert len(d.dumps) == 1                                   # decision 036: one dump step
+    dd = d.dumps[0]
+    assert (dd.step_id, dd.host, dd.count, dd.account) == ("dump_ep-01", "ep-01", 1, "svc_backup")
     assert len(d.hops) == 1
     h = d.hops[0]
     assert (h.hop_id, h.protocol, h.source, h.target, h.lane, h.intended_account) ==         ("s01-h1", "RDP", "ep-01", "ep-02", "manual", "svc_backup")
@@ -770,9 +772,14 @@ def rdp_inbound(t0, off, port=3389):
                destination_ip=IP["ep-02"], destination_port=port, account_name="NETWORK SERVICE")
 
 
-def s01_rows(t0: datetime = T0, **kw) -> list[dict]:
-    """Passing minimal S01: mstsc on ep-01, then a type 10 logon by svc_backup on ep-02."""
-    return [mstsc(t0, 0), rdp_logon(t0, 5, **kw)]
+def s01_rows(t0: datetime = T0, *, with_dump: bool = True, dump_acct: str = "svc_backup", dump_host: str = "ep-01",
+             dump_off: float = -10, **kw) -> list[dict]:
+    """Passing minimal S01 (decision 036): a svc_backup dump on ep-01, mstsc on ep-01, then a type 10 logon by
+    svc_backup on ep-02. ``with_dump=False`` omits the dump; ``dump_acct``/``dump_host``/``dump_off`` change it."""
+    rows = [mstsc(t0, 0), rdp_logon(t0, 5, **kw)]
+    if with_dump:
+        rows.insert(0, dump(t0, dump_off, dump_host, dump_acct))
+    return rows
 
 
 def s01_run(rows, trial_id="s01_t01"):
@@ -791,7 +798,7 @@ def test_s01_baseline_statuses():
 
 
 def test_s01_no_mstsc_fails_b():
-    res = s01_run([rdp_logon(T0, 5)])
+    res = s01_run([dump(T0, -10), rdp_logon(T0, 5)])
     assert st(res, "b") == "FAIL"
 
 
@@ -801,19 +808,19 @@ def test_s01_no_mstsc_fails_b():
     {"image": r"C:\Windows\System32\cmd.exe"},  # not mstsc
 ], ids=["wrong_ip", "wrong_port", "not_mstsc"])
 def test_s01_bad_source_connection_fails_b(kw):
-    res = s01_run([mstsc(T0, 0, **kw), rdp_logon(T0, 5)])
+    res = s01_run([dump(T0, -10), mstsc(T0, 0, **kw), rdp_logon(T0, 5)])
     assert st(res, "b") == "FAIL", res["criteria"]["b"]
 
 
 def test_s01_no_logon_fails_b_and_c():
-    res = s01_run([mstsc(T0, 0)])
+    res = s01_run([dump(T0, -10), mstsc(T0, 0)])
     assert st(res, "b") == "FAIL"
     assert st(res, "c") == "FAIL"
 
 
 @pytest.mark.parametrize("ltype", [7, 11])
 def test_s01_reconnect_or_cached_logon_type_does_not_count(ltype):
-    res = s01_run([mstsc(T0, 0), rdp_logon(T0, 5, ltype=ltype)])
+    res = s01_run([dump(T0, -10), mstsc(T0, 0), rdp_logon(T0, 5, ltype=ltype)])
     assert st(res, "b") == "FAIL", res["criteria"]["b"]
 
 
@@ -824,28 +831,28 @@ def test_s01_type10_by_other_account_fails_c_and_reports_observed():
 
 
 def test_s01_type3_with_inbound_3389_counts_as_rdp():
-    res = s01_run([mstsc(T0, 0), rdp_logon(T0, 5, ltype=3), rdp_inbound(T0, 6)])
+    res = s01_run([dump(T0, -10), mstsc(T0, 0), rdp_logon(T0, 5, ltype=3), rdp_inbound(T0, 6)])
     assert st(res, "b") == "PASS", res["criteria"]["b"]
     assert st(res, "c") == "PASS", res["criteria"]["c"]
 
 
 def test_s01_type3_inbound_before_logon_within_seconds_counts():
-    res = s01_run([mstsc(T0, 0), rdp_inbound(T0, 3), rdp_logon(T0, 5, ltype=3)])
+    res = s01_run([dump(T0, -10), mstsc(T0, 0), rdp_inbound(T0, 3), rdp_logon(T0, 5, ltype=3)])
     assert st(res, "b") == "PASS", res["criteria"]["b"]
 
 
 def test_s01_type3_without_inbound_fails_b():
-    res = s01_run([mstsc(T0, 0), rdp_logon(T0, 5, ltype=3)])
+    res = s01_run([dump(T0, -10), mstsc(T0, 0), rdp_logon(T0, 5, ltype=3)])
     assert st(res, "b") == "FAIL", res["criteria"]["b"]
 
 
 def test_s01_type3_with_inbound_on_other_port_fails_b():
-    res = s01_run([mstsc(T0, 0), rdp_logon(T0, 5, ltype=3), rdp_inbound(T0, 6, port=445)])
+    res = s01_run([dump(T0, -10), mstsc(T0, 0), rdp_logon(T0, 5, ltype=3), rdp_inbound(T0, 6, port=445)])
     assert st(res, "b") == "FAIL", res["criteria"]["b"]
 
 
 def test_s01_type3_with_inbound_far_in_time_fails_b():
-    res = s01_run([mstsc(T0, 0), rdp_logon(T0, 5, ltype=3), rdp_inbound(T0, 65)])
+    res = s01_run([dump(T0, -10), mstsc(T0, 0), rdp_logon(T0, 5, ltype=3), rdp_inbound(T0, 65)])
     assert st(res, "b") == "FAIL", res["criteria"]["b"]
 
 
@@ -861,10 +868,73 @@ def test_s01_two_sessions_different_accounts_warns_h():
     assert st(res, "h") == "WARN", res["criteria"]["h"]
 
 
-def test_s01_rundll32_lsass_dump_changes_no_status():
-    base = s01_run(s01_rows())
-    with_dump = s01_run(s01_rows() + [dump(T0, 3, "ep-01", "svc_backup")])
-    assert {c: st(with_dump, c) for c in "abcdefgh"} == {c: st(base, c) for c in "abcdefgh"}
+def _b_missing(res) -> list[str]:
+    return res["criteria"]["b"]["evidence"]["missing"]
+
+
+def _dump_step(res) -> dict:
+    return next(d for d in res["dump_steps"] if d["step_id"] == "dump_ep-01")
+
+
+def test_s01_dump_present_baseline_has_dump_step_found():
+    res = s01_run(s01_rows())
+    assert _dump_step(res)["present"] is True and _b_missing(res) == []
+
+
+def test_s01_no_dump_fails_b_naming_dump_step():
+    res = s01_run(s01_rows(with_dump=False))
+    assert st(res, "b") == "FAIL", res["criteria"]["b"]
+    assert any("dump_ep-01" in m for m in _b_missing(res)), _b_missing(res)
+    assert st(res, "c") == "PASS"          # the RDP hop itself is fine
+
+
+def test_s01_dump_by_other_account_fails_b():
+    res = s01_run(s01_rows(dump_acct="admin_it"))
+    assert st(res, "b") == "FAIL", res["criteria"]["b"]
+    assert any("dump_ep-01" in m for m in _b_missing(res))
+
+
+def test_s01_dump_on_ep02_only_fails_b_and_warns_h_other_host():
+    res = s01_run(s01_rows(dump_host="ep-02"))
+    assert st(res, "b") == "FAIL", res["criteria"]["b"]
+    assert any("dump_ep-01" in m for m in _b_missing(res))
+    assert st(res, "h") == "WARN", res["criteria"]["h"]
+
+
+@pytest.mark.parametrize("acct", ["SYSTEM", "NT AUTHORITY\\SYSTEM", "EP-01$"])
+def test_s01_non_user_token_dump_fails_b_and_warns_h(acct):
+    res = s01_run(s01_rows(dump_acct=acct))
+    assert st(res, "b") == "FAIL", res["criteria"]["b"]
+    assert any("dump_ep-01" in m for m in _b_missing(res))
+    assert st(res, "h") == "WARN", res["criteria"]["h"]
+
+
+def test_s01_two_dumps_same_user_more_than_1s_apart_passes_b_fails_h():
+    res = s01_run(s01_rows() + [dump(T0, -40, "ep-01", "svc_backup")])
+    assert st(res, "b") == "PASS", res["criteria"]["b"]
+    assert st(res, "h") == "FAIL", res["criteria"]["h"]
+
+
+def test_s01_svc_backup_dump_plus_admin_it_dump_passes_b_warns_h():
+    res = s01_run(s01_rows() + [dump(T0, -40, "ep-01", "admin_it")])
+    assert st(res, "b") == "PASS", res["criteria"]["b"]
+    assert st(res, "h") == "WARN", res["criteria"]["h"]
+
+
+def test_s01_dump_after_the_rdp_hop_passes_b_order_not_checked():
+    res = s01_run(s01_rows(dump_off=60))
+    assert st(res, "b") == "PASS", res["criteria"]["b"]
+    assert st(res, "h") == "PASS", res["criteria"]["h"]
+
+
+def test_s01_dump_present_but_no_mstsc_fails_b_for_rdp_source_only():
+    rows = [r for r in s01_rows() if r["event_id"] != 3]
+    res = s01_run(rows)
+    assert st(res, "b") == "FAIL", res["criteria"]["b"]
+    missing = _b_missing(res)
+    assert missing == ["s01-h1:rdp_source"], missing
+    assert _dump_step(res)["present"] is True
+    assert "dump_ep-01" in res["criteria"]["b"]["evidence"]["found"]
 
 
 def test_s01_validate_via_db_and_discover(tmp_path):

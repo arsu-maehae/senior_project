@@ -58,7 +58,12 @@ def design_rdp_connections(design: ScenarioDesign, rows: Sequence[Mapping]) -> l
 
 
 def attach_rundll32_listing(hops: Sequence[dict], dumps_w: Sequence) -> None:
-    """List rundll32 -> lsass reads of the window in the RDP hops' evidence; no status depends on it (N20)."""
+    """List every rundll32 -> lsass read of the window in the RDP hops' evidence; no status depends on it.
+
+    WHY kept after decision 036: the S01 dump step (dump_steps) lists only the dumps it counts (user token,
+    account svc_backup); this listing also shows a dump by another account or a non-user token, so the
+    owner sees why b failed (N20).
+    """
     listing = [{"host": d.host, "utc": iso(d.ts), "account": d.account, "user_token": d.user_token,
                 "event_uids": d.event_uids[:4]} for d in dumps_w]
     for h in hops:

@@ -103,7 +103,7 @@ IMPLEMENTATION_NOTES: tuple[str, ...] = (
     "N16 RDP step rdp_source (decision 035): Sysmon 3 on the source host whose image ends \\mstsc.exe, "
     "destination IP = the target's lab IP (the target is named by IP, not by a command line), destination "
     "port 3389, inside the trial window. Every such connection in the DB is also an anchor of the run "
-    "window (kind rdp_source), because S01 has no agent command or dump.",
+    "window (kind rdp_source), because S01 has no agent command (its dump is an anchor too, N20).",
     "N17 RDP step logon (decision 035): 4624 on the target from the source host's IP by a user account "
     "that is logon type 10, or logon type 3 with an inbound Sysmon 3 on the target (source IP = the "
     "source's IP, destination port 3389, any image) within 5 s of it, either order (same host clock). "
@@ -119,8 +119,12 @@ IMPLEMENTATION_NOTES: tuple[str, ...] = (
     "with gaps <= 120 s. More sessions than designed hops: same account more than designed -> FAIL "
     "(indistinguishable), otherwise WARN (another account). Source-side mstsc connection bursts "
     "(gaps <= 120 s) are reported in the evidence only.",
-    "N20 Any rundll32 -> lsass Sysmon 10 in the window of a design without dumps and without a benign "
-    "track (S01) is listed in the hop evidence (rdp.rundll32_lsass_in_window); it never changes a status "
-    "(decision 035, measurement notes). A user-token dump stays an anchor of the run window (N1), as in "
-    "every scenario, so it can only move the window edges.",
+    "N20 S01 has a dump step (decision 036, amends 035): dump_ep-01 = one rundll32 -> lsass Sysmon 10 on "
+    "ep-01 by a user token and by the account svc_backup, in the trial window; criterion b needs it present "
+    "(count 1), as for the other scenarios. Any dump beyond the designed count is judged by h like in "
+    "S02-S07 (N12: same user on the same host -> FAIL, otherwise WARN). The S01 evidence lists dumps by "
+    "account (dump_steps accounts; every rundll32 -> lsass of the window, with account and token kind, in "
+    "the RDP hop's rdp.rundll32_lsass_in_window, which shows a dump by another account that b does not "
+    "count). The validator checks that the dump is present, not its order relative to the RDP hop. A "
+    "user-token dump is an anchor of the run window (N1), as in every scenario.",
 )

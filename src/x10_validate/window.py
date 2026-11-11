@@ -52,7 +52,7 @@ def anchors_of(executions: Sequence[Execution], dumps: Sequence[Dump], logons: S
     """All anchors: agent executions naming an endpoint, user-token dumps, remote endpoint 4624s.
 
     ``rdp_conns`` (mstsc -> 3389 Sysmon 3 of a design RDP hop, decision 035) are anchors of their own
-    kind, because a manual RDP trial has no agent command and no dump.
+    kind, because a manual RDP trial has no agent command (S01 has a dump, decision 036).
     """
     out = [Anchor(e.ts_first, "agent_command", e.host, e.procs[0].event_uid) for e in executions if e.lane == "agent"]
     out += [Anchor(d.ts, "dump", d.host, d.event_uids[0]) for d in dumps if d.user_token]
