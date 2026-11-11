@@ -47,7 +47,7 @@ How the window is computed:
 - **Trials with agent activity (S02–S07):** computed from the **agent process tree only**, using the trial DB and
   `data/manifest.csv` (decision 040). The key builder (`build_draft`), intended steps and identified hops are not used.
   - Start = the earliest agent (`C:\Users\Public\splunkd.exe`) root of the run, found by walking back while roots
-    are less than 30 minutes apart (decision 026), **minus 60 s**.
+    are 30 minutes or less apart (≤ 1800 s, `TRIAL_GAP_S`; decision 026), **minus 60 s**.
   - End = the last Sysmon 1 descended from the run's agent roots (by ProcessGuid, any depth) **plus 300 s**.
   - Both edges are clipped to the export span of the trial's files in `data/manifest.csv` (decision 026 amendment).
   - The step does not read `ground_truth/` or the owner-review file.
@@ -55,6 +55,13 @@ How the window is computed:
 - **Trials with no agent activity (S01, manual RDP):** the trial start and end written down by the operator
   (T2 checklist), with the same margins: start − 60 s, end + 300 s, clipped to the manifest export end.
   `window_source = operator`.
+- **No row is written, with the reason printed** (owner, 2026-11-12; decision 040), when:
+  - the trial is quarantined (`s05q_*` or a DB under `quarantine/`, decision 030);
+  - the trial is `s01_t00`, excluded from the split (decision 019);
+  - the clock rule (section 2.2) refuses it;
+  - S01 has no operator-recorded start/end;
+  - the trial has no export span in `data/manifest.csv`, or that span does not overlap the unclipped window at all. A partial overlap is clipped as above.
+- A trial DB that is missing is an **error**: the step exits non-zero with the path, and writes no file.
 - **Window end margin, stated plainly:** an event logged up to 300 s after the last agent step or command (or after
   the operator's recorded end) is inside the window. The start margin is 60 s before the first agent root (or the
   operator's recorded start).

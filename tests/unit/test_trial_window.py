@@ -29,6 +29,7 @@ from answer_key import build as ak_build  # noqa: E402
 from answer_key import db as ak_db  # noqa: E402
 from trial_window import __main__ as tw_main  # noqa: E402
 from trial_window import params, window  # noqa: E402
+from trial_window.window import TrialWindowError  # noqa: E402
 
 PROCESSED = REPO / "data" / "processed"
 SRC_TW = REPO / "src" / "trial_window"
@@ -481,6 +482,8 @@ def test_tw40_run_refusals_skip_with_reason_and_write_no_row(temp_repo, tmp_path
     assert [r["trial_id"] for r in res["rows"]] == ["s02_t00"]
     assert set(res["skipped"]) == {"s02_t01", "s05q_t01", "s04_t00", "s03_t00", "s01_t00"}
     assert all(isinstance(v, str) and v for v in res["skipped"].values())
+    assert "decision 019" in res["skipped"]["s01_t00"]            # s01_t00 is excluded from the split
+    assert "quarantine" in res["skipped"]["s05q_t01"].lower()
     assert set(res["edges"]) == {"s02_t00"}
     with open(out, newline="", encoding="utf-8") as fh:
         written = list(csv.DictReader(fh))
@@ -514,10 +517,14 @@ def test_tw42_run_clips_to_the_trials_manifest_span(temp_repo, tmp_path):
 
 
 def test_tw43_run_s01_without_operator_file_is_skipped(temp_repo, tmp_path):
-    """TW-43 (spec 2.1): S01 has no agent; without an operator-recorded start/end it is skipped with a reason."""
+    """TW-43 (spec 2.1, decision 019): s01_t00 is excluded, so it is skipped with the decision 019 reason; with
+    the exclusion lifted and no operator-recorded start/end it is still skipped, with an operator reason."""
     res = tw_main.run(temp_repo, ["s01_t00"], tmp_path / "none.csv", tmp_path / "o.csv")
     assert res["rows"] == []
-    assert res["skipped"]["s01_t00"]
+    assert "decision 019" in res["skipped"]["s01_t00"]
+    res2 = tw_main.run(temp_repo, ["s01_t00"], tmp_path / "none.csv", tmp_path / "o2.csv", excluded_trials=())
+    assert res2["rows"] == []
+    assert "operator" in res2["skipped"]["s01_t00"].lower()
 
 
 def test_tw44_run_s01_with_operator_file_uses_operator_source(temp_repo, tmp_path):
@@ -526,7 +533,7 @@ def test_tw44_run_s01_with_operator_file_uses_operator_source(temp_repo, tmp_pat
     ops.write_text("trial_id,start_utc,end_utc\ns01_t00,2026-09-24T05:10:00.000Z,2026-09-24T05:20:00.000Z\n",
                    encoding="utf-8")
     out = tmp_path / "o.csv"
-    res = tw_main.run(temp_repo, ["s01_t00"], ops, out)
+    res = tw_main.run(temp_repo, ["s01_t00"], ops, out, excluded_trials=())
     assert [r["trial_id"] for r in res["rows"]] == ["s01_t00"]
     row = res["rows"][0]
     assert row["window_source"] == "operator"
@@ -552,6 +559,240 @@ def test_tw46_main_cli_flags_write_the_out_file(temp_repo, tmp_path, capsys):
     with open(out, newline="", encoding="utf-8") as fh:
         assert [r["trial_id"] for r in csv.DictReader(fh)] == ["s02_t00"]
     assert "s02_t01" in capsys.readouterr().out      # a skipped trial is reported, not silently dropped
+
+
+# ------------------------------------------------------------------------------------------ follow-ups (owner 2026-11-12)
+
+def _simple_repo(root: Path, trials: list[str], manifest: list[tuple[str, str, str, str]],
+                 rows: list[dict] | None = None) -> Path:
+    repo = root / "repo"
+    for t in trials:
+        make_db(repo / "data" / "processed" / f"{t}.sqlite3", rows if rows is not None else tree_rows(0, 100))
+    make_manifest(repo, manifest)
+    return repo
+
+
+def test_tw50_is_quarantined_by_path_below_repo(tmp_path):
+    """TW-50 (spec 2.1, decision 030): a DB under data/processed/quarantine/ is quarantined whatever its id."""
+    repo = tmp_path / "repo"
+    p = repo / "data" / "processed" / "quarantine" / "s05_t01.sqlite3"
+    assert window.is_quarantined("s05_t01", p, repo) is True
+    assert window.is_quarantined("s05_t01", repo / "data" / "processed" / "s05_t01.sqlite3", repo) is False
+    assert window.is_quarantined("s05q_t01") is True
+
+
+def test_tw50b_repo_living_under_a_quarantine_folder_is_not_quarantined(tmp_path):
+    """TW-50b: only path parts BELOW the repo count; tmp/quarantine/repo with a normal DB still gets its row."""
+    root = tmp_path / "quarantine"
+    repo = _simple_repo(root, ["s02_t00"], [("s02", "t00", at(-3600), at(3600))])
+    db = repo / "data" / "processed" / "s02_t00.sqlite3"
+    assert window.is_quarantined("s02_t00", db, repo) is False
+    res = tw_main.run(repo, ["s02_t00"], tmp_path / "none.csv", tmp_path / "o.csv")
+    assert [r["trial_id"] for r in res["rows"]] == ["s02_t00"]
+    assert res["skipped"] == {}
+
+
+def test_tw50c_run_quarantined_trial_gives_reason_not_error(tmp_path):
+    """TW-50c (decision 030): s05q_t01 with its DB in data/processed/quarantine/ -> no row, a quarantine reason, no raise."""
+    repo = _simple_repo(tmp_path, [], [("s05q", "t01", at(-3600), at(3600))])
+    make_db(repo / "data" / "processed" / "quarantine" / "s05q_t01.sqlite3", tree_rows(0, 100))
+    out = tmp_path / "o.csv"
+    res = tw_main.run(repo, ["s05q_t01"], tmp_path / "none.csv", out)
+    assert res["rows"] == []
+    assert "quarantine" in res["skipped"]["s05q_t01"].lower()
+
+
+def _s01_repo(tmp_path: Path, op_start: str, op_end: str, span: tuple[str, str]) -> tuple[Path, Path]:
+    repo = _simple_repo(tmp_path, ["s01_t00"], [("s01", "t00", span[0], span[1])], rows=[unrelated(0)])
+    ops = tmp_path / "operator_times.csv"
+    ops.write_text(f"trial_id,start_utc,end_utc\ns01_t00,{op_start},{op_end}\n", encoding="utf-8")
+    return repo, ops
+
+
+def test_tw51_operator_cutoff_boundary_uses_window_start_date(tmp_path):
+    """TW-51 (spec 2.2: the trial date is taken from the window start; decision 032): with the exclusion lifted and
+    no clock correction, an operator start of 2026-10-26T00:00:30Z gives a window start of 2026-10-25T23:59:30.000Z,
+    so a row IS written; an operator start of 2026-10-26T00:01:00Z gives a window start of 2026-10-26T00:00:00.000Z,
+    so there is NO row and the reason names 2026-10-26."""
+    manifest = ("2026-10-25T00:00:00.000000Z", "2026-10-27T00:00:00.000000Z")
+    repo, ops = _s01_repo(tmp_path / "a", "2026-10-26T00:00:30Z", "2026-10-26T00:20:00Z", manifest)
+    res = tw_main.run(repo, ["s01_t00"], ops, tmp_path / "a.csv", excluded_trials=(),
+                      clock_correction_available=False)
+    assert [r["trial_id"] for r in res["rows"]] == ["s01_t00"]
+    assert res["rows"][0]["start_utc"] == "2026-10-25T23:59:30.000Z"
+    assert res["skipped"] == {}
+    repo, ops = _s01_repo(tmp_path / "b", "2026-10-26T00:01:00Z", "2026-10-26T00:20:00Z", manifest)
+    res = tw_main.run(repo, ["s01_t00"], ops, tmp_path / "b.csv", excluded_trials=(),
+                      clock_correction_available=False)
+    assert res["rows"] == []
+    assert "2026-10-26" in res["skipped"]["s01_t00"]
+
+
+def test_tw51b_operator_trial_clearly_after_cutoff_is_refused(tmp_path):
+    """TW-51b (spec 2.2): same, with a start clearly after the cutoff (window start is the date used)."""
+    repo, ops = _s01_repo(tmp_path, "2026-10-26T08:00:00Z", "2026-10-26T08:20:00Z",
+                          ("2026-10-25T00:00:00.000000Z", "2026-10-27T00:00:00.000000Z"))
+    res = tw_main.run(repo, ["s01_t00"], ops, tmp_path / "o.csv", excluded_trials=(),
+                      clock_correction_available=False)
+    assert res["rows"] == []
+    reason = res["skipped"]["s01_t00"]
+    assert "2026-10-26" in reason and "decision 032" in reason
+
+
+def test_tw51c_operator_trial_before_cutoff_gets_operator_row(tmp_path):
+    """TW-51c (spec 2.1, 2.2): an operator start of 2026-10-25T10:00:00Z gives a row with window_source operator."""
+    repo, ops = _s01_repo(tmp_path, "2026-10-25T10:00:00Z", "2026-10-25T10:20:00Z",
+                          ("2026-10-25T00:00:00.000000Z", "2026-10-27T00:00:00.000000Z"))
+    res = tw_main.run(repo, ["s01_t00"], ops, tmp_path / "o.csv", excluded_trials=(),
+                      clock_correction_available=False)
+    assert [r["trial_id"] for r in res["rows"]] == ["s01_t00"]
+    assert res["rows"][0]["window_source"] == "operator"
+    assert res["rows"][0]["start_utc"] == "2026-10-25T09:59:00.000Z"
+
+
+def test_tw52_operator_window_start_clipped_by_manifest():
+    """TW-52 (spec 2.1, decision 026 amendment): a manifest span starting after start - 60 s clips the start."""
+    span_ = {"start_utc": "2026-09-24T05:09:30.250000Z", "end_utc": "2026-09-24T06:00:00.000000Z"}
+    w = window.operator_window("2026-09-24T05:10:00.000Z", "2026-09-24T05:20:00.000Z", span_)
+    assert w.start_utc == "2026-09-24T05:09:30.250Z"
+    assert w.clipped_by_manifest_start is True
+    assert w.raw_start_utc == "2026-09-24T05:09:00.000Z"
+    assert w.end_utc == "2026-09-24T05:25:00.000Z" and w.clipped_by_manifest_end is False
+
+
+def test_tw52b_operator_start_clip_through_run(tmp_path):
+    """TW-52b: the same start clip when the operator trial goes through run()."""
+    repo, ops = _s01_repo(tmp_path, "2026-09-24T05:10:00.000Z", "2026-09-24T05:20:00.000Z",
+                          ("2026-09-24T05:09:30.250000Z", "2026-09-24T06:00:00.000000Z"))
+    res = tw_main.run(repo, ["s01_t00"], ops, tmp_path / "o.csv", excluded_trials=())
+    assert res["rows"][0]["start_utc"] == "2026-09-24T05:09:30.250Z"
+    e = res["edges"]["s01_t00"]
+    assert e.clipped_by_manifest_start is True and e.raw_start_utc == "2026-09-24T05:09:00.000Z"
+
+
+def test_tw53_missing_db_for_allowed_trial_raises_and_writes_nothing(tmp_path):
+    """TW-53 (spec 2.1 'missing DB is an error'): an allowed t00 trial without a DB raises TrialWindowError naming
+    the path; no output file is written, even if another trial in the same call has a DB."""
+    repo = _simple_repo(tmp_path, ["s02_t00"], [("s02", "t00", at(-3600), at(3600))])
+    out = tmp_path / "out" / "w.csv"
+    for trials in (["s08_t00"], ["s02_t00", "s08_t00"], ["s08_t00", "s02_t00"]):
+        with pytest.raises(TrialWindowError) as ei:
+            tw_main.run(repo, trials, tmp_path / "none.csv", out)
+        assert str(repo / "data" / "processed" / "s08_t00.sqlite3") in str(ei.value)
+        assert "trial DB not found" in str(ei.value)
+        assert not out.exists()
+    # s02_t00 in a repo without its DB file
+    repo2 = _simple_repo(tmp_path / "two", [], [("s02", "t00", at(-3600), at(3600))])
+    with pytest.raises(TrialWindowError) as ei:
+        tw_main.run(repo2, ["s02_t00"], tmp_path / "none.csv", out)
+    assert str(repo2 / "data" / "processed" / "s02_t00.sqlite3") in str(ei.value)
+    assert not out.exists()
+
+
+def test_tw53b_main_missing_db_exit_code_and_stderr(tmp_path, capsys):
+    """TW-53b: main() prints `error: trial DB not found ...` to stderr, returns non-zero, writes no file."""
+    repo = _simple_repo(tmp_path, [], [("s02", "t00", at(-3600), at(3600))])
+    out = tmp_path / "w.csv"
+    rc = tw_main.main(["--trials", "s02_t00", "--repo", str(repo), "--operator-times", str(tmp_path / "none.csv"),
+                       "--out", str(out)])
+    err = capsys.readouterr().err
+    assert rc not in (0, None)
+    assert "error: trial DB not found" in err
+    assert not out.exists()
+
+
+def test_tw53c_non_t00_trial_without_db_is_skipped_not_raised(tmp_path):
+    """TW-53c (refused before the DB existence check): a refused trial with no DB is skipped with a reason."""
+    repo = _simple_repo(tmp_path, ["s02_t00"], [("s02", "t00", at(-3600), at(3600))])
+    res = tw_main.run(repo, ["s02_t07", "s05q_t03", "s02_t00"], tmp_path / "none.csv", tmp_path / "o.csv")
+    assert set(res["skipped"]) == {"s02_t07", "s05q_t03"}
+    assert all(res["skipped"].values())
+    assert [r["trial_id"] for r in res["rows"]] == ["s02_t00"]
+
+
+def test_tw54_s01_t00_refused_decision_019():
+    """TW-54 (decision 019, spec 2.1): refusal('s01_t00') names decision 019, with or without clock correction."""
+    assert "decision 019" in (window.refusal("s01_t00", None) or "")
+    assert "decision 019" in (window.refusal("s01_t00", None, clock_correction_available=True) or "")
+    assert "decision 019" in (window.refusal("s01_t00", "2026-09-24T05:00:00.000Z") or "")
+    assert tuple(params.EXCLUDED_TRIALS) == ("s01_t00",)
+    # exclusion is a parameter, and the quarantine check comes first
+    assert window.refusal("s01_t00", "2026-09-24T05:00:00.000Z", excluded_trials=()) is None
+    assert "quarantine" in (window.refusal("s05q_t01", None, excluded_trials=("s05q_t01",)) or "").lower()
+
+
+def test_tw54b_run_skips_s01_t00_even_with_operator_row(tmp_path):
+    """TW-54b: run() skips s01_t00 with the decision 019 reason although an operator row exists."""
+    repo, ops = _s01_repo(tmp_path, "2026-09-24T05:10:00.000Z", "2026-09-24T05:20:00.000Z",
+                          (at(-3600), at(3600)))
+    res = tw_main.run(repo, ["s01_t00"], ops, tmp_path / "o.csv")
+    assert res["rows"] == []
+    assert "decision 019" in res["skipped"]["s01_t00"]
+
+
+def test_tw54c_main_prints_skipped_line_with_decision_019(tmp_path, capsys):
+    """TW-54c: main() prints `s01_t00  SKIPPED: ... decision 019 ...`."""
+    repo, ops = _s01_repo(tmp_path, "2026-09-24T05:10:00.000Z", "2026-09-24T05:20:00.000Z",
+                          (at(-3600), at(3600)))
+    rc = tw_main.main(["--trials", "s01_t00", "--repo", str(repo), "--operator-times", str(ops),
+                       "--out", str(tmp_path / "o.csv")])
+    assert rc in (0, None)
+    lines = [ln for ln in capsys.readouterr().out.splitlines() if "SKIPPED" in ln]
+    assert any(ln.startswith("s01_t00") and "decision 019" in ln for ln in lines), lines
+
+
+def test_tw55_manifest_without_row_for_trial_gives_no_row(tmp_path):
+    """TW-55 (spec 2.1): no export span for the trial -> no row, reason 'no export span'."""
+    repo = _simple_repo(tmp_path, ["s02_t00"], [("s03", "t00", at(-3600), at(3600))])
+    res = tw_main.run(repo, ["s02_t00"], tmp_path / "none.csv", tmp_path / "o.csv")
+    assert res["rows"] == []
+    assert "no export span" in res["skipped"]["s02_t00"]
+    repo2 = tmp_path / "nomanifest" / "repo"
+    make_db(repo2 / "data" / "processed" / "s02_t00.sqlite3", tree_rows(0, 100))      # no data/manifest.csv at all
+    res2 = tw_main.run(repo2, ["s02_t00"], tmp_path / "none.csv", tmp_path / "o2.csv")
+    assert res2["rows"] == [] and "no export span" in res2["skipped"]["s02_t00"]
+
+
+@pytest.mark.parametrize("name,first,last", [("before", -7200, -3600), ("after", 3600, 7200)])
+def test_tw56_manifest_span_not_overlapping_window_gives_no_row(tmp_path, name, first, last):
+    """TW-56 (spec 2.1): a span entirely before or after the unclipped window -> no row, 'does not overlap'."""
+    repo = _simple_repo(tmp_path, ["s02_t00"], [("s02", "t00", at(first), at(last))])
+    res = tw_main.run(repo, ["s02_t00"], tmp_path / "none.csv", tmp_path / "o.csv")
+    assert res["rows"] == []
+    assert "does not overlap" in res["skipped"]["s02_t00"]
+
+
+def test_tw56b_partial_overlap_still_writes_clipped_row(tmp_path):
+    """TW-56b (spec 2.1): a partial overlap is clipped, not refused."""
+    repo = _simple_repo(tmp_path, ["s02_t00"], [("s02", "t00", at(-3600), at(200.5))])
+    res = tw_main.run(repo, ["s02_t00"], tmp_path / "none.csv", tmp_path / "o.csv")
+    assert res["skipped"] == {}
+    assert res["rows"][0]["end_utc"] == edge(200.5)
+    assert res["rows"][0]["start_utc"] == edge(-60)
+    assert res["edges"]["s02_t00"].clipped_by_manifest_end is True
+
+
+def test_tw57_manifest_coverage_reason_four_cases():
+    """TW-57 (spec 2.1): manifest_coverage_reason: None for full/partial overlap; a reason for no span, before, after."""
+    raw = window.computed_window(tree_rows(0, 100), None)             # raw edges -60 .. +400
+    assert window.manifest_coverage_reason(raw, span(-3600, 3600), "s02_t00") is None            # full
+    partial = span(-3600, 200)
+    assert window.manifest_coverage_reason(window.computed_window(tree_rows(0, 100), partial), partial) is None
+    no_span = window.manifest_coverage_reason(raw, None, "s02_t00")
+    assert no_span and "no export span" in no_span
+    before = window.manifest_coverage_reason(raw, span(-7200, -3600), "s02_t00")
+    after = window.manifest_coverage_reason(raw, span(3600, 7200), "s02_t00")
+    assert before and "does not overlap" in before
+    assert after and "does not overlap" in after
+    assert "s02_t00" in no_span or "s02_t00" in before          # trial id is used in the text
+
+
+def test_tw57b_coverage_uses_raw_edges_not_clipped():
+    """TW-57b: a result for a non-overlapping span is still judged on its raw (unclipped) edges."""
+    far = span(-7200, -3600)
+    res = window.computed_window(tree_rows(0, 100), far)
+    if res is not None:
+        assert "does not overlap" in (window.manifest_coverage_reason(res, far) or "")
 
 
 # ====================================================================================== B. GTT-14
@@ -710,19 +951,28 @@ def test_gtt14d_gate_half_placeholder():
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 
-def collect_uids(obj, path: tuple[str, ...] = ()) -> set[str]:
-    """Every 64-hex string anywhere under `obj`, skipping fields whose key path contains 'sha256'."""
-    found: set[str] = set()
+def collect_refs(obj, path: tuple[str, ...] = ()) -> list[str]:
+    """Every 64-hex string anywhere under `obj` (repeats kept), skipping fields whose key path contains 'sha256'."""
+    found: list[str] = []
     if isinstance(obj, dict):
         for k, v in obj.items():
-            found |= collect_uids(v, path + (str(k),))
+            found += collect_refs(v, path + (str(k),))
     elif isinstance(obj, list):
         for v in obj:
-            found |= collect_uids(v, path)
+            found += collect_refs(v, path)
     elif isinstance(obj, str) and HEX64.match(obj):
-        if not any("sha256" in p.lower() for p in path):
-            found.add(obj)
+        if not any("sha256" in q.lower() for q in path):
+            found.append(obj)
     return found
+
+
+def collect_uids(obj, path: tuple[str, ...] = ()) -> set[str]:
+    """The DISTINCT event uids under `obj` (see `collect_refs`).
+
+    GTA-06 checks every distinct uid; `refs` (the length of `collect_refs`) counts a uid once for every field
+    that lists it, so refs >= distinct. Content hashes (key path containing 'sha256') are not event uids.
+    """
+    return set(collect_refs(obj, path))
 
 
 def load_key(trial: str) -> dict:
@@ -752,7 +1002,8 @@ def _gta06_one(trial: str, out_dir: Path) -> dict:
     key = load_key(trial)
     ri = key["agent"]["run_interval"]
     events = db_events(trial)
-    uids = sorted(collect_uids(key["hops"]))
+    refs = collect_refs(key["hops"])
+    uids = sorted(set(refs))
     missing = [u for u in uids if u not in events]
     lo, hi = parse(e.start_utc), parse(e.end_utc) + timedelta(milliseconds=1)
     outside = [events[u] for u in uids if u in events and not (lo <= parse(events[u]["t_utc"]) < hi)]
@@ -760,7 +1011,7 @@ def _gta06_one(trial: str, out_dir: Path) -> dict:
     gaps = [(end - parse(events[u]["t_utc"])).total_seconds() for u in uids if u in events]
     return {"trial": trial, "key_start": ri["start_utc"], "key_end": ri["end_utc"], "start": e.start_utc,
             "end": e.end_utc, "delta_end_s": (end - parse(ri["end_utc"])).total_seconds(),
-            "min_gap_s": min(gaps) if gaps else None, "n_uids": len(uids), "missing": missing, "outside": outside}
+            "min_gap_s": min(gaps) if gaps else None, "n_uids": len(uids), "n_refs": len(refs), "missing": missing, "outside": outside}
 
 
 @pytest.fixture(scope="module")
@@ -773,23 +1024,25 @@ def gta06(tmp_path_factory):
             continue
         results[t] = _gta06_one(t, out_dir)
     lines = ["| trial | key start | key end | computed start | computed end | delta end s | min end gap s | "
-             "key-hop uids | outside |", "|---|---|---|---|---|---|---|---|---|"]
+             "key-hop uids (distinct) | key-hop refs | outside |", "|---|---|---|---|---|---|---|---|---|---|"]
     for t in TRIALS:
         r = results.get(t)
         if r is None:
-            lines.append(f"| {t} | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |")
+            lines.append(f"| {t} | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |")
         elif "skipped" in r:
-            lines.append(f"| {t} | n/a | n/a | SKIPPED: {r['skipped']} | n/a | n/a | n/a | n/a | n/a |")
+            lines.append(f"| {t} | n/a | n/a | SKIPPED: {r['skipped']} | n/a | n/a | n/a | n/a | n/a | n/a |")
         else:
             lines.append(f"| {t} | {r['key_start']} | {r['key_end']} | {r['start']} | {r['end']} | "
-                         f"{r['delta_end_s']:+.3f} | {r['min_gap_s']:.1f} | {r['n_uids']} | {len(r['outside'])} |")
+                         f"{r['delta_end_s']:+.3f} | {r['min_gap_s']:.1f} | {r['n_uids']} | {r['n_refs']} | "
+                         f"{len(r['outside'])} |")
     table = "\n".join(lines)
     print("\nGTA-06 report (report-only: end difference, smallest end gap)\n" + table)
     dest = REPO / "out" / "trial_window" / "gta06.md"
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text("# GTA-06 window start and containment (decision 040)\n\n"
                     "Computed from the agent process tree; the key is read by the test only. "
-                    "End difference and min end gap are report-only.\n\n" + table + "\n", encoding="utf-8")
+                    "End difference and min end gap are report-only. The check uses distinct uids; refs counts "
+                    "every listing (a uid in two fields counts twice).\n\n" + table + "\n", encoding="utf-8")
     return results
 
 
@@ -814,7 +1067,7 @@ def test_gta06_1_start_equals_key_run_interval_start(gta06, trial):
 def test_gta06_2_every_key_hop_event_inside_window(gta06, trial):
     """GTA-06 (2, pass/fail): every event the key's hops reference exists in the DB and lies in start <= t < end + 1 ms."""
     r = _need(gta06, trial)
-    assert r["n_uids"] > 0, f"{trial}: no event uid found under the key's hops"
+    assert r["n_refs"] >= r["n_uids"] > 0, f"{trial}: refs {r['n_refs']} / distinct {r['n_uids']} under the key's hops"
     assert r["missing"] == [], f"{trial}: key hop uids absent from the DB: {r['missing']}"
     detail = "\n".join(f"  uid={o['uid']} host={o['host']} event_id={o['event_id']} t_utc={o['t_utc']}"
                        for o in r["outside"])
@@ -828,7 +1081,7 @@ def test_gta06_3_report_end_difference_and_min_gap(gta06, trial):
     """GTA-06 (3, report only): prints the end difference and the smallest key-hop-to-end gap. No value is asserted."""
     r = _need(gta06, trial)
     print(f"{trial}: delta_end_s={r['delta_end_s']:+.3f} min_end_gap_s={r['min_gap_s']:.3f} "
-          f"key_hop_uids={r['n_uids']} outside={len(r['outside'])}")
+          f"key_hop_uids={r['n_uids']} refs={r['n_refs']} outside={len(r['outside'])}")
     assert r["min_gap_s"] is not None
 
 

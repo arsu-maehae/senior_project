@@ -2,8 +2,10 @@
 
 WHY this exists: the gate must clip each trial to its own run without reading the answer key
 (ATK-12). The window is therefore computed from the trial's own logs: the Caldera agent process
-tree (Sysmon 1 under C:\\Users\\Public\\splunkd.exe) plus the export span in data/manifest.csv.
-Nothing here opens a file except ``write_csv`` and ``read_operator_times``, which take explicit paths.
+tree (Sysmon 1 under C:\\Users\\Public\\splunkd.exe) plus the export span in data/manifest.csv,
+which must overlap the window. Quarantined (decision 030), split-excluded (decision 019) and
+clock-refused (decision 039) trials get no window. Nothing here opens a file except ``write_csv``
+and ``read_operator_times``, which take explicit paths.
 """
 from __future__ import annotations
 
@@ -11,12 +13,20 @@ import csv
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
+from typing import Collection, Iterable, Mapping, Sequence
 
 from answer_key.agent_tree import TRIAL_GAP_S, agent_roots, run_start_ts
 from answer_key.timeutil import fmt_utc, parse_utc
 
 from . import params
+
+
+class TrialWindowError(Exception):
+    """Hard error that stops the run before any output is written (e.g. a needed trial DB is missing).
+
+    WHY a hard error and not a skip: a missing DB for an allowed trial means the inputs are
+    incomplete, and a window file silently lacking that trial would look like a valid result.
+    """
 
 
 @dataclass(frozen=True)
@@ -111,6 +121,25 @@ def clip_to_manifest(lo: float, hi: float, manifest_span: Mapping | None) -> tup
     return lo, hi, False, False
 
 
+def manifest_coverage_reason(result: WindowResult, manifest_span: Mapping | None,
+                             trial_id: str = "the trial") -> str | None:
+    """Reason text if the export span cannot support the window, else None (owner 2026-11-12).
+
+    WHY: the window must lie (at least partly) inside the time the export files cover. No span
+    means the trial's exports are unknown; a span that misses the raw (unclipped) window means
+    the window describes time with no exported events, so no row is written. A partial overlap
+    is fine and is clipped (decision 026 amendment).
+    """
+    if not manifest_span:
+        return f"no export span for {trial_id} in data/manifest.csv"
+    m_lo, m_hi = _parse_ts(manifest_span["start_utc"]), _parse_ts(manifest_span["end_utc"])
+    lo, hi = _parse_ts(result.raw_start_utc), _parse_ts(result.raw_end_utc)
+    if max(lo, m_lo) < min(hi, m_hi):
+        return None
+    return (f"manifest export span {manifest_span['start_utc']}..{manifest_span['end_utc']} does not overlap "
+            f"the computed window {result.raw_start_utc}..{result.raw_end_utc}")
+
+
 def _result(lo: float, hi: float, manifest_span: Mapping | None,
             start_uid: str | None, end_uid: str | None) -> WindowResult:
     """Apply the manifest clip and package the edges with their provenance."""
@@ -146,24 +175,43 @@ def operator_window(start_utc: str, end_utc: str, manifest_span: Mapping | None,
                    manifest_span, None, None)
 
 
-def is_quarantined(trial_id: str, db_path: Path | None = None) -> bool:
-    """Quarantined trials (decision 030) are refused by id prefix or by a ``quarantine/`` path part."""
+def _repo_parts(db_path: Path, repo: Path | None) -> tuple[str, ...]:
+    """Path parts below the repo, so a repo that itself lives under a folder named ``quarantine``
+    is not refused; a path outside the repo (or no repo given) is judged on all its parts."""
+    path = Path(db_path)
+    if repo is not None:
+        try:
+            return path.resolve().relative_to(Path(repo).resolve()).parts
+        except ValueError:
+            pass
+    return path.parts
+
+
+def is_quarantined(trial_id: str, db_path: Path | None = None, repo: Path | None = None) -> bool:
+    """Quarantined trials (decision 030) are refused by id prefix or by a ``quarantine/`` path part
+    below the repo."""
     if trial_id.lower().startswith(params.QUARANTINE_PREFIX):
         return True
-    return db_path is not None and params.QUARANTINE_DIR in (p.lower() for p in Path(db_path).parts)
+    if db_path is None:
+        return False
+    return params.QUARANTINE_DIR in (p.lower() for p in _repo_parts(db_path, repo))
 
 
 def refusal(trial_id: str, start_utc: str | None, *,
+            excluded_trials: Collection[str] = params.EXCLUDED_TRIALS,
             clock_correction_available: bool = params.CLOCK_CORRECTION_AVAILABLE,
             raw_time_cutoff_date: date = params.RAW_TIME_CUTOFF_DATE) -> str | None:
-    """Reason text if the trial may not get a window, else None (spec 2.2, decision 039).
+    """Reason text if the trial may not get a window, else None (spec 2.2; decisions 019, 030, 039).
 
-    WHY: until decision 032's clock correction exists, raw-time windows are only trusted on t00
+    WHY: quarantined (030) and split-excluded (019) trials never get a window, whatever the
+    clock. Until decision 032's clock correction exists, raw-time windows are only trusted on t00
     trials collected before ep-01 drifted (2026-10-26); the date is taken from the window start.
     ``start_utc`` may be None to run only the checks that need no window (before opening a DB).
     """
     if is_quarantined(trial_id):
         return f"quarantined trial id ({params.QUARANTINE_PREFIX}*, decision 030)"
+    if trial_id.lower() in {t.lower() for t in excluded_trials}:
+        return "excluded from the data split (decision 019: S01 t00 is target side only)"
     if clock_correction_available:
         return None
     trial_part = trial_id.split("_", 1)[1] if "_" in trial_id else ""

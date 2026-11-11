@@ -26,6 +26,13 @@ Option C. `src/trial_window/` finds the run roots with `answer_key.agent_tree.ag
 - S01 uses operator times from `data/operator_times.csv` (`trial_id,start_utc,end_utc`). None are recorded yet, so S01 has no row.
 - The clock constants (`CLOCK_CORRECTION_AVAILABLE`, `RAW_TIME_CUTOFF_DATE`) live in `src/trial_window/params.py`, for the gate to import.
 
+**Follow-ups (owner, 2026-11-12):**
+- The spec wording of the walk-back now matches the shared code: "30 minutes or less" (≤ 1800 s). The code is unchanged.
+- A missing trial DB is an error (non-zero exit, no file written).
+- `s01_t00` is refused (decision 019).
+- A trial with no manifest export span, or one that does not overlap the unclipped window, gets no row; the reason is printed.
+- GTA-06 checks every distinct uid under the key's hops (s02–s07: 19/17/51/46/41/51). The pre-check's 23/23/73/57/54/59 counted references, so a uid listed in two fields counted twice; `target_4624_content_sha256` is a content hash, not an event uid.
+
 ## Consequences
 The window and the key now come from different code, so GTA-06 is an independent check. The window edges differ from the key's `run_interval` by up to 3 s on three trials, well inside the 300 s end margin. The report must say the window is "computed from the agent process tree", not "equal to the answer key's interval". Info only: s05's ep-02 `agent_start` (07:06:28) is listed as a step in the s06/s07 keys. It falls outside both the computed window and the key's run_interval, by design (026).
 

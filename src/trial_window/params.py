@@ -1,4 +1,4 @@
-"""Parameters of the trial window step (spec 02_gate sections 2.1, 2.2, 5; decisions 026, 032, 039, 040).
+"""Parameters of the trial window step (spec 02_gate sections 2.1, 2.2, 5; decisions 019, 026, 030, 032, 039, 040).
 
 WHY a separate file: every value the window depends on is visible in one place, and the
 margins are imported from the key builder so the two can never drift apart.
@@ -37,6 +37,10 @@ TIME_BASIS = "raw"
 QUARANTINE_PREFIX = "s05q_"
 QUARANTINE_DIR = "quarantine"
 
+# Decision 019: S01 t00 is excluded from the split (target side only; its source EP-01 and DC01
+# files are S02 exports), so it never gets a window. Refused independently of the clock flag.
+EXCLUDED_TRIALS: tuple[str, ...] = ("s01_t00",)
+
 DEFAULT_TRIALS = ("s02_t00", "s03_t00", "s04_t00", "s05_t00", "s06_t00", "s07_t00")
 
 COLUMNS = ("trial_id", "start_utc", "end_utc", "window_source", "margin_start_s", "margin_end_s",
@@ -46,10 +50,10 @@ SOURCE_COMPUTED = "computed_agent_run"
 SOURCE_OPERATOR = "operator"
 
 RULE_COMPUTED = (f"agent tree: first splunkd root of the run (30 min walk-back) - {MARGIN_START_S:g} s .. "
-                 f"last Sysmon 1 descendant + {MARGIN_END_S:g} s, clipped to manifest export span; "
+                 f"last Sysmon 1 descendant + {MARGIN_END_S:g} s, clipped to manifest export span (must overlap); "
                  f"agent {AGENT_IMAGE}, server {AGENT_SERVER}")
 RULE_OPERATOR = (f"operator-recorded trial start - {MARGIN_START_S:g} s .. operator-recorded end + "
-                 f"{MARGIN_END_S:g} s, clipped to manifest export span")
+                 f"{MARGIN_END_S:g} s, clipped to manifest export span (must overlap)")
 
 # Optional operator file (columns trial_id,start_utc,end_utc); used for trials without agent activity (S01).
 OPERATOR_TIMES_REL = "data/operator_times.csv"
