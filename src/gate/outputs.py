@@ -138,6 +138,9 @@ def disposition_for(ev: Mapping, suppressed: Mapping[str, Suppression], as_trigg
         return "supporting", ";".join(parts), anchors
     if uid in unmatched:
         return "unmatched_remote", f"logon_type={ev.get('logon_type')}", uid
+    if classify.is_outbound_rdp_sysmon3(ev):
+        # GT-05 (decision 041): kept visible for T7 as the source-host side of an RDP connection.
+        return "no_rule", classify.OUTBOUND_3389_REASON, ""
     return "no_rule", "", ""
 
 

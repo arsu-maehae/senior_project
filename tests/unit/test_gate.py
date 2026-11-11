@@ -20,6 +20,7 @@ import os
 import re
 import shutil
 import sqlite3
+import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -36,6 +37,8 @@ from gate.inputs import GateError  # noqa: E402
 from gate.run import run_gate  # noqa: E402
 
 SRC_GATE = REPO / "src" / "gate"
+SRC_LAB_COMMON = REPO / "src" / "lab_common"
+OUT_3389_REASON = "outbound 3389, source side of an RDP connection"   # spec 3 / GT-05, literal
 
 # ------------------------------------------------------------------------------------------ spec literals
 SPEC_TRIGGER_COLUMNS = [
@@ -59,7 +62,7 @@ OUTPUT_FILES = ["triggers.csv", "unmatched_remote.csv", "dispositions.csv", "sup
 # The schema columns the gate reads (spec section 2) plus the columns the dedup view / trial need.
 EVENT_COLUMNS = [
     "event_uid", "host", "channel", "event_id", "record_id", "event_utc", "logon_type", "source_ip", "source_port",
-    "destination_port", "initiated", "account_name", "domain_short", "target_logon_id", "target_linked_logon_id",
+    "destination_ip", "destination_port", "initiated", "account_name", "domain_short", "target_logon_id", "target_linked_logon_id",
     "subject_logon_id", "session_id", "machine_account", "authentication_package", "image", "parent_image",
     "share_name", "relative_target_name", "service_name", "service_image_path", "target_image", "granted_access",
     "duplicate_content_sha256", "source_relative_path", "source_line", "timestamp_utc", "trial_id",
@@ -287,35 +290,6 @@ def sup(row: dict) -> set[str]:
     return set(s.split(";")) if s else set()
 
 
-def find_key(obj, sub: str):
-    """First value (depth first) whose dict key contains `sub`; None if absent."""
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            if sub in k:
-                return v
-        for v in obj.values():
-            r = find_key(v, sub)
-            if r is not None:
-                return r
-    elif isinstance(obj, list):
-        for v in obj:
-            r = find_key(v, sub)
-            if r is not None:
-                return r
-    return None
-
-
-def leaves(obj, path: tuple = ()):
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            yield from leaves(v, path + (str(k),))
-    elif isinstance(obj, list):
-        for i, v in enumerate(obj):
-            yield from leaves(v, path + (str(i),))
-    else:
-        yield path, obj
-
-
 # ====================================================================================== contract / columns
 def test_gtt08_params_column_lists_equal_spec_lists():
     """GTT-08 (contract): the gate's column lists, dispositions and methods are exactly the spec section 3 lists."""
@@ -432,13 +406,10 @@ def test_gtt01_stats_count_removed_and_near_window_without_uids(tmp_path):
         logon("KEEP", 0, 6, ip="192.168.50.23"),
     ]
     o = go(tmp_path, rows)
-    removed = find_key(o.stats, "removed")
-    assert removed is not None, "stats.json has no removed-by-window counts"
-    assert sum(v for _, v in leaves(removed) if isinstance(v, int)) == 5
-    assert "ep-02" in removed
-    near = find_key(o.stats, "near_window")
-    assert near is not None, "stats.json has no near_window counts"
-    assert sum(v for _, v in leaves(near) if isinstance(v, int)) == 4   # far event (> 300 s) not counted
+    removed = o.stats["removed_by_window"]                          # spec 3.1: host -> channel/event_id -> count
+    assert removed == {"ep-02": {"Security/4624": 5}}
+    near = o.stats["near_window"]                                   # spec 3.1: host -> {before, after}
+    assert near == {"ep-02": {"before": 2, "after": 2}}             # far event (> 300 s) not counted
     blob = json.dumps(o.stats)
     for uid in ("CLIP-B1", "CLIP-B2", "CLIP-A1", "CLIP-A2", "CLIP-FAR"):
         assert uid not in blob
@@ -521,11 +492,14 @@ def test_gtt02_excluded_session_artefacts_listed_in_stats(tmp_path):
     """GT-02 / spec 3: an excluded session with a service install or share write is listed in excluded_ip_with_artefacts."""
     rows = excluded_session_rows("192.168.50.99", 2000) + [logon("PLAIN-X", 50, 2001, ip="192.168.50.98")]
     o = go(tmp_path, rows)
-    listed = find_key(o.stats, "excluded_ip_with_artefacts")
-    assert listed is not None, "stats.json lacks excluded_ip_with_artefacts"
-    blob = json.dumps(listed)
-    assert any(u in blob for u in ("X-L", "X-5145", "X-4697", "X-7045"))
-    assert "PLAIN-X" not in blob
+    listed = o.stats["excluded"]["excluded_ip_with_artefacts"]      # spec 3.1: [{host, logon_id_hex, source_ip, event_uids}]
+    assert len(listed) == 1
+    entry = listed[0]
+    assert set(entry) == {"host", "logon_id_hex", "source_ip", "event_uids"}
+    assert entry["host"] == "ep-02" and entry["source_ip"] == "192.168.50.99"
+    assert entry["logon_id_hex"].lower() == "0x7d0"
+    assert {"X-5145", "X-4697"} <= set(entry["event_uids"])
+    assert "PLAIN-X" not in json.dumps(listed)
 
 
 def test_gtt02_c_winrm91_and_sysmon3_from_excluded_ip_are_excluded(tmp_path):
@@ -814,8 +788,10 @@ def test_gtt05_r5_type10_with_port_zero_matches_sysmon3_by_ip_and_time(tmp_path)
 
 def test_gtt05_unmatched_3389_sysmon3_has_disposition_no_rule(tmp_path):
     """Spec 3: an inbound 3389 Sysmon 3 completing no rule is `no_rule`; an outbound one is in the disposition set too."""
-    o = go(tmp_path, [s3("IN", 0, "192.168.50.21", 50000), s3("OUT", 10, "192.168.50.21", 50001, initiated=1)])
+    o = go(tmp_path, [s3("IN", 0, "192.168.50.21", 50000),
+                      s3("OUT", 10, "192.168.50.22", 50001, initiated=1, destination_ip="192.168.50.23")])
     assert o.d("IN")["disposition"] == "no_rule" and o.d("OUT")["disposition"] == "no_rule"
+    assert OUT_3389_REASON in o.d("OUT")["reason_detail"] and OUT_3389_REASON not in o.d("IN")["reason_detail"]
 
 
 # ====================================================================================== GTT-05 R6
@@ -888,10 +864,11 @@ def test_gtt05_r6_local_installs_counted_in_stats(tmp_path):
     rows = [svc4697("V4a", 0, 6001, "ASVC"), svc7045("V7b", 30, "BSVC"), logon("L", 60, 6003),
             svc4697("V4c", 62, 6003, "CSVC")]
     o = go(tmp_path, rows)
-    v = find_key(o.stats, "local_install")
-    assert v is not None
-    assert any(x == 2 for _, x in leaves(v)) or ("V4a" in json.dumps(v) or "g0001" in json.dumps(v))
-    assert "L" not in json.dumps(v)
+    v = o.stats["local_installs"]                                   # spec 3.1: {count, trigger_ids}
+    assert set(v) == {"count", "trigger_ids"}
+    no_anchor = sorted(r["trigger_id"] for r in o.rule("R6_service") if r["anchor_logon_uid"] == "")
+    assert len(no_anchor) == 2
+    assert v["count"] == 2 and sorted(v["trigger_ids"]) == no_anchor
 
 
 @pytest.mark.parametrize("ltype", [3, 10])
@@ -1398,28 +1375,25 @@ def test_gtt08_stats_json_has_spec3_content(tmp_path):
     assert sha256_of(c.windows) in text
     for col in WINDOW_COLUMNS:
         assert col in text, f"window column {col} missing from stats.json"
-    params_v = find_key(o.stats, "param")
-    assert params_v is not None
+    params_v = o.stats["parameters"]
+    assert isinstance(params_v, dict) and params_v
     pt = json.dumps(params_v)
     assert "192.168.50.97" in pt and "996" in pt
-    assert find_key(o.stats, "near_window") is not None
+    assert "near_window" in o.stats
+    assert o.stats["trial_id"] == TRIAL
+    assert set(o.stats["db"]) == {"path", "sha256_before", "sha256_after"}
+    assert o.stats["db"]["sha256_before"] == o.stats["db"]["sha256_after"] == sha256_of(c.db)
+    assert set(o.stats["window"]) == {"row", "file", "file_sha256"}
+    assert o.stats["window"]["file_sha256"] == sha256_of(c.windows)
+    assert set(o.stats["window"]["row"]) == set(WINDOW_COLUMNS)
+    assert o.stats["window"]["row"]["trial_id"] == TRIAL and o.stats["window"]["row"]["start_utc"] == WIN_START
 
 
 def test_spec5_sensitivity_counts_at_2s_and_10s_are_reported(tmp_path):
-    """Spec 5: counts at 2 s and 10 s are reported for the RDP pairing; a 7 s pair shows only at 10 s and never fires the rule."""
+    """Spec 5 / 3.1: rdp_pairs at "2", "5", "10"; a 7 s pair shows only at "10" and never fires the rule."""
     o = go(tmp_path, r5_pair(7.0))
     assert o.rule("R5_rdp") == []
-    sens = find_key(o.stats, "sensitivity")
-    assert sens is not None, "stats.json lacks sensitivity counts"
-    rdp = [(p, v) for p, v in leaves(sens) if any("rdp" in x for x in p)]
-    def tol(p):
-        for x in p:
-            try:
-                return float(x)
-            except ValueError:
-                pass
-    by_tol = {tol(p): v for p, v in rdp if tol(p) is not None}
-    assert by_tol.get(2.0) == 0 and by_tol.get(10.0) == 1
+    assert o.stats["sensitivity"]["rdp_pairs"] == {"2": 0, "5": 0, "10": 1}
 
 
 def test_gtt08_tier_d_rows_report_logon_id_ip_lookup_from_unclipped_db(tmp_path):
@@ -1429,10 +1403,12 @@ def test_gtt08_tier_d_rows_report_logon_id_ip_lookup_from_unclipped_db(tmp_path)
     o = go(tmp_path, rows)
     r = o.one("R6_service")
     assert r["gate_tier"] == "D"
-    v = find_key(o.stats, "tier_d")
-    assert v is not None, "stats.json lacks the tier-D IP lookup"
-    blob = json.dumps(v)
-    assert "192.168.50.23" in blob and r["trigger_id"] in blob
+    v = o.stats["tier_d_ip_lookup"]                 # spec 3.1: [{trigger_id, rule, host, logon_id_hex, logon_found, source_ips}]
+    assert len(v) == 1
+    assert set(v[0]) == {"trigger_id", "rule", "host", "logon_id_hex", "logon_found", "source_ips"}
+    assert v[0]["trigger_id"] == r["trigger_id"] and v[0]["rule"] == "R6_service" and v[0]["host"] == "ep-02"
+    assert v[0]["logon_found"] is True and v[0]["source_ips"] == ["192.168.50.23"]
+    assert v[0]["logon_id_hex"].lower() == "0x1389"
 
 
 def test_gtt08_machine_account_and_hex_display_columns(tmp_path):
@@ -1546,13 +1522,14 @@ def test_gtt11_disposition_counts_sum_to_trigger_type_count_per_host(tmp_path):
 def test_gtt11_stats_disposition_counts_equal_file_counts(tmp_path):
     """GTT-11 / GTA-04: stats.json counts per disposition equal the dispositions.csv counts."""
     o = go(tmp_path, mixed_rows())
-    v = find_key(o.stats, "dispositions")
-    assert v is not None
+    v = o.stats["dispositions"]                      # spec 3.1: {total: disposition -> count (zeros included), per_host}
+    assert set(v) == {"total", "per_host"}
+    assert set(v["total"]) == set(SPEC_DISPOSITIONS)
     for d in SPEC_DISPOSITIONS:
         in_file = sum(1 for r in o.disp if r["disposition"] == d)
-        scope = v["total"] if isinstance(v, dict) and "total" in v else v      # per-host breakdown may sit beside a total
-        in_stats = sum(x for p, x in leaves(scope) if d in p and isinstance(x, int))
-        assert in_stats == in_file, d
+        assert v["total"][d] == in_file, d
+        for host, counts in v["per_host"].items():
+            assert counts.get(d, 0) == sum(1 for r in o.disp if r["disposition"] == d and r["host"] == host), (d, host)
 
 
 def test_gtt11_mixed_scenario_covers_each_disposition(tmp_path):
@@ -1642,8 +1619,7 @@ def test_gtt12_near_duplicate_4624_pair_flagged_on_both_rows(tmp_path):
     rs = o.rule("R4_smb")
     assert len(rs) == 2 and {r["trigger_event_uid"] for r in rs} == {"L1", "L2"}
     assert all(r["near_duplicate"] == "1" and r["candidate_count"] == "2" for r in rs)
-    nd = find_key(o.stats, "near_dup")
-    assert nd is not None and {"L1", "L2"} <= set(json.dumps(nd).replace('"', " ").replace(",", " ").split())
+    assert o.stats["near_duplicate_uids"] == ["L1", "L2"]            # spec 3.1: sorted list of flagged in-window uids
 
 
 def test_gtt12_same_record_id_on_other_host_or_channel_is_not_near_duplicate(tmp_path):
@@ -1737,7 +1713,7 @@ def test_d041_time_delta_is_integer_ms(tmp_path):
 
 
 # ====================================================================================== supporting.csv / R1 / R3
-def test_gtt16_r1_lsass_access_listed_in_supporting_not_trigger(tmp_path):
+def test_gt16_r1_lsass_access_listed_in_supporting_not_trigger(tmp_path):
     """GT-16: Sysmon 10 on lsass.exe with an R1 access mask is listed in supporting.csv as R1_lsass, never a trigger."""
     rows = [ev("R1", 10, "Sysmon", 0, target_image=LSASS, granted_access="0x1010", host="ep-01")]
     o = go(tmp_path, rows)
@@ -1746,7 +1722,7 @@ def test_gtt16_r1_lsass_access_listed_in_supporting_not_trigger(tmp_path):
 
 
 @pytest.mark.parametrize("mask", ["0x1010", "0x1410", "0x143a", "0x143A", "0x1fffff", "0x00001410"])
-def test_gtt16_r1_masks_in_the_set_are_listed(tmp_path, mask):
+def test_gt16_r1_masks_in_the_set_are_listed(tmp_path, mask):
     """Spec 5: R1_ACCESS_MASKS 0x1010, 0x1410, 0x143a, 0x1fffff (hex case / leading zeros ignored)."""
     o = go(tmp_path, [ev("R1", 10, "Sysmon", 0, target_image=LSASS, granted_access=mask)])
     assert [r["rule"] for r in o.sup] == ["R1_lsass"]
@@ -1754,20 +1730,20 @@ def test_gtt16_r1_masks_in_the_set_are_listed(tmp_path, mask):
 
 @pytest.mark.parametrize("img,mask", [(LSASS, "0x1000"), (LSASS, None), (r"C:\Windows\notepad.exe", "0x1010"),
                                       (r"C:\Temp\notlsass.exe", "0x1010")])
-def test_gtt16_r1_not_listed_without_lsass_or_mask(tmp_path, img, mask):
+def test_gt16_r1_not_listed_without_lsass_or_mask(tmp_path, img, mask):
     """GT-16: no R1 for another target image, an access mask outside the set, or a NULL mask."""
     o = go(tmp_path, [ev("R1", 10, "Sysmon", 0, target_image=img, granted_access=mask)])
     assert o.sup == []
 
 
-def test_gtt16_r3_explicit_credentials_listed_in_supporting(tmp_path):
+def test_gt16_r3_explicit_credentials_listed_in_supporting(tmp_path):
     """GT-16: a 4648 is listed as R3_explicit in supporting.csv, never a trigger."""
     o = go(tmp_path, [ev("R3", 4648, "Security", 0, host="ep-01", subject_logon_id=900, account_name="admin_it")])
     assert [(r["rule"], r["event_uid"]) for r in o.sup] == [("R3_explicit", "R3")]
     assert o.trig == [] and o.unm == []
 
 
-def test_gtt16_supporting_signals_outside_window_not_listed(tmp_path):
+def test_gt16_supporting_signals_outside_window_not_listed(tmp_path):
     """GT-16 / GT-01: R1, R3 and R8_parent outside the window are not listed."""
     rows = [ev("R1", 10, "Sysmon", None, utc="2026-09-24T09:00:00.000000Z", target_image=LSASS,
                granted_access="0x1010"),
@@ -1778,7 +1754,7 @@ def test_gtt16_supporting_signals_outside_window_not_listed(tmp_path):
     assert o.sup == []
 
 
-def test_gtt16_supporting_rows_sorted_and_listed_for_all_three_rules(tmp_path):
+def test_gt16_supporting_rows_sorted_and_listed_for_all_three_rules(tmp_path):
     """GT-16: R1_lsass, R3_explicit and R8_parent all appear in supporting.csv with the spec columns filled for uid/host/utc."""
     rows = [ev("R1", 10, "Sysmon", 0, target_image=LSASS, granted_access="0x1410"),
             ev("R3", 4648, "Security", 5, subject_logon_id=900),
@@ -1804,9 +1780,7 @@ def test_gtt13_machine_account_type3_with_5140_fires_r4_flagged_and_counted(tmp_
     flags = {r["trigger_event_uid"]: r["machine_account"] for r in rs}
     assert flags == {"DL": "1", "DL2": "1", "OL": "0"}
     assert rs[0]["account_name"] == "ep-01$"
-    v = find_key(o.stats, "machine_account")
-    assert v is not None, "stats.json lacks machine-account triggers per host"
-    assert sum(x for p, x in leaves(v) if "dc01" in p and isinstance(x, int)) == 2
+    assert o.stats["machine_account_triggers_per_host"] == {"dc01": 2}
 
 
 def test_gtt13_machine_account_logon_without_rule_is_still_kept_in_unmatched(tmp_path):
@@ -1960,3 +1934,600 @@ def test_gtt14_no_direct_import_of_key_builder_finish_verify_overlap():
                 if node.level and (parts[0] in banned or names & banned) and "answer_key" in str(f):
                     offenders.append(f"{f.name}: relative import")
     assert offenders == [], offenders
+
+
+# ====================================================================================== GTT-15 outbound 3389
+def out3389(uid, off, dest, *, host="ep-01", src="192.168.50.21", port=49999, initiated=1, **kw) -> dict:
+    """Sysmon 3 to port 3389 logged on `host` (default ep-01, own IP 192.168.50.21); `dest` = destination_ip."""
+    return s3(uid, off, src, port, host=host, initiated=initiated, destination_ip=dest, **kw)
+
+
+def in_any_gate_row(o: "Out", uid: str) -> bool:
+    """True if `uid` is a trigger, an anchor, a supporting uid of a trigger row, in supporting.csv or unmatched."""
+    return (uid in o.trig_uids() or any(uid in sup(r) for r in o.trig) or any(r["event_uid"] == uid for r in o.sup)
+            or uid in o.unm_uids())
+
+
+@pytest.mark.parametrize("dest,expected", [
+    ("192.168.50.22", "no_rule"),
+    ("10.9.8.7", "no_rule"),
+    ("192.168.50.99", "excluded_source_ip"),
+    ("192.168.50.97", "excluded_source_ip"),
+    ("192.168.50.98", "excluded_source_ip"),
+    ("::ffff:192.168.50.99", "excluded_source_ip"),
+    ("127.0.0.1", "loopback_or_self"),
+    ("::1", "loopback_or_self"),
+    ("::ffff:127.0.0.1", "loopback_or_self"),
+    ("192.168.50.21", "loopback_or_self"),
+    ("::ffff:192.168.50.21", "loopback_or_self"),
+])
+def test_gtt15_outbound_3389_disposition_follows_destination_ip(tmp_path, dest, expected):
+    """GTT-15 / GT-05: outbound (initiated = 1) 3389 Sysmon 3 on ep-01 is judged by destination_ip, not by source_ip (own IP)."""
+    o = go(tmp_path, [out3389("O", 0, dest)])
+    assert o.d("O")["disposition"] == expected
+    assert o.trig == [] and o.unm == [] and o.sup == []
+    if expected == "no_rule":
+        assert OUT_3389_REASON in o.d("O")["reason_detail"]
+    else:
+        assert OUT_3389_REASON not in o.d("O")["reason_detail"]
+
+
+def test_gtt15_outbound_3389_reason_text_is_exact_and_in_no_rule_row(tmp_path):
+    """GTT-15 / GT-05: reason_detail holds exactly the spec text; the event is in no triggers / supporting / unmatched row."""
+    rows = [out3389("O", 0, "192.168.50.22"), logon("L", 5, 20, host="ep-01", ip="192.168.50.22", port=50000)]
+    o = go(tmp_path, rows)
+    d = o.d("O")
+    assert d["disposition"] == "no_rule" and d["reason_detail"] == OUT_3389_REASON
+    assert not in_any_gate_row(o, "O")
+    assert o.d("L")["disposition"] == "unmatched_remote"           # the 4624 is not affected by the outbound event
+
+
+def test_gtt15_outbound_3389_with_null_destination_is_not_excluded_or_loopback(tmp_path):
+    """Spec 2 (NULL / blank never compares equal) + GT-05: an outbound 3389 with no destination_ip is `no_rule`."""
+    o = go(tmp_path, [out3389("O1", 0, None), out3389("O2", 10, "-"), out3389("O3", 20, "")])
+    assert [o.d(u)["disposition"] for u in ("O1", "O2", "O3")] == ["no_rule"] * 3
+
+
+def test_gtt15_outbound_3389_other_host_own_ip_is_host_specific(tmp_path):
+    """GT-05: 'the host's own IP' is per host: destination 192.168.50.22 is own on ep-02 (loopback_or_self), not on ep-01."""
+    o = go(tmp_path, [out3389("ON-EP01", 0, "192.168.50.22"),
+                      out3389("ON-EP02", 10, "192.168.50.22", host="ep-02", src="192.168.50.22")])
+    assert o.d("ON-EP01")["disposition"] == "no_rule"
+    assert o.d("ON-EP02")["disposition"] == "loopback_or_self"
+
+
+@pytest.mark.parametrize("src,dest,expected", [
+    ("192.168.50.22", "192.168.50.21", "no_rule"),            # normal inbound: judged by source_ip
+    ("192.168.50.21", "192.168.50.22", "loopback_or_self"),   # source_ip = ep-01's own IP -> self, destination ignored
+    ("192.168.50.99", "192.168.50.21", "excluded_source_ip"),
+    ("192.168.50.22", "192.168.50.99", "no_rule"),            # excluded destination on an INBOUND event is not judged
+    ("192.168.50.22", "127.0.0.1", "no_rule"),
+    ("::ffff:192.168.50.99", None, "excluded_source_ip"),
+    ("127.0.0.1", None, "loopback_or_self"),
+])
+def test_gtt15_inbound_3389_still_judged_by_source_ip(tmp_path, src, dest, expected):
+    """GTT-15: the same events with initiated = 0 behave as before (inbound, judged by source_ip)."""
+    o = go(tmp_path, [out3389("I", 0, dest, src=src, initiated=0)])
+    assert o.d("I")["disposition"] == expected
+    assert OUT_3389_REASON not in o.d("I")["reason_detail"]
+
+
+@pytest.mark.parametrize("ip", ["127.0.0.1", "::1", "::ffff:127.0.0.1", "192.168.50.21", "::ffff:192.168.50.21"])
+def test_gtt15_loopback_and_own_ip_4624_stay_loopback_or_self(tmp_path, ip):
+    """GTT-15: a loopback 4624 and an own-IP 4624 (on ep-01) stay `loopback_or_self`; they never fire."""
+    o = go(tmp_path, [logon("L", 0, 20, host="ep-01", ip=ip), share("S", 1, 20, host="ep-01")])
+    assert o.d("L")["disposition"] == "loopback_or_self"
+    assert o.trig == [] and o.unm == []
+
+
+def test_gtt15_outbound_3389_never_pairs_for_r5(tmp_path):
+    """GTT-15 / GT-11: an outbound 3389 Sysmon 3 never pairs with a type 3 4624 or supports a type 10 R5, whatever its fields."""
+    rows = [
+        # type 3 logon from .21 (port 50000); outbound events carry the same port / the same IP in source_ip or destination
+        logon("L3", 0, 20, ip="192.168.50.21", port=50000),
+        s3("OUT-A", 1, "192.168.50.22", 50000, initiated=1, destination_ip="192.168.50.21"),
+        s3("OUT-B", 2, "192.168.50.21", 50000, initiated=1, destination_ip="192.168.50.23"),
+        # type 10 logon from .23 (port 51000) with outbound look-alikes
+        logon("L10", 100, 21, ltype=10, ip="192.168.50.23", port=51000),
+        s3("OUT-C", 101, "192.168.50.23", 51000, initiated=1, destination_ip="192.168.50.10"),
+        s3("OUT-D", 102, "192.168.50.22", 51000, initiated=1, destination_ip="192.168.50.23"),
+    ]
+    o = go(tmp_path, rows)
+    assert [r["trigger_event_uid"] for r in o.rule("R5_rdp")] == ["L10"]       # only the type 10 own-anchor row
+    assert sup(o.one("R5_rdp")) == set()
+    for uid in ("OUT-A", "OUT-B", "OUT-C", "OUT-D"):
+        assert o.d(uid)["disposition"] == "no_rule", uid
+        assert not in_any_gate_row(o, uid), uid
+    assert o.d("L3")["disposition"] == "unmatched_remote"
+
+
+# ====================================================================================== GTT-16 IPv4-mapped
+MAPPED_99 = "::ffff:192.168.50.99"
+
+
+def test_gtt16_mapped_excluded_4624_excludes_its_session(tmp_path):
+    """GTT-16 / GT-02: 4624 type 3 from ::ffff:192.168.50.99 is excluded; its 5145 and 4697 (by subject_logon_id) are session-excluded; its 7045 is paired_excluded."""
+    rows = [logon("X-L", 0, 2000, ip=MAPPED_99, account="admin_it"), share("X-5145", 1, 2000),
+            svc4697("X-4697", 2, 2000, "XSVC"), svc7045("X-7045", 2.5, "XSVC")]
+    o = go(tmp_path, rows)
+    assert o.trig == [] and o.unm == [] and o.sup == []
+    assert o.d("X-L")["disposition"] == "excluded_source_ip"
+    assert o.d("X-5145")["disposition"] == "excluded_source_ip_session"
+    assert o.d("X-4697")["disposition"] == "excluded_source_ip_session"
+    assert o.d("X-7045")["disposition"] == "paired_excluded"
+
+
+def test_gtt16_mapped_excluded_session_with_pre_window_4624_still_excludes(tmp_path):
+    """GT-02(b) + IP normalisation: the unclipped logon-ID map also normalises: a pre-window 4624 from ::ffff:.99 excludes the in-window 5145."""
+    rows = [logon("X-PRE", None, 2100, utc="2026-09-24T09:30:00.000000Z", ip=MAPPED_99), share("X-S", 1, 2100)]
+    o = go(tmp_path, rows)
+    assert o.d("X-S")["disposition"] == "excluded_source_ip_session"
+
+
+def test_gtt16_mapped_excluded_winrm91_and_wsmprovhost(tmp_path):
+    """GTT-16 / GT-02(c): WinRM 91 from ::ffff:192.168.50.97 -> excluded_source_ip; a wsmprovhost 2 s later -> excluded; no R8 row."""
+    o = go(tmp_path, [w91("X91", 0, "::ffff:192.168.50.97"), wsm("XWSM", 2, 8888)])
+    assert o.trig == [] and o.sup == []
+    assert o.d("X91")["disposition"] == "excluded_source_ip"
+    assert o.d("XWSM")["disposition"].startswith("excluded")
+
+
+def test_gtt16_mapped_excluded_inbound_sysmon3_is_excluded(tmp_path):
+    """GT-02(c): an inbound 3389 Sysmon 3 whose source_ip is ::ffff:192.168.50.98 is excluded."""
+    o = go(tmp_path, [s3("XS3", 0, "::ffff:192.168.50.98", 50000)])
+    assert o.d("XS3")["disposition"] == "excluded_source_ip"
+
+
+@pytest.mark.parametrize("ip", ["::ffff:127.0.0.1", "::ffff:192.168.50.22"])
+def test_gtt16_mapped_loopback_and_own_ip_4624_are_loopback_or_self(tmp_path, ip):
+    """GTT-16 / GT-05: ::ffff:127.0.0.1 and ::ffff:<own IP of ep-02> are `loopback_or_self`."""
+    o = go(tmp_path, [logon("L", 0, 20, ip=ip), share("S", 1, 20)])
+    assert o.d("L")["disposition"] == "loopback_or_self"
+    assert o.trig == [] and o.unm == []
+
+
+@pytest.mark.parametrize("l_ip,s_ip", [("::ffff:192.168.50.21", "192.168.50.21"),
+                                       ("192.168.50.21", "::ffff:192.168.50.21"),
+                                       ("::ffff:192.168.50.21", "::ffff:192.168.50.21")])
+def test_gtt16_r5_pairs_mapped_and_plain_forms_by_ip_and_port(tmp_path, l_ip, s_ip):
+    """GTT-16 / GT-11: a 4624 and an inbound 3389 Sysmon 3 of the same IPv4 in either form (same port, <= 5 s) pair: R5 ip_port_time."""
+    o = go(tmp_path, [logon("L", 0, 20, port=50001, ip=l_ip), s3("S3", 2.0, s_ip, 50001)])
+    r = o.one("R5_rdp")
+    assert r["method"] == "ip_port_time" and r["gate_tier"] == "B" and sup(r) == {"S3"}
+    assert o.d("S3")["disposition"] == "supporting"
+
+
+def test_gtt16_r5_mapped_port_zero_uses_ip_time(tmp_path):
+    """GT-11 + normalisation: with the 4624 port 0, a mapped 4624 IP still pairs by IP + time with a plain Sysmon 3 IP."""
+    o = go(tmp_path, [logon("L", 0, 20, port=0, ip="::ffff:192.168.50.21"), s3("S3", 2.0, "192.168.50.21", 61234)])
+    assert o.one("R5_rdp")["method"] == "ip_time"
+
+
+def test_gtt16_r5_mapped_other_ip_or_port_does_not_pair(tmp_path):
+    """Negative controls: a mapped address of a different IPv4, a different port, or > 5 s does not pair."""
+    assert go(tmp_path / "a", [logon("L", 0, 20, port=50001, ip="::ffff:192.168.50.21"),
+                               s3("S3", 1, "192.168.50.23", 50001)]).rule("R5_rdp") == []
+    assert go(tmp_path / "b", [logon("L", 0, 20, port=50001, ip="::ffff:192.168.50.21"),
+                               s3("S3", 1, "192.168.50.21", 50002)]).rule("R5_rdp") == []
+    assert go(tmp_path / "c", [logon("L", 0, 20, port=50001, ip="::ffff:192.168.50.21"),
+                               s3("S3", 6, "192.168.50.21", 50001)]).rule("R5_rdp") == []
+
+
+def test_gtt16_r5_type10_supporting_sysmon3_mapped_forms(tmp_path):
+    """GT-11: a 3389 Sysmon 3 in the other IP form is added to a type 10 R5 row's supporting uids."""
+    o = go(tmp_path, [logon("L", 0, 20, ltype=10, port=50000, ip="::ffff:192.168.50.21"),
+                      s3("S3", 1, "192.168.50.21", 50000)])
+    assert sup(o.one("R5_rdp")) == {"S3"} and o.d("S3")["disposition"] == "supporting"
+
+
+def test_gtt16_r8_winrm91_mapped_supports_plain_anchor(tmp_path):
+    """GTT-16 / GT-13: a WinRM 91 with clientIP ::ffff:192.168.50.21 within 5 s of an anchor 4624 from 192.168.50.21 is supporting."""
+    o = go(tmp_path, r8(extra=[w91("V91", 1.0, "::ffff:192.168.50.21")]))
+    r = o.one("R8_winrm")
+    assert sup(r) == {"V91"} and r["gate_tier"] == "A" and o.d("V91")["disposition"] == "supporting"
+
+
+def test_gtt16_r8_winrm91_plain_supports_mapped_anchor_and_keeps_original_text(tmp_path):
+    """GT-13 reverse: anchor 4624 IP ::ffff:192.168.50.21, plain 91 -> supporting; the row's source_ip keeps the anchor's original text."""
+    o = go(tmp_path, r8(anchor_kw=dict(ip="::ffff:192.168.50.21"), extra=[w91("V91", -1.0, "192.168.50.21")]))
+    r = o.one("R8_winrm")
+    assert sup(r) == {"V91"}
+    assert r["source_ip"] == "::ffff:192.168.50.21" and r["ip_kind"] == "ipv4"
+
+
+def test_gtt16_r8_tier_d_mapped_91_gives_original_text_and_ipv4_kind(tmp_path):
+    """GT-13 tier D + normalisation: the tier-D row's source_ip is the 91's original text, ip_kind = ipv4."""
+    o = go(tmp_path, [w91("V91", -1.0, "::ffff:192.168.50.21"), wsm("W", 0.0, 7300)])
+    r = o.one("R8_winrm")
+    assert r["gate_tier"] == "D" and r["source_ip"] == "::ffff:192.168.50.21" and r["ip_kind"] == "ipv4"
+    assert sup(r) == {"V91"}
+
+
+def test_gtt16_mapped_other_ip_91_is_not_supporting(tmp_path):
+    """Negative control: a mapped 91 of another IPv4 is not supporting an anchored R8 row."""
+    o = go(tmp_path, r8(extra=[w91("V91", 1.0, "::ffff:192.168.50.23")]))
+    assert sup(o.one("R8_winrm")) == set()
+
+
+def test_gtt16_csv_source_ip_keeps_original_text_and_ip_kind_ipv4(tmp_path):
+    """GTT-16 / spec 2: triggers.csv and unmatched_remote.csv keep `::ffff:192.168.50.21` in source_ip; ip_kind = ipv4; stats keyed ipv4."""
+    rows = [logon("L", 0, 20, ip="::ffff:192.168.50.21"), share("S", 1, 20),
+            logon("U", 50, 21, ip="::ffff:192.168.50.23")]
+    o = go(tmp_path, rows)
+    r = o.one("R4_smb")
+    assert r["source_ip"] == "::ffff:192.168.50.21" and r["ip_kind"] == "ipv4"
+    assert o.unm[0]["source_ip"] == "::ffff:192.168.50.23" and o.unm[0]["ip_kind"] == "ipv4"
+    assert o.stats["remote_logons_per_ip_kind"] == {"ipv4": 2}
+
+
+def test_gtt16_stats_excluded_per_ip_keyed_by_normalised_address(tmp_path):
+    """GTT-16 / spec 3.1: excluded.per_ip has one key `192.168.50.99` that counts the mapped and the plain events together."""
+    rows = [logon("XM", 0, 2000, ip=MAPPED_99), logon("XP", 10, 2001, ip="192.168.50.99"),
+            w91("X91", 20, MAPPED_99)]
+    o = go(tmp_path, rows)
+    assert o.stats["excluded"]["per_ip"] == {"192.168.50.99": 3}
+
+
+def test_gtt16_tier_d_lookup_source_ips_keep_original_text(tmp_path):
+    """GTT-16 / spec 3.1: tier_d_ip_lookup[].source_ips are the original texts from the unclipped DB."""
+    rows = [logon("PRE", None, 5001, utc="2026-09-24T09:00:00.000000Z", ip="::ffff:192.168.50.21"),
+            svc4697("V4", 2, 5001)]
+    o = go(tmp_path, rows)
+    v = o.stats["tier_d_ip_lookup"]
+    assert len(v) == 1 and v[0]["logon_found"] is True
+    assert v[0]["source_ips"] == ["::ffff:192.168.50.21"]
+
+
+# ====================================================================================== GTT-17 near_duplicate follows trigger uid
+def test_gtt17_r6_duplicate_on_the_4697_flags_both_rows(tmp_path):
+    """GTT-17: a near-duplicate pair on the 4697 (same host, channel, record_id, different uid) -> both R6 rows near_duplicate = 1."""
+    o = go(tmp_path, [logon("L", 0, 5000), svc4697("V4a", 2.0, 5000, record_id=800),
+                      svc4697("V4b", 2.5, 5000, record_id=800)])
+    rs = o.rule("R6_service")
+    assert {r["trigger_event_uid"] for r in rs} == {"V4a", "V4b"} and len(rs) == 2
+    assert all(r["near_duplicate"] == "1" for r in rs)
+    assert all(r["anchor_logon_uid"] == "L" for r in rs)
+
+
+def test_gtt17_r6_duplicate_only_on_anchor_does_not_flag_the_row(tmp_path):
+    """GTT-17: duplicate only on the anchor 4624 (single 4697) -> the R6 rows have near_duplicate = 0 (the flag follows trigger_event_uid)."""
+    o = go(tmp_path, [logon("L1", 0, 5000, record_id=900), logon("L2", 0.5, 5000, record_id=900),
+                      svc4697("V4", 2.0, 5000)])
+    rs = o.rule("R6_service")
+    assert len(rs) == 2 and {r["anchor_logon_uid"] for r in rs} == {"L1", "L2"}
+    assert all(r["trigger_event_uid"] == "V4" and r["near_duplicate"] == "0" for r in rs)
+
+
+def test_gtt17_anchor_duplicate_uids_are_still_listed_in_stats(tmp_path):
+    """GT-18 / spec 3.1: the in-window duplicates (even those that are only anchors) are listed in near_duplicate_uids."""
+    o = go(tmp_path, [logon("L1", 0, 5000, record_id=900), logon("L2", 0.5, 5000, record_id=900),
+                      svc4697("V4", 2.0, 5000)])
+    assert o.stats["near_duplicate_uids"] == ["L1", "L2"]
+
+
+def test_gtt17_r6_duplicate_on_the_supporting_7045_flags_only_the_row_of_its_own_trigger(tmp_path):
+    """GTT-17: duplicate 7045s: the 7045 that pairs (nearest, one-to-one) is only supporting -> its 4697 row = 0; the unpaired 7045 is its own trigger row = 1."""
+    o = go(tmp_path, [logon("L", 0, 5000), svc4697("V4", 2.0, 5000),
+                      svc7045("P1", 2.5, record_id=801), svc7045("P2", 3.0, record_id=801)])
+    by = {r["trigger_event_uid"]: r for r in o.rule("R6_service")}
+    assert set(by) == {"V4", "P2"}
+    assert sup(by["V4"]) == {"P1"} and by["V4"]["near_duplicate"] == "0"
+    assert by["P2"]["near_duplicate"] == "1"
+
+
+def test_gtt17_r8_duplicate_on_the_wsmprovhost_flags_both_rows(tmp_path):
+    """GTT-17: a near-duplicate pair of wsmprovhost Sysmon 1 -> both R8 rows near_duplicate = 1."""
+    o = go(tmp_path, [logon("L", 0, 7000), wsm("W1", 3.0, 7000, record_id=810), wsm("W2", 3.5, 7000, record_id=810)])
+    rs = o.rule("R8_winrm")
+    assert {r["trigger_event_uid"] for r in rs} == {"W1", "W2"} and len(rs) == 2
+    assert all(r["near_duplicate"] == "1" for r in rs)
+
+
+def test_gtt17_r8_duplicate_only_on_anchor_does_not_flag_the_row(tmp_path):
+    """GTT-17: duplicate only on the anchor 4624 (single wsmprovhost) -> the R8 rows have near_duplicate = 0."""
+    o = go(tmp_path, [logon("L1", 0, 7000, record_id=811), logon("L2", 0.5, 7000, record_id=811), wsm("W", 3.0, 7000)])
+    rs = o.rule("R8_winrm")
+    assert len(rs) == 2 and {r["anchor_logon_uid"] for r in rs} == {"L1", "L2"}
+    assert all(r["trigger_event_uid"] == "W" and r["near_duplicate"] == "0" for r in rs)
+
+
+def test_gtt17_r4_flag_still_follows_the_anchor_4624(tmp_path):
+    """Control (GT-18): for R4 the trigger event is the 4624, so a duplicate 4624 pair flags both R4 rows."""
+    o = go(tmp_path, [logon("L1", 0, 4000, record_id=777), logon("L2", 0.2, 4000, record_id=777), share("S", 1, 4000)])
+    assert [r["near_duplicate"] for r in o.rule("R4_smb")] == ["1", "1"]
+
+
+# ====================================================================================== GTT-18 stats keys + sensitivity
+STATS_TOP_KEYS = {"trial_id", "db", "window", "time_basis", "events", "removed_by_window", "near_window",
+                  "dispositions", "triggers", "unmatched_remote", "supporting", "remote_logons_per_ip_kind",
+                  "machine_account_triggers_per_host", "local_installs", "excluded", "near_duplicate_uids",
+                  "tier_d_ip_lookup", "sensitivity", "parameters"}
+SENS_NAMES = {"rdp_pairs", "service_pairs", "winrm_91_anchor_pairs", "winrm_91_to_wsmprovhost_pairs"}
+SENS_TOLS = {"2", "5", "10"}
+
+
+def _check_stats_shape(st: dict) -> None:
+    assert set(st) == STATS_TOP_KEYS, (sorted(set(st) - STATS_TOP_KEYS), sorted(STATS_TOP_KEYS - set(st)))
+    assert set(st["db"]) == {"path", "sha256_before", "sha256_after"}
+    assert set(st["window"]) == {"row", "file", "file_sha256"}
+    assert set(st["events"]) == {"loaded_total", "in_window_total", "trigger_type_in_window",
+                                 "trigger_type_in_window_per_host"}
+    assert set(st["dispositions"]) == {"total", "per_host"}
+    assert set(st["dispositions"]["total"]) == set(SPEC_DISPOSITIONS)
+    assert set(st["triggers"]) == {"total", "per_rule", "per_rule_host_tier"}
+    assert set(st["unmatched_remote"]) == {"total", "per_host"}
+    assert set(st["supporting"]) == {"total", "per_rule"}
+    assert set(st["supporting"]["per_rule"]) == {"R1_lsass", "R3_explicit", "R8_parent"}
+    assert set(st["local_installs"]) == {"count", "trigger_ids"}
+    assert set(st["excluded"]) == {"per_ip", "excluded_ip_with_artefacts"}
+    assert isinstance(st["near_duplicate_uids"], list) and isinstance(st["tier_d_ip_lookup"], list)
+    assert set(st["sensitivity"]) == SENS_NAMES
+    for name, per_tol in st["sensitivity"].items():
+        assert set(per_tol) == SENS_TOLS, name
+        assert all(isinstance(v, int) for v in per_tol.values()), name
+
+
+def test_gtt18_stats_top_level_keys_are_exactly_spec_3_1(tmp_path):
+    """GTT-18 / spec 3.1: stats.json has exactly the 19 listed top-level keys, with the documented sub-keys."""
+    o = go(tmp_path, mixed_rows())
+    _check_stats_shape(o.stats)
+    assert o.stats["time_basis"] == "raw" and o.stats["trial_id"] == TRIAL
+
+
+def test_gtt18_stats_keys_are_present_on_a_trial_with_no_events_of_interest(tmp_path):
+    """GTT-18: the same exact keys exist when nothing fires (zeros / empties, never missing keys)."""
+    o = go(tmp_path, [noise()])
+    _check_stats_shape(o.stats)
+    assert o.stats["triggers"]["total"] == 0 and o.stats["unmatched_remote"]["total"] == 0
+    assert all(v == 0 for v in o.stats["dispositions"]["total"].values())
+    assert all(v == 0 for per in o.stats["sensitivity"].values() for v in per.values())
+    assert o.stats["local_installs"]["count"] == 0 and o.stats["local_installs"]["trigger_ids"] == []
+
+
+def test_gtt18_stats_events_counts_and_triggers_equal_file_counts(tmp_path):
+    """GTT-18 / GTA-04: events.* and triggers.* / unmatched_remote.* / supporting.* counts equal the file counts."""
+    rows = mixed_rows()
+    o = go(tmp_path, rows)
+    st = o.stats
+    assert st["events"]["loaded_total"] == len(rows)
+    assert st["events"]["in_window_total"] == sum(1 for r in rows if in_window(r))
+    tt = sum(1 for r in rows if is_trigger_type(r) and in_window(r))
+    assert st["events"]["trigger_type_in_window"] == tt == len(o.disp)
+    assert sum(st["events"]["trigger_type_in_window_per_host"].values()) == tt
+    assert st["triggers"]["total"] == len(o.trig)
+    for rule in ("R4_smb", "R5_rdp", "R6_service", "R8_winrm"):
+        assert st["triggers"]["per_rule"].get(rule, 0) == len(o.rule(rule)), rule
+        for host, tiers in st["triggers"]["per_rule_host_tier"].get(rule, {}).items():
+            for tier, n in tiers.items():
+                assert n == sum(1 for r in o.rule(rule) if r["host"] == host and r["gate_tier"] == tier)
+    assert st["unmatched_remote"]["total"] == len(o.unm)
+    assert st["supporting"]["total"] == len(o.sup)
+    for rule in ("R1_lsass", "R3_explicit", "R8_parent"):
+        assert st["supporting"]["per_rule"][rule] == sum(1 for r in o.sup if r["rule"] == rule)
+
+
+def test_gtt18_stats_json_keys_sorted(tmp_path):
+    """Spec 3.1: 'JSON object, keys sorted, indent fixed': every object's keys appear in sorted order in the file text."""
+    c = make_case(tmp_path, mixed_rows())
+    c.run()
+    text = (c.out_dir / "stats.json").read_text(encoding="utf-8")
+
+    def check(obj):
+        if isinstance(obj, list):
+            for v in obj:
+                check(v)
+        elif isinstance(obj, dict):
+            assert list(obj) == sorted(obj), list(obj)
+            for v in obj.values():
+                check(v)
+    check(json.loads(text, object_pairs_hook=lambda pairs: dict(pairs)))
+    indents = {len(m.group(1)) for m in re.finditer(r"^( +)\S", text, flags=re.M)}
+    unit = min(indents)
+    assert all(i % unit == 0 for i in indents)
+
+
+def test_gtt18_sensitivity_rdp_pairs_by_tolerance_rows_unchanged(tmp_path):
+    """GTT-18: three (4624, 3389 Sysmon 3) pairs 1.5 s, 4 s and 8 s apart -> rdp_pairs {2:1, 5:2, 10:3}; R5 fires for the first two only (5 s)."""
+    rows = []
+    for i, d in enumerate((1.5, 4.0, 8.0)):
+        rows += [logon(f"L{i}", 100 * i, 20 + i, port=50000 + i), s3(f"S{i}", 100 * i + d, "192.168.50.21", 50000 + i)]
+    o = go(tmp_path, rows)
+    assert o.stats["sensitivity"]["rdp_pairs"] == {"2": 1, "5": 2, "10": 3}
+    assert sorted(r["trigger_event_uid"] for r in o.rule("R5_rdp")) == ["L0", "L1"]
+    assert "L2" in o.unm_uids()
+    assert o.stats["sensitivity"]["service_pairs"] == {"2": 0, "5": 0, "10": 0}
+
+
+def test_gtt18_sensitivity_service_pairs_by_tolerance_rows_unchanged(tmp_path):
+    """GTT-18: three installs (different names) with 7045 at 1.5 s, 4 s and 8 s from the 4697 -> service_pairs {2:1, 5:2, 10:3}; the 8 s one stays two rows."""
+    rows = [svc4697("A4", 0, 6001, "SA"), svc7045("A7", 1.5, "SA"),
+            svc4697("B4", 100, 6002, "SB"), svc7045("B7", 104, "SB"),
+            svc4697("C4", 200, 6003, "SC"), svc7045("C7", 208, "SC")]
+    o = go(tmp_path, rows)
+    assert o.stats["sensitivity"]["service_pairs"] == {"2": 1, "5": 2, "10": 3}
+    got = {r["trigger_event_uid"]: sup(r) for r in o.rule("R6_service")}
+    assert got == {"A4": {"A7"}, "B4": {"B7"}, "C4": set(), "C7": set()}
+
+
+def test_gtt18_sensitivity_winrm_91_anchor_pairs_by_tolerance_rows_unchanged(tmp_path):
+    """GTT-18: R8 anchors with a same-IP WinRM 91 1.5 s, 4 s and 8 s after the anchor -> winrm_91_anchor_pairs {2:1, 5:2, 10:3}; the 91 at 8 s is not supporting."""
+    rows = []
+    for i, d in enumerate((1.5, 4.0, 8.0)):
+        base = 100 * i
+        rows += [logon(f"L{i}", base, 7000 + i), wsm(f"W{i}", base + 0.5, 7000 + i),
+                 w91(f"V{i}", base + d, "192.168.50.21")]
+    o = go(tmp_path, rows)
+    assert o.stats["sensitivity"]["winrm_91_anchor_pairs"] == {"2": 1, "5": 2, "10": 3}
+    got = {r["trigger_event_uid"]: sup(r) for r in o.rule("R8_winrm")}
+    assert got == {"W0": {"V0"}, "W1": {"V1"}, "W2": set()}
+    assert o.stats["sensitivity"]["winrm_91_to_wsmprovhost_pairs"] == {"2": 0, "5": 0, "10": 0}   # every Sysmon 1 is BEFORE its 91
+
+
+def test_gtt18_sensitivity_winrm_91_to_wsmprovhost_pairs_after_only(tmp_path):
+    """GTT-18: 91 followed by a wsmprovhost Sysmon 1 1.5 s, 4 s and 8 s later -> {2:1, 5:2, 10:3}; a Sysmon 1 2 s BEFORE its 91 counts at no tolerance."""
+    rows = []
+    for i, d in enumerate((1.5, 4.0, 8.0)):
+        base = 100 * i
+        rows += [w91(f"V{i}", base, "192.168.50.21"), wsm(f"W{i}", base + d, 7100 + i)]
+    rows += [w91("V-BEFORE", 300, "192.168.50.21"), wsm("W-BEFORE", 298, 7110)]
+    o = go(tmp_path, rows)
+    assert o.stats["sensitivity"]["winrm_91_to_wsmprovhost_pairs"] == {"2": 1, "5": 2, "10": 3}
+    assert o.stats["sensitivity"]["winrm_91_anchor_pairs"] == {"2": 0, "5": 0, "10": 0}
+    got = {r["trigger_event_uid"]: sup(r) for r in o.rule("R8_winrm")}      # rules use 5 s, 0-5 s before the Sysmon 1
+    assert got == {"W0": {"V0"}, "W1": {"V1"}, "W2": set(), "W-BEFORE": set()}
+
+
+def _boundary_rows(kind: str, d: float) -> list[dict]:
+    if kind == "rdp_pairs":
+        return r5_pair(d)
+    if kind == "service_pairs":
+        return [svc4697("V4", 0, 6001), svc7045("V7", d)]
+    if kind == "winrm_91_anchor_pairs":
+        return [logon("L", 0, 7000), wsm("W", 0.0, 7000), w91("V91", d, "192.168.50.21")]
+    return [w91("V91", 0.0, "192.168.50.21"), wsm("W", d, 7100)]
+
+
+@pytest.mark.parametrize("kind", sorted(SENS_NAMES))
+@pytest.mark.parametrize("d", [2.0, 5.0, 10.0, 10.001])
+def test_gtt18_sensitivity_tolerance_is_inclusive(tmp_path, kind, d):
+    """Spec 3.1 / 5: a pair exactly t s apart is found at tolerance t (|dt| <= t); 10.001 s is found at none."""
+    o = go(tmp_path, _boundary_rows(kind, d))
+    assert o.stats["sensitivity"][kind] == {"2": int(d <= 2.0), "5": int(d <= 5.0), "10": int(d <= 10.0)}
+
+
+# ====================================================================================== missing column
+SPEC_COLUMNS_USED = [
+    "event_uid", "host", "channel", "event_id", "record_id", "event_utc", "logon_type", "source_ip", "source_port",
+    "destination_ip", "destination_port", "initiated", "account_name", "domain_short", "target_logon_id",
+    "target_linked_logon_id", "subject_logon_id", "session_id", "machine_account", "authentication_package", "image",
+    "parent_image", "share_name", "relative_target_name", "service_name", "service_image_path", "target_image",
+    "granted_access",
+]
+
+
+def write_db_missing(path: Path, rows: list[dict], missing: str, *, hide_in_view_only: bool = False) -> None:
+    """Like write_db, but the table (or only the `events_dedup` view) lacks column `missing`."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        path.unlink()
+    table_cols = [c for c in EVENT_COLUMNS if hide_in_view_only or c != missing]
+    view_cols = [c for c in table_cols if c != missing]
+    ddl = ", ".join(f'"{c}" ' + ("INTEGER" if c in INT_COLUMNS else "TEXT") for c in table_cols)
+    con = sqlite3.connect(str(path))
+    try:
+        con.execute(f"CREATE TABLE events ({ddl})")
+        con.execute(
+            "CREATE VIEW events_dedup AS SELECT " + ", ".join(f'"{c}"' for c in view_cols) +
+            " FROM (SELECT e.*, row_number() OVER (PARTITION BY duplicate_content_sha256 "
+            "ORDER BY source_relative_path, source_line) AS _rn FROM events e) WHERE _rn = 1")
+        marks = ", ".join("?" for _ in table_cols)
+        con.executemany(f"INSERT INTO events VALUES ({marks})", [tuple(r.get(c) for c in table_cols) for r in rows])
+        con.commit()
+    finally:
+        con.close()
+
+
+def _missing_case(tmp_path: Path, missing: str, *, view_only: bool = False) -> Case:
+    c = make_case(tmp_path, [noise()])
+    write_db_missing(c.db, [noise()], missing, hide_in_view_only=view_only)
+    write_windows(c.windows, {"trial_id": TRIAL, "start_utc": WIN_START, "end_utc": WIN_END,
+                              "window_source": "computed_agent_run", "margin_start_s": 60, "margin_end_s": 300,
+                              "rule": "t", "db_sha256": sha256_of(c.db), "time_basis": "raw"})
+    return c
+
+
+def test_missing_destination_ip_raises_gate_error_naming_column_nothing_written(tmp_path, capsys):
+    """Spec 2 (destination_ip added 2026-11-12): a DB whose view lacks destination_ip -> GateError naming it, nothing written, CLI returns 2."""
+    c = _missing_case(tmp_path, "destination_ip")
+    with pytest.raises(GateError) as ei:
+        c.run_raw()
+    assert "destination_ip" in str(ei.value)
+    assert not c.out_dir.exists()
+    assert c.cli() == 2
+    assert not c.out_dir.exists()
+    assert "destination_ip" in capsys.readouterr().err
+
+
+def test_missing_destination_ip_only_in_the_view_is_also_refused(tmp_path):
+    """The check is on the `events_dedup` view the gate reads: a base table with the column but a view without it is refused."""
+    c = _missing_case(tmp_path, "destination_ip", view_only=True)
+    with pytest.raises(GateError) as ei:
+        c.run_raw()
+    assert "destination_ip" in str(ei.value)
+    assert not c.out_dir.exists()
+
+
+@pytest.mark.parametrize("col", SPEC_COLUMNS_USED)
+def test_missing_any_required_column_is_refused_naming_it(tmp_path, col):
+    """Spec 2 'Columns used': a DB lacking any of the listed columns is refused with GateError naming the column; nothing written; CLI 2."""
+    c = _missing_case(tmp_path, col)
+    with pytest.raises(GateError) as ei:
+        c.run_raw()
+    assert col in str(ei.value)
+    assert not c.out_dir.exists()
+    assert c.cli() == 2
+
+
+# ====================================================================================== GTT-14 extension
+def _fresh_interpreter(code: str) -> dict:
+    proc = subprocess.run([sys.executable, "-I", "-c", code], capture_output=True, text=True, timeout=120,
+                          cwd=str(REPO / "tests"))
+    assert proc.returncode == 0, f"fresh interpreter failed:\n{proc.stderr}"
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+ANSWER_KEY_BANNED = ["answer_key.build", "answer_key.finish", "answer_key.verify", "answer_key.overlap"]
+
+
+def test_gtt14_fresh_interpreter_importing_gate_and_trial_window_loads_no_key_builder_module():
+    """GTT-14 (extension, decision 041): a fresh interpreter importing every module of gate and trial_window (+ their __main__) has none of answer_key.build / finish / verify / overlap in sys.modules."""
+    code = f"""
+import sys, json, pkgutil, importlib
+sys.path.insert(0, {str(REPO / "src")!r})
+loaded = []
+for name in ("gate", "trial_window"):
+    pkg = importlib.import_module(name)
+    loaded.append(name)
+    for m in pkgutil.walk_packages(pkg.__path__, name + "."):
+        importlib.import_module(m.name)
+        loaded.append(m.name)
+for name in ("gate.__main__", "trial_window.__main__"):
+    importlib.import_module(name)
+    loaded.append(name)
+banned = {ANSWER_KEY_BANNED!r}
+print(json.dumps({{"banned": [b for b in banned if b in sys.modules], "loaded": loaded,
+                   "margins": "lab_common.margins" in sys.modules}}))
+"""
+    res = _fresh_interpreter(code)
+    assert {"gate.run", "gate.rules", "gate.__main__", "trial_window.window", "trial_window.params",
+            "trial_window.__main__"} <= set(res["loaded"]), res["loaded"]
+    assert res["banned"] == [], f"key-builder modules loaded by gate / trial_window: {res['banned']}"
+    assert res["margins"] is True, "trial_window does not take its margins from lab_common.margins"
+
+
+def test_gtt14_fresh_interpreter_probe_selfcheck_sees_answer_key_build():
+    """GTT-14 self-check: in the same style, importing answer_key.build DOES show up in sys.modules, so the probe above is meaningful."""
+    code = f"""
+import sys, json, importlib
+sys.path.insert(0, {str(REPO / "src")!r})
+importlib.import_module("answer_key.build")
+banned = {ANSWER_KEY_BANNED!r}
+print(json.dumps({{"banned": [b for b in banned if b in sys.modules]}}))
+"""
+    assert "answer_key.build" in _fresh_interpreter(code)["banned"]
+
+
+def test_gtt14_source_text_of_lab_common_has_no_forbidden_strings():
+    """GTT-14 (extension): no src/lab_common/*.py mentions ground_truth, build_draft, intended_steps, owner_reviews, provisional_windows."""
+    forbidden = ["ground_truth", "build_draft", "intended_steps", "owner_reviews", "provisional_windows"]
+    files = sorted(SRC_LAB_COMMON.glob("*.py"))
+    assert files, "src/lab_common has no python files"
+    hits = [(f.name, w) for f in files for w in forbidden if w in f.read_text(encoding="utf-8")]
+    assert hits == [], f"forbidden strings in lab_common source: {hits}"
+
+
+def test_gtt14_trial_window_margins_are_imported_from_lab_common_not_defined_locally():
+    """GTT-14: src/trial_window/params.py imports its margins from lab_common.margins."""
+    text = (REPO / "src" / "trial_window" / "params.py").read_text(encoding="utf-8")
+    tree = ast.parse(text)
+    assert any(isinstance(n, ast.ImportFrom) and n.module == "lab_common.margins" for n in ast.walk(tree))

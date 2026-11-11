@@ -11,6 +11,8 @@ import json
 import sys
 from pathlib import Path
 
+from lab_common.manifest import read_manifest_span  # re-exported: callers import it from here
+
 from . import db, overlap
 from .build import apply_owner_reviews, build_draft
 from .verify import load_draft, to_markdown, verify
@@ -38,21 +40,6 @@ def read_provisional(repo: Path, trial: str) -> dict | None:
         return None
     with open(p, newline="", encoding="utf-8") as fh:
         return next((r for r in csv.DictReader(fh) if r["trial_id"] == trial), None)
-
-
-def read_manifest_span(repo: Path, trial: str) -> dict | None:
-    """Min first / max last event time over the trial's host files in data/manifest.csv (export spans)."""
-    p = repo / "data" / "manifest.csv"
-    if not p.exists():
-        return None
-    scenario, tr = trial.split("_", 1)
-    with open(p, newline="", encoding="utf-8") as fh:
-        rows = [r for r in csv.DictReader(fh) if r["scenario"] == scenario and r["trial"] == tr
-                and r.get("first_event_utc") and r.get("last_event_utc")]
-    if not rows:
-        return None
-    return {"start_utc": min(r["first_event_utc"] for r in rows), "end_utc": max(r["last_event_utc"] for r in rows),
-            "source": "data/manifest.csv", "files": len(rows)}
 
 
 def cmd_build(trial: str, repo: Path) -> Path:

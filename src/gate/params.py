@@ -32,6 +32,8 @@ DB_COLUMNS: tuple[str, ...] = (
     "target_linked_logon_id", "subject_logon_id", "session_id", "machine_account", "authentication_package",
     "image", "parent_image", "share_name", "relative_target_name", "service_name", "service_image_path",
     "target_image", "granted_access",
+    # Decision 041: the remote end of an outbound Sysmon 3 (GT-02(c), GT-05).
+    "destination_ip",
 )
 
 # Spec section 3, in the order listed there.

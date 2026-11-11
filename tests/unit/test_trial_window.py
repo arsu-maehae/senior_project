@@ -408,6 +408,22 @@ def test_tw35_params_values():
     assert list(params.DEFAULT_TRIALS) == TRIALS
 
 
+def test_tw35b_margins_come_from_lab_common_and_are_shared_with_answer_key():
+    """Decision 041 / spec 02_gate GTT-14: the 60 s / 300 s margins live in `lab_common.margins`; trial_window and the
+    answer-key code use those very values (re-exported, not copied)."""
+    from answer_key import finish as ak_finish
+    from lab_common import margins
+
+    assert margins.RUN_INTERVAL_BEFORE_S == 60.0 and margins.RUN_INTERVAL_AFTER_S == 300.0
+    assert margins.KEY_MARGIN_BEFORE_S == 60.0 and margins.KEY_MARGIN_AFTER_S == 300.0
+    assert params.MARGIN_START_S == margins.RUN_INTERVAL_BEFORE_S == 60.0
+    assert params.MARGIN_END_S == margins.RUN_INTERVAL_AFTER_S == 300.0
+    assert ak_build.RUN_INTERVAL_BEFORE_S == margins.RUN_INTERVAL_BEFORE_S == 60.0
+    assert ak_build.RUN_INTERVAL_AFTER_S == margins.RUN_INTERVAL_AFTER_S == 300.0
+    assert ak_finish.KEY_MARGIN_BEFORE_S == margins.KEY_MARGIN_BEFORE_S == 60.0
+    assert ak_finish.KEY_MARGIN_AFTER_S == margins.KEY_MARGIN_AFTER_S == 300.0
+
+
 # ------------------------------------------------------------------------------------------ run() on a temp repo
 
 EVENT_COLS = ["scenario_id", "event_uid", "timestamp_utc", "event_utc", "host", "channel", "event_id", "record_id",

@@ -80,6 +80,21 @@ def is_inbound_rdp_sysmon3(row: Mapping) -> bool:
     return is_rdp_sysmon3(row) and row.get("initiated") == 0
 
 
+def is_outbound_sysmon3(row: Mapping) -> bool:
+    """Sysmon 3 logged on the connecting host (``initiated`` = 1): its remote end is ``destination_ip``.
+
+    WHY only ``initiated`` = 1: GT-02(c) and GT-05 (decision 041) name 1 as outbound and 0 as inbound.
+    A NULL ``initiated`` is treated as inbound for the address checks (``source_ip`` is judged, the
+    behaviour before decision 041), but it still never pairs for R5, which needs ``initiated`` = 0.
+    """
+    return _is(row, "Sysmon", 3) and row.get("initiated") == 1
+
+
+def is_outbound_rdp_sysmon3(row: Mapping) -> bool:
+    """Outbound 3389 Sysmon 3: the source-host side of an RDP connection (GT-05, decision 041)."""
+    return is_rdp_sysmon3(row) and is_outbound_sysmon3(row)
+
+
 def is_lsass_access(row: Mapping) -> bool:
     """Sysmon 10 into lsass.exe (any access mask; the mask test is in ``is_r1``)."""
     return _is(row, "Sysmon", 10) and ends_with(row.get("target_image"), LSASS)
@@ -102,21 +117,48 @@ def is_kept_type(row: Mapping) -> bool:
 # ---------------------------------------------------------------- IPs and logon IDs
 
 def ip_text(value: Any) -> str | None:
-    """Stripped IP text, or None when blank (NULL, empty or ``-``): blank never joins (GT-18)."""
+    """Stripped IP text as logged, or None when blank (NULL, empty or ``-``): blank never joins (GT-18).
+
+    For display only (the original text written in ``source_ip``); every comparison uses ``norm_ip``.
+    """
     if value is None:
         return None
     text = str(value).strip()
     return None if text in ("", "-") else text
 
 
+def norm_ip(value: Any) -> str | None:
+    """IP text for comparisons: stripped; blank -> None; ``::ffff:a.b.c.d`` -> ``a.b.c.d`` (spec 2, decision 041).
+
+    WHY only the IPv4-mapped form is rewritten: Windows can log the same IPv4 peer either way, and
+    the excluded list, lab IPs and R5/WinRM pairings are written as IPv4. Other text (IPv6,
+    link-local with a zone, unparseable) is returned unchanged so existing exact-text comparisons
+    keep their meaning.
+    """
+    text = ip_text(value)
+    if text is None:
+        return None
+    try:
+        addr = ipaddress.ip_address(text)
+    except ValueError:
+        return text
+    mapped = getattr(addr, "ipv4_mapped", None)
+    return str(mapped) if mapped is not None else text
+
+
+def norm_ip_set(values: Iterable[Any]) -> frozenset[str]:
+    """A parameter list of IPs in ``norm_ip`` form, so both sides of a membership test are normalised."""
+    return frozenset(ip for ip in (norm_ip(v) for v in values) if ip is not None)
+
+
 def ip_kind(value: Any) -> str:
-    """``ipv4`` / ``ipv6`` / ``link_local`` / ``blank`` (spec 3, GT-06).
+    """``ipv4`` / ``ipv6`` / ``link_local`` / ``blank`` of the normalised address (spec 3, GT-06; decision 041).
 
     WHY unparseable non-blank text is ``blank``: the four kinds are fixed by the spec; the raw text
     is still written in ``source_ip`` so it stays visible, and it still joins by exact text.
-    IPv4-mapped IPv6 (``::ffff:a.b.c.d``) is ``ipv6``, as ``ipaddress`` parses it.
+    IPv4-mapped IPv6 (``::ffff:a.b.c.d``) is normalised first, so it is ``ipv4``.
     """
-    text = ip_text(value)
+    text = norm_ip(value)
     if text is None:
         return "blank"
     try:
@@ -163,12 +205,14 @@ def excluded_logon_map(logons_all: Iterable[Mapping], params: GateParams) -> dic
     """(host, target_logon_id) -> excluded IP(s) of every 4624 from a non-lab workstation, any time.
 
     WHY unclipped: a session opened before the window can still act inside it (GT-02(b)); the map
-    can only remove events. Several IPs on one key are joined with ``;`` (sorted).
+    can only remove events. Several IPs on one key are joined with ``;`` (sorted). IPs are in
+    ``norm_ip`` form, so the per-IP stats are keyed by the normalised address (decision 041).
     """
+    excluded = norm_ip_set(params.excluded_source_ips)
     acc: dict[tuple[str, int], set[str]] = {}
     for row in logons_all:
-        ip, lid = ip_text(row.get("source_ip")), logon_id(row.get("target_logon_id"))
-        if ip in params.excluded_source_ips and lid is not None:
+        ip, lid = norm_ip(row.get("source_ip")), logon_id(row.get("target_logon_id"))
+        if ip in excluded and lid is not None:
             acc.setdefault((row["host"], lid), set()).add(ip)
     return {k: ";".join(sorted(v)) for k, v in acc.items()}
 
@@ -176,7 +220,8 @@ def excluded_logon_map(logons_all: Iterable[Mapping], params: GateParams) -> dic
 def logon_ip_lookup(logons_all: Iterable[Mapping]) -> dict[tuple[str, int], list[str]]:
     """(host, target_logon_id) -> distinct non-blank source IPs of 4624s in the unclipped DB.
 
-    Used only for the tier-D IP report in stats (spec 3), never to anchor or trigger.
+    Used only for the tier-D IP report in stats (spec 3), never to anchor or trigger. The IPs are
+    the original logged texts (spec 3.1); no comparison is made with them.
     """
     acc: dict[tuple[str, int], set[str]] = {}
     for row in logons_all:
@@ -240,23 +285,46 @@ class Suppression:
     excluded_ip: str | None = None
 
 
-def _ip_suppression(row: Mapping, params: GateParams) -> Suppression | None:
-    """GT-02(a)/(c) by the event's own remote address, else GT-05 loopback/self.
+OUTBOUND_3389_REASON = "outbound 3389, source side of an RDP connection"
 
-    GT-02(c) for Sysmon 3 applies to inbound connections only (the remote end is ``source_ip``);
-    GT-05 applies to every event carrying a ``source_ip`` (4624, WinRM 91, Sysmon 3), as written,
-    so an outbound 3389 Sysmon 3 (source = this host) is ``loopback_or_self``.
+
+def remote_address(row: Mapping) -> tuple[str, Any]:
+    """(column name, logged value) of the address GT-02(a)/(c) and GT-05 judge for this event.
+
+    WHY: an outbound Sysmon 3 (``initiated`` = 1) is logged on the connecting host, so its
+    ``source_ip`` is the host itself; the other end is ``destination_ip`` (decision 041). Every
+    other event (4624, WinRM 91, inbound or NULL-``initiated`` Sysmon 3) is judged by ``source_ip``.
     """
-    ip = ip_text(row.get("source_ip"))
+    column = "destination_ip" if is_outbound_sysmon3(row) else "source_ip"
+    return column, row.get(column)
+
+
+def _ip_detail(column: str, logged: Any, ip: str) -> str:
+    """``<column>=<logged text>``, plus the normalised form when it differs, for reason_detail."""
+    text = ip_text(logged)
+    return f"{column}={text}" if text == ip else f"{column}={text};normalised={ip}"
+
+
+def _ip_suppression(row: Mapping, params: GateParams) -> Suppression | None:
+    """GT-02(a)/(c) by the event's own remote address, else GT-05 loopback/self (decision 041).
+
+    The address is ``remote_address`` after ``norm_ip``; both it and the parameter lists are
+    normalised, so ``::ffff:192.168.50.99`` is excluded and ``::ffff:127.0.0.1`` is loopback. The
+    excluded IP is carried in normalised form for the per-IP count. An outbound 3389 Sysmon 3 that
+    is neither excluded nor loopback/self is not suppressed; it ends as ``no_rule`` with
+    ``OUTBOUND_3389_REASON`` (``outputs.disposition_for``).
+    """
+    column, logged = remote_address(row)
+    ip = norm_ip(logged)
     if ip is None:
         return None
-    sysmon3 = _is(row, "Sysmon", 3)
-    if ip in params.excluded_source_ips and (not sysmon3 or row.get("initiated") == 0):
-        return Suppression("excluded_source_ip", f"source_ip={ip}", ip)
-    if ip in params.loopback:
-        return Suppression("loopback_or_self", f"source_ip={ip};loopback")
-    if ip == params.lab_host_ips.get(str(row.get("host"))):
-        return Suppression("loopback_or_self", f"source_ip={ip};own_host_ip")
+    detail = _ip_detail(column, logged, ip)
+    if ip in norm_ip_set(params.excluded_source_ips):
+        return Suppression("excluded_source_ip", detail, ip)
+    if ip in norm_ip_set(params.loopback):
+        return Suppression("loopback_or_self", f"{detail};loopback")
+    if ip == norm_ip(params.lab_host_ips.get(str(row.get("host")))):
+        return Suppression("loopback_or_self", f"{detail};own_host_ip")
     return None
 
 
@@ -282,7 +350,7 @@ def _winrm_session_suppression(row: Mapping, excluded_91: Sequence[Mapping], tol
     if not hits:
         return None
     w = max(hits, key=lambda r: (r["us"], r["event_uid"]))
-    ip = ip_text(w.get("source_ip"))
+    ip = norm_ip(w.get("source_ip"))
     return Suppression("excluded_source_ip_session", f"winrm91={w['event_uid']};source_ip={ip}", ip)
 
 
@@ -327,7 +395,8 @@ def suppress_all(events: Sequence[Mapping], excl_map: Mapping[tuple[str, int], s
     A 7045 paired with an excluded or system 4697 becomes ``paired_excluded`` (GT-02(d), GT-04),
     carrying the 4697's excluded IP for the per-IP count.
     """
-    excluded_91 = [r for r in events if is_winrm91(r) and ip_text(r.get("source_ip")) in params.excluded_source_ips]
+    excluded = norm_ip_set(params.excluded_source_ips)
+    excluded_91 = [r for r in events if is_winrm91(r) and norm_ip(r.get("source_ip")) in excluded]
     out: dict[str, Suppression] = {}
     for row in events:
         sup = own_suppression(row, excl_map, excluded_91, params)

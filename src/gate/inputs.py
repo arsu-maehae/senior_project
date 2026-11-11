@@ -93,6 +93,24 @@ def check_clock(trial_id: str, start_us: int | None, params: GateParams) -> None
         raise GateError(f"refused: {reason}")
 
 
+def missing_columns(available: Iterable[str]) -> list[str]:
+    """Spec section 2 columns absent from the view, in ``DB_COLUMNS`` order (empty when all present)."""
+    have = set(available)
+    return [c for c in DB_COLUMNS if c not in have]
+
+
+def check_columns(con: sqlite3.Connection) -> None:
+    """Refuse a DB whose ``events_dedup`` view lacks any required column, naming every missing one.
+
+    WHY before the scan: without the check, SQLite fails on the first unknown column only, so the
+    message names one column at a time; a NULL fallback would silently change dispositions
+    (e.g. an outbound 3389 Sysmon 3 with no ``destination_ip``, decision 041).
+    """
+    missing = missing_columns(r[1] for r in con.execute(f"PRAGMA table_info({VIEW})"))
+    if missing:
+        raise GateError(f"{VIEW} lacks required column(s): {', '.join(missing)}")
+
+
 def iter_events(con: sqlite3.Connection) -> Iterator[Row]:
     """Stream the spec section 2 columns of ``events_dedup`` (never ``events``) as dicts.
 
@@ -205,7 +223,8 @@ def load_events(db_path: Path, start_us: int, end_us: int, params: GateParams,
 
     Returns (scan, sha256 before, sha256 after). Raises GateError if the DB is missing, if its hash
     differs from ``expected_sha256`` (checked before any event row is read; None skips the check),
-    or if its hash changed while open (it must never be written).
+    if the view lacks a required column (all missing ones named), or if its hash changed while open
+    (it must never be written).
     """
     path = Path(db_path)
     if not path.is_file():
@@ -216,6 +235,7 @@ def load_events(db_path: Path, start_us: int, end_us: int, params: GateParams,
     try:
         con = open_ro(path)
         try:
+            check_columns(con)
             scan = scan_events(iter_events(con), start_us, end_us, params)
         finally:
             con.close()

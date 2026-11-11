@@ -397,13 +397,45 @@ def test_ak06_no_forbidden_imports_anywhere_in_package():
             assert not any(f in m.lower() for f in FORBIDDEN), f"{p.name} imports {m}"
 
 
+# Spec 07 line 13 (amended 2026-11-12, decision 041): the only top-level package outside the stdlib and
+# the package's own relative imports that the key code may import is `lab_common`.
+ALLOWED_NON_STDLIB_TOPLEVEL = {"lab_common"}
+
+
 def test_ak06_import_whitelist_only_stdlib_or_package_local():
     stdlib = set(sys.stdlib_module_names)
     for p in SRC_AK.glob("*.py"):
         for m in imported_modules(p):
             if m.startswith("."):
                 continue
-            assert m.split(".")[0] in stdlib, f"{p.name} imports non-stdlib/non-local {m}"
+            top = m.split(".")[0]
+            assert top in stdlib or top in ALLOWED_NON_STDLIB_TOPLEVEL, f"{p.name} imports non-stdlib/non-local {m}"
+
+
+def test_ak06_lab_common_is_the_only_allowance_and_is_really_used():
+    """Spec 07 line 13: exactly one extra top-level package is allowed; it is `lab_common` and nothing else."""
+    assert ALLOWED_NON_STDLIB_TOPLEVEL == {"lab_common"}
+    stdlib = set(sys.stdlib_module_names)
+    extra = {m.split(".")[0] for p in SRC_AK.glob("*.py") for m in imported_modules(p)
+             if not m.startswith(".") and m.split(".")[0] not in stdlib}
+    assert extra <= {"lab_common"}, extra
+
+
+def test_ak06_lab_common_imports_only_stdlib():
+    """The lab_common allowance cannot become a back door: src/lab_common/*.py imports only the stdlib (and its own
+    relative imports), never answer_key, log_check, parser, gate or trial_window."""
+    lab = SRC_AK.parent / "lab_common"
+    files = sorted(lab.glob("*.py"))
+    assert files, "src/lab_common has no python files"
+    stdlib = set(sys.stdlib_module_names)
+    banned = ("answer_key", "log_check", "parsing_normalization", "parser", "gate", "trial_window", "stitch")
+    for p in files:
+        for m in imported_modules(p):
+            if m.startswith("."):
+                continue
+            top = m.split(".")[0]
+            assert top in stdlib, f"{p.name} imports non-stdlib {m}"
+            assert not any(b in m.lower() for b in banned), f"{p.name} imports {m}"
 
 
 def test_ak06_verify_shares_only_db_with_builder():

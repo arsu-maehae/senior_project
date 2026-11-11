@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 from . import classify
-from .classify import Suppression, ip_text, logon_id, within
+from .classify import Suppression, logon_id, norm_ip, within
 from .params import GateParams
 from .timeutil import seconds_to_us
 
@@ -98,14 +98,14 @@ def r4_rows(remote: Sequence[Mapping], events: Sequence[Mapping],
 def rdp_pair_method(logon: Mapping, s3: Mapping, tol_us: int) -> str | None:
     """How a 4624 pairs with an inbound 3389 Sysmon 3, or None.
 
-    Same host, same non-blank source_ip (exact text), |dt| <= tol (either order, inclusive). With a
+    Same host, same non-blank source_ip (``norm_ip`` form, decision 041), |dt| <= tol (either order, inclusive). With a
     4624 port of 0/NULL (decision 015) IP + time is enough (``ip_time``); otherwise the ports must be
     equal and non-NULL (``ip_port_time``).
     """
     if logon["host"] != s3["host"]:
         return None
-    ip = ip_text(logon.get("source_ip"))
-    if ip is None or ip != ip_text(s3.get("source_ip")) or not within(logon["us"], s3["us"], tol_us):
+    ip = norm_ip(logon.get("source_ip"))
+    if ip is None or ip != norm_ip(s3.get("source_ip")) or not within(logon["us"], s3["us"], tol_us):
         return None
     port = logon.get("source_port")
     if port in (None, 0):
@@ -115,11 +115,11 @@ def rdp_pair_method(logon: Mapping, s3: Mapping, tol_us: int) -> str | None:
 
 def rdp_matches(remote: Sequence[Mapping], s3s: Sequence[Mapping], tol_us: int) -> dict[str, dict[str, str]]:
     """logon uid -> {Sysmon 3 uid: method} for every remote 4624 (type 3 or 10) / inbound 3389 pair."""
-    by_key = _index(s3s, lambda r: (r["host"], ip_text(r.get("source_ip"))))
+    by_key = _index(s3s, lambda r: (r["host"], norm_ip(r.get("source_ip"))))
     out: dict[str, dict[str, str]] = {}
     for logon in remote:
         hits = {}
-        for s3 in by_key.get((logon["host"], ip_text(logon.get("source_ip"))), []):
+        for s3 in by_key.get((logon["host"], norm_ip(logon.get("source_ip"))), []):
             method = rdp_pair_method(logon, s3, tol_us)
             if method:
                 hits[s3["event_uid"]] = method
@@ -222,7 +222,7 @@ def r8_rows(remote: Sequence[Mapping], events: Sequence[Mapping], suppressed: Ma
 
     Anchor = remote type 3 4624 on its host whose target_logon_id or target_linked_logon_id = the
     Sysmon 1 session_id, logged at or before it; one row per anchor (logon_id, A). Supporting WinRM 91
-    of an anchored row: same host, clientIP = the anchor's source_ip, |91 - anchor| <= 5 s. A tier-D
+    of an anchored row: same host, clientIP = the anchor's source_ip (both ``norm_ip``), |91 - anchor| <= 5 s. A tier-D
     row takes the latest WinRM 91 on the host 0-5 s before the Sysmon 1: its clientIP becomes the
     row's source_ip and its uid is supporting (decision 041).
     """
@@ -244,9 +244,9 @@ def r8_rows(remote: Sequence[Mapping], events: Sequence[Mapping], suppressed: Ma
             continue
         ordered = _by_time(anchors)
         for a in ordered:
-            ip = ip_text(a.get("source_ip"))
+            ip = norm_ip(a.get("source_ip"))
             support = _by_time([w for w in w91 if w["host"] == a["host"] and ip is not None
-                                and ip_text(w.get("source_ip")) == ip and within(w["us"], a["us"], tol)])
+                                and norm_ip(w.get("source_ip")) == ip and within(w["us"], a["us"], tol)])
             out.append(TriggerDraft("R8_winrm", ev, a, support, "logon_id", "A", len(ordered), a))
     return out
 

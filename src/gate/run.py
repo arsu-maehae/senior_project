@@ -110,8 +110,8 @@ def sensitivity(events: Sequence[Mapping], res: Mapping[str, Any], params: GateP
         out["service_pairs"][key] = len(classify.pair_services(res["e7045"], res["e4697"], t))
         out["winrm_91_anchor_pairs"][key] = sum(
             1 for a in anchors.values() for w in w91
-            if w["host"] == a["host"] and classify.ip_text(a.get("source_ip")) is not None
-            and classify.ip_text(w.get("source_ip")) == classify.ip_text(a.get("source_ip"))
+            if w["host"] == a["host"] and classify.norm_ip(a.get("source_ip")) is not None
+            and classify.norm_ip(w.get("source_ip")) == classify.norm_ip(a.get("source_ip"))
             and classify.within(w["us"], a["us"], us))
         out["winrm_91_to_wsmprovhost_pairs"][key] = sum(
             1 for s in starts for w in w91 if w["host"] == s["host"] and 0 <= s["us"] - w["us"] <= us)

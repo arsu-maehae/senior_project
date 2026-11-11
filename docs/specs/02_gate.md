@@ -1,6 +1,6 @@
 # Stage spec: 02_gate
 
-**Owner:** <stage owner> · **Status:** approved (owner, 2026-11-11); attacker-reviewed; owner answers Q1–Q4 applied; §2.1 window rule and GTA-06 amended by the owner 2026-11-11 (decision 040); §2 refusals, §3, §5, GT-11, GT-12, GT-13, GT-15, GTT-07 amended by the owner 2026-11-12 (decision 041) · **Last updated:** 2026-11-12
+**Owner:** <stage owner> · **Status:** approved (owner, 2026-11-11); attacker-reviewed; owner answers Q1–Q4 applied; §2.1 window rule and GTA-06 amended by the owner 2026-11-11 (decision 040); §2 refusals and IP normalisation, §3, §3.1 stats keys, §5, GT-02(c), GT-05, GT-11, GT-12, GT-13, GT-15, GTT-07, GTT-14..18 amended by the owner 2026-11-12 (decision 041) · **Last updated:** 2026-11-12
 
 Decisions: [041](../decisions/041-gate-implementation-readings.md) implementation readings (owner answers 2026-11-12), [037](../decisions/037-gate-excluded-source-ips.md) excluded source IPs, [038](../decisions/038-gate-rule-choices.md) rule choices, [039](../decisions/039-gate-window-input-and-clock.md) window input and clock rule, [040](../decisions/040-trial-window-agent-tree-and-gta06-containment.md) window from the agent tree, GTA-06 containment. Review: [02_gate-spec-2026-11-11](../reviews/02_gate-spec-2026-11-11.md).
 
@@ -18,10 +18,16 @@ whether a movement is an attack; a legitimate admin doing the same thing also tr
 | Parameters | `src/gate/params.py` | Section 5. |
 
 Columns used: `event_uid, host, channel, event_id, record_id, event_utc, logon_type, source_ip, source_port,
-destination_port, initiated, account_name, domain_short, target_logon_id, target_linked_logon_id,
+destination_ip` (*added by the owner 2026-11-12, decision 041: the remote address of an outbound Sysmon 3*)`, destination_port, initiated, account_name, domain_short, target_logon_id, target_linked_logon_id,
 subject_logon_id, session_id, machine_account, authentication_package, image, parent_image, share_name,
 relative_target_name, service_name, service_image_path, target_image, granted_access`.
 - Time: `event_utc` everywhere (Sysmon UtcTime, else record time; decision 010), compared as parsed UTC instants, never as text. Section 2.2 says which times (raw or corrected) may be used.
+- IP addresses (*amended by the owner 2026-11-12, decision 041*): before **every** IP comparison (excluded IPs,
+  lab host IPs and own IP, loopback, R5 pairing, WinRM 91 ↔ anchor, the GT-02(b) map, GT-02(c)) an address is
+  stripped and an IPv4-mapped IPv6 address (`::ffff:a.b.c.d`) is normalised to its IPv4 form `a.b.c.d`. Blank, `-`
+  and NULL never compare equal to anything. `ip_kind` describes the normalised address (`::ffff:192.168.50.21` →
+  `ipv4`); stats counts are keyed by the normalised address. Every output CSV keeps the **original** logged text in
+  `source_ip`.
 - Logon IDs: integers for every comparison, hex only in display columns (D1). **A NULL logon ID never matches anything** (logon ID 0 is stored as NULL, decision 005).
 - The gate does not read `command_line` and never rebuilds what was typed on a host.
 
@@ -96,7 +102,7 @@ Every file except `run_info.json` is byte-identical between two runs on the same
 | target_logon_id, target_logon_id_hex | int / text | logon ID of the anchor |
 | logon_type | int/null | of the anchor |
 | source_ip | text/null | IpAddress of the anchor, else WinRM 91 clientIP; null if blank |
-| ip_kind | text | `ipv4`, `ipv6`, `link_local`, `blank` |
+| ip_kind | text | `ipv4`, `ipv6`, `link_local`, `blank`; of the normalised address, so an IPv4-mapped IPv6 address is `ipv4` (*amended by the owner 2026-11-12, decision 041*) |
 | account_name, domain_short | text | account of the anchor 4624 (the moving account, decision 027) |
 | authentication_package | text | NTLM / Kerberos (R2 is shown here, never a trigger) |
 | machine_account | int | 1 if the account ends in `$` |
@@ -120,7 +126,8 @@ Disposition, in this precedence order (first match wins): `excluded_source_ip`, 
 `unmatched_remote`, `no_rule`.
 *Amended by the owner 2026-11-12 (decision 041):* `trigger` = the event is the `trigger_event_uid` **or the
 `anchor_logon_uid`** of any `triggers.csv` row; `supporting` = the event is in any row's `supporting_event_uids`, or
-is listed in `supporting.csv` (an `R8_parent` Sysmon 1 → `supporting`).
+is listed in `supporting.csv` (an `R8_parent` Sysmon 1 → `supporting`). An outbound 3389 Sysmon 3 that is not
+excluded, loopback or self is `no_rule` with `reason_detail` `outbound 3389, source side of an RDP connection` (GT-05).
 
 **`unmatched_remote.csv`** — remote 4624 type 3/10 that fired no rule and is the anchor of no trigger row (GT-15). T7 reads it next to `triggers.csv`.
 Same columns as `triggers.csv` minus `rule`.
@@ -136,6 +143,31 @@ anchor); excluded-IP sessions that also have a service install or share write (`
 `near_duplicate` uids; for every tier-D row, the IP of its logon ID looked up in the unclipped DB; parameters.
 **`run_info.json`** — run time and tool version (not byte-compared).
 
+### 3.1 `stats.json` keys (*named by the owner 2026-11-12, decision 041; tests check these exact names*)
+JSON object, keys sorted, indent fixed. Exactly these top-level keys:
+
+| Key | Content |
+|---|---|
+| `trial_id` | text |
+| `db` | `{path, sha256_before, sha256_after}`; path relative to the repo when inside it |
+| `window` | `{row, file, file_sha256}`: `row` = all columns of the trial's `data/trial_windows.csv` row; `file` = that file's path |
+| `time_basis` | `raw` or `corrected` |
+| `events` | `{loaded_total, in_window_total, trigger_type_in_window, trigger_type_in_window_per_host}` |
+| `removed_by_window` | host → `<channel>/<event_id>` → count of events dropped by GT-01 |
+| `near_window` | host → `{before, after}` counts of trigger-type events up to `NEAR_WINDOW_S` outside each edge (no uids) |
+| `dispositions` | `{total: disposition → count (every name, zeros included), per_host: host → disposition → count}` |
+| `triggers` | `{total, per_rule: rule → count, per_rule_host_tier: rule → host → gate_tier → count}` |
+| `unmatched_remote` | `{total, per_host: host → count}` |
+| `supporting` | `{total, per_rule: R1_lsass / R3_explicit / R8_parent → count}` |
+| `remote_logons_per_ip_kind` | `ip_kind` → count of remote 4624 type 3/10 (GT-06) |
+| `machine_account_triggers_per_host` | host → count of trigger rows with `machine_account` = 1 (GT-07) |
+| `local_installs` | `{count, trigger_ids}`: R6 rows with no anchor |
+| `excluded` | `{per_ip: normalised excluded IP → count of excluded in-window events, excluded_ip_with_artefacts: [{host, logon_id_hex, source_ip, event_uids}]}` |
+| `near_duplicate_uids` | sorted list of in-window uids flagged near-duplicate (GT-18) |
+| `tier_d_ip_lookup` | `[{trigger_id, rule, host, logon_id_hex, logon_found, source_ips}]`, one per tier-D row; `source_ips` are the original texts from the unclipped DB |
+| `sensitivity` | `{rdp_pairs, service_pairs, winrm_91_anchor_pairs, winrm_91_to_wsmprovhost_pairs}`, each tolerance in seconds as text (`"2"`, `"5"`, `"10"`) → number of pairs found at that tolerance (counts only; rules always use §5 values). `rdp_pairs`: (remote 4624, inbound 3389 Sysmon 3) pairs; `service_pairs`: 7045↔4697 pairs; `winrm_91_anchor_pairs`: (R8 anchor, WinRM 91) pairs with the same IP; `winrm_91_to_wsmprovhost_pairs`: (WinRM 91, wsmprovhost Sysmon 1) on one host with the Sysmon 1 0..t s after |
+| `parameters` | every §5 parameter, JSON-ready |
+
 ## 4. Rules
 Applied in this order; each step sees only what the previous step kept.
 
@@ -143,10 +175,10 @@ Applied in this order; each step sees only what the previous step kept.
 |---|---|---|---|
 | GT-00 | **Allowed trial.** Refuse the trial if section 2 or 2.2 says so, before reading any event. | – | decisions 030, 039 |
 | GT-01 | **Window clip.** Keep an event only if `start ≤ event_utc < end + 1 ms` (instants; the window file has ms, the DB has µs). Everything else is dropped before any other rule and appears in no row of any output file; it is only counted in `stats.json`. Times as section 2.2. | counts per host × event id; `near_window` counts | PLAN T6.4, decisions 026, 039 |
-| GT-02 | **Non-lab workstation sessions** (192.168.50.97, .98, .99; purpose inferred as log collection, decision 032). (a) A 4624 whose `source_ip` is one of them → `excluded_source_ip`. (b) Every in-window event tied to such a logon ID on the same host → `excluded_source_ip_session`: 5140/5145 and 4697 by `subject_logon_id`, Sysmon 1 by `session_id`, 4634/4647. The logon-ID → IP map for (b) is built from the **unclipped** DB, so a session whose 4624 is before the window is still recognised; this lookup can only remove events, never add any. (c) WinRM 91 or Sysmon 3 with a remote address in the list → excluded; a wsmprovhost Sysmon 1 on the same host within 5 s after such a WinRM 91 → excluded. (d) A 7045 paired (GT-12) with an excluded 4697 → `paired_excluded`. By IP only, never by account (these sessions use `admin_it`, also a scenario account); applied inside the window too (`s04_t01`, decision 032). An excluded session that has a service install or share write is listed in `excluded_ip_with_artefacts` (it may be a designed step run from that workstation: S04 ×10 Track A ran from .99, `docs/research/x10_design_validation.md` line 13). | dispositions; count per IP | decisions 032, 037 |
+| GT-02 | **Non-lab workstation sessions** (192.168.50.97, .98, .99; purpose inferred as log collection, decision 032). (a) A 4624 whose `source_ip` is one of them → `excluded_source_ip`. (b) Every in-window event tied to such a logon ID on the same host → `excluded_source_ip_session`: 5140/5145 and 4697 by `subject_logon_id`, Sysmon 1 by `session_id`, 4634/4647. The logon-ID → IP map for (b) is built from the **unclipped** DB, so a session whose 4624 is before the window is still recognised; this lookup can only remove events, never add any. (c) WinRM 91 or Sysmon 3 with a remote address in the list → excluded (*amended by the owner 2026-11-12, decision 041:* the remote address of an inbound Sysmon 3, `initiated` = 0, is `source_ip`; of an outbound one, `initiated` = 1, it is `destination_ip`); a wsmprovhost Sysmon 1 on the same host within 5 s after such a WinRM 91 → excluded. (d) A 7045 paired (GT-12) with an excluded 4697 → `paired_excluded`. By IP only, never by account (these sessions use `admin_it`, also a scenario account); applied inside the window too (`s04_t01`, decision 032). An excluded session that has a service install or share write is listed in `excluded_ip_with_artefacts` (it may be a designed step run from that workstation: S04 ×10 Track A ran from .99, `docs/research/x10_design_validation.md` line 13). | dispositions; count per IP | decisions 032, 037 |
 | GT-03 | **Interactive logons.** 4624 with `logon_type` 2 or 11 → `interactive_logon`. | count | handoff §7.2 |
 | GT-04 | **System logon IDs** 0x3e4, 0x3e5, 0x3e7 (996, 997, 999) on the event's own logon ID → `system_logon_id`: 4624 `target_logon_id`, 4697 `subject_logon_id`, Sysmon 1 `session_id`. A 7045 paired with such a 4697 → `paired_excluded`. | count | handoff §7.2 |
-| GT-05 | **Loopback or self.** `source_ip` 127.0.0.1, ::1, ::ffff:127.0.0.1, or the host's own lab IP → `loopback_or_self`. | count | handoff §7.2; decision 025 |
+| GT-05 | **Loopback or self.** `source_ip` 127.0.0.1, ::1, ::ffff:127.0.0.1, or the host's own lab IP → `loopback_or_self`. *Amended by the owner 2026-11-12 (decision 041):* compared after IP normalisation (§2). For an **outbound** Sysmon 3 to port 3389 (`initiated` = 1, the source-host side) the address judged is `destination_ip`, not `source_ip`: destination in the excluded list → `excluded_source_ip` (GT-02c); destination loopback or the host's own IP → `loopback_or_self`; otherwise → `no_rule` with `reason_detail` `outbound 3389, source side of an RDP connection`, so T7 can use it. `loopback_or_self` stays for real loopback and own-IP events. | count | handoff §7.2; decisions 025, 041 |
 | GT-06 | **Remote** = not removed by GT-02..05 and one of: a parseable IP (`ipv4`/`ipv6`), a blank or `-` IP (`blank`), or an IPv6 link-local address (`link_local`). Blank and link-local logons can fire rules (recall first, §7.1) with `ip_kind` set, so they are visible. | count per `ip_kind` | handoff §7.1; decision 038 |
 | GT-07 | **Machine accounts are kept** (owner, Q1). A remote logon by an account ending in `$` goes through the rules like any other; it is flagged `machine_account = 1` and counted per host in stats. | count per host | owner 2026-11-11 |
 | GT-10 | **R4 SMB.** A remote 4624 type 3 fires R4 when at least one 5140 or 5145 on the same host has `subject_logon_id` = its `target_logon_id` and `event_utc` ≥ the logon. Supporting = all such share events. Method `logon_id`, tier A. | triggers per host | handoff §7.2 table; decision 038 |
@@ -212,7 +244,11 @@ Unit tests (synthetic rows, `tests/unit/test_gate.py`):
 | GTT-11 | Every in-window trigger-type event has exactly one row in `dispositions.csv`; disposition counts sum to the in-window trigger-type count per host. |
 | GTT-12 | Two rows with NULL logon IDs never match; a near-duplicate 4624 pair is flagged on both rows. |
 | GTT-13 | A machine-account type 3 with a 5140 fires R4 with `machine_account = 1` and is counted in stats. |
-| GTT-14 | **`src/gate` never opens a path under `ground_truth/`**: a run with file opens recorded (patched `open` / `sqlite3.connect` / `pathlib` reads, plus a check of the source text for the string `ground_truth`) shows no such path. The same test covers `src/trial_window`. |
+| GTT-14 | **`src/gate` never opens a path under `ground_truth/`**: a run with file opens recorded (patched `open` / `sqlite3.connect` / `pathlib` reads, plus a check of the source text for the string `ground_truth`) shows no such path. The same test covers `src/trial_window`. *Extended by the owner 2026-11-12 (decision 041):* a fresh interpreter that imports every module of `gate` and `trial_window` (their `__main__` included) has none of `answer_key.build`, `answer_key.finish`, `answer_key.verify`, `answer_key.overlap` in `sys.modules`; the 60 s / 300 s margins come from the neutral module `src/lab_common/margins.py`. |
+| GTT-15 | *(decision 041)* An outbound 3389 Sysmon 3 (`initiated` = 1) is `no_rule` with `reason_detail` `outbound 3389, source side of an RDP connection`; to an excluded IP → `excluded_source_ip`; to loopback or the host's own IP → `loopback_or_self`. Loopback and own-IP 4624 stay `loopback_or_self`. |
+| GTT-16 | *(decision 041)* IPv4-mapped addresses compare as IPv4: `::ffff:192.168.50.99` is excluded with its session; `::ffff:127.0.0.1` and `::ffff:<own IP>` are `loopback_or_self`; a 4624 from `::ffff:192.168.50.21` pairs with a 3389 Sysmon 3 from `192.168.50.21` and with a WinRM 91 in the other form; `source_ip` keeps the original text, `ip_kind` = `ipv4`, stats keyed by the IPv4. |
+| GTT-17 | *(decision 041)* `near_duplicate` on an R6/R8 row follows its `trigger_event_uid`, not its anchor. |
+| GTT-18 | *(decision 041)* `stats.json` has exactly the §3.1 keys; the `sensitivity` counts at 2, 5 and 10 s are right for all four pairings. |
 
 Real-data tests (development data only, decision 019; `data/sample/` first, then all six t00 trials s02–s07):
 | ID | What must be true |

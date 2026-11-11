@@ -11,17 +11,15 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Collection, Mapping, Sequence
 
+from lab_common.margins import KEY_MARGIN_AFTER_S, KEY_MARGIN_BEFORE_S, RUN_INTERVAL_AFTER_S, RUN_INTERVAL_BEFORE_S
+
 from . import collect, identity, targets
 from .agent_tree import AgentProc, agent_network, attach_4688, build_tree, is_splunkd, run_days, run_start_ts, TRIAL_GAP_S
 from .targets import normalise_account
 from .timeutil import delta_ms, fmt_utc, parse_utc
 
 IMAGE = "C:\\Users\\Public\\splunkd.exe"
-KEY_MARGIN_BEFORE_S = 60.0
-KEY_MARGIN_AFTER_S = 300.0
 STRAY_SERVICE_WINDOW_S = 60.0
-RUN_INTERVAL_BEFORE_S = 60.0
-RUN_INTERVAL_AFTER_S = 300.0
 PROVENANCE = "log-based, agent process tree (decision 020)"
 
 

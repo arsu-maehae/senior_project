@@ -1,14 +1,15 @@
 """Parameters of the trial window step (spec 02_gate sections 2.1, 2.2, 5; decisions 019, 026, 030, 032, 039, 040).
 
-WHY a separate file: every value the window depends on is visible in one place, and the
-margins are imported from the key builder so the two can never drift apart.
+WHY a separate file: every value the window depends on is visible in one place. The 60 s / 300 s
+margins come from the neutral module ``lab_common.margins``, the same source the key builder uses,
+so the two can never drift apart and this step never imports the key builder (decision 041).
 """
 from __future__ import annotations
 
 from datetime import date
 
 from answer_key import agent_tree as _agent_tree
-from answer_key.build import RUN_INTERVAL_AFTER_S, RUN_INTERVAL_BEFORE_S
+from lab_common.margins import RUN_INTERVAL_AFTER_S, RUN_INTERVAL_BEFORE_S
 
 # Margins already included in the window edges (decision 026): start - 60 s, end + 300 s.
 MARGIN_START_S: float = RUN_INTERVAL_BEFORE_S

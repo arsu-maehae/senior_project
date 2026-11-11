@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Collection, Mapping, Sequence
 
 from answer_key import db
-from answer_key.__main__ import read_manifest_span
+from lab_common.manifest import read_manifest_span
 
 from . import params
 from .window import (TrialWindowError, WindowResult, computed_window, is_quarantined, manifest_coverage_reason,

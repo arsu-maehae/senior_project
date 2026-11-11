@@ -7,6 +7,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Mapping, Sequence
 
+from lab_common.margins import KEY_MARGIN_AFTER_S, KEY_MARGIN_BEFORE_S
+
 from .timeutil import fmt_utc, parse_utc
 
 HOP_DEFAULTS = {"move_time_utc": None, "identity_expected": None, "identity_basis": None, "time_delta_ms": None,
@@ -16,7 +18,6 @@ HOP_DEFAULTS = {"move_time_utc": None, "identity_expected": None, "identity_basi
                 "credential_logon_uids": [], "related_logon_uids": [], "port_join_event_uids": []}
 ROLES = ("attack", "benign", "background")
 PRIVATE = ("_names", "_anchor_ts", "_burst_uids", "_absorbed_uids")
-KEY_MARGIN_BEFORE_S, KEY_MARGIN_AFTER_S = 60.0, 300.0
 
 
 def _iso(ts: float) -> str:
