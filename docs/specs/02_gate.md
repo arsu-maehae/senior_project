@@ -1,8 +1,8 @@
 # Stage spec: 02_gate
 
-**Owner:** <stage owner> · **Status:** approved (owner, 2026-11-11); attacker-reviewed; owner answers Q1–Q4 applied; §2.1 window rule and GTA-06 amended by the owner 2026-11-11 (decision 040) · **Last updated:** 2026-11-11
+**Owner:** <stage owner> · **Status:** approved (owner, 2026-11-11); attacker-reviewed; owner answers Q1–Q4 applied; §2.1 window rule and GTA-06 amended by the owner 2026-11-11 (decision 040); §2 refusals, §3, §5, GT-11, GT-12, GT-13, GT-15, GTT-07 amended by the owner 2026-11-12 (decision 041) · **Last updated:** 2026-11-12
 
-Decisions: [037](../decisions/037-gate-excluded-source-ips.md) excluded source IPs, [038](../decisions/038-gate-rule-choices.md) rule choices, [039](../decisions/039-gate-window-input-and-clock.md) window input and clock rule, [040](../decisions/040-trial-window-agent-tree-and-gta06-containment.md) window from the agent tree, GTA-06 containment. Review: [02_gate-spec-2026-11-11](../reviews/02_gate-spec-2026-11-11.md).
+Decisions: [041](../decisions/041-gate-implementation-readings.md) implementation readings (owner answers 2026-11-12), [037](../decisions/037-gate-excluded-source-ips.md) excluded source IPs, [038](../decisions/038-gate-rule-choices.md) rule choices, [039](../decisions/039-gate-window-input-and-clock.md) window input and clock rule, [040](../decisions/040-trial-window-agent-tree-and-gta06-containment.md) window from the agent tree, GTA-06 containment. Review: [02_gate-spec-2026-11-11](../reviews/02_gate-spec-2026-11-11.md).
 
 ## 1. Purpose
 The gate reads one trial database and marks the events that show one host being reached from another host over
@@ -28,7 +28,11 @@ relative_target_name, service_name, service_image_path, target_image, granted_ac
 Refused inputs (the gate stops with an error and writes nothing):
 - a quarantined DB (path under `quarantine/` or trial id `s05q_*`, decision 030);
 - a trial with no row in `data/trial_windows.csv`, or a row with an empty start or end;
-- a trial not allowed by the clock rule (section 2.2).
+- a trial not allowed by the clock rule (section 2.2);
+- *(amended by the owner 2026-11-12, decision 041)* a window row whose `db_sha256` differs from the SHA-256 of the
+  trial DB being gated (the window was computed from another version of the DB);
+- *(amended by the owner 2026-11-12, decision 041)* a window row whose `time_basis` differs from the gate's
+  `TIME_BASIS` (`raw` until decision 032's correction exists; section 2.2).
 
 ### 2.1 Trial window file (`data/trial_windows.csv`)
 A separate step (`src/trial_window/`, PLAN T6.4) writes this file. The gate only reads it.
@@ -97,24 +101,28 @@ Every file except `run_info.json` is byte-identical between two runs on the same
 | authentication_package | text | NTLM / Kerberos (R2 is shown here, never a trigger) |
 | machine_account | int | 1 if the account ends in `$` |
 | supporting_event_uids | text | `;`-joined uids that complete the rule |
-| method | text | `logon_id`, `ip_port_time`, `ip_time`, `service_name_time`, `none` |
-| candidate_count | int | number of anchors that matched the same supporting event the same way (1 = unique) |
-| time_delta_ms | int/null | first supporting event − anchor (same host clock) |
-| gate_tier | text | same host only: **A** tied by logon ID, or the event is its own anchor; **B** tied by IP + port + time, IP + time, or service name + time; **D** no anchor. This is the CLAUDE.md "confidence tier" of a gate row, named `gate_tier` so it is never confused with the T7 link tiers (decision 038). |
+| method | text | `logon_id`, `ip_port_time`, `ip_time`, `none` (*amended by the owner 2026-11-12, decision 041:* `method` and `gate_tier` describe how the row is tied to its anchor logon; `service_name_time` removed, no rule uses it) |
+| candidate_count | int | number of anchors that matched the same supporting event the same way (1 = unique). *Amended by the owner 2026-11-12 (decision 041):* for each supporting event, the number of distinct anchors it matched by the same method; the row takes the maximum. R6/R8: the number of anchors matching the trigger event (one row per anchor). A row with no supporting event: 1 if the event is its own anchor or has one anchor, 0 if it has no anchor. |
+| time_delta_ms | int/null | *Amended by the owner 2026-11-12 (decision 041):* earliest of (the trigger event, if it is not the anchor, and the supporting events) − anchor, in ms (same host clock). Null if there is no anchor, or if the anchor is the only event (R5 type 10 with no supporting event). |
+| gate_tier | text | same host only: **A** tied by logon ID, or the event is its own anchor; **B** tied by IP + port + time or IP + time (*service name + time removed, amended by the owner 2026-11-12, decision 041*); **D** no anchor. This is the CLAUDE.md "confidence tier" of a gate row, named `gate_tier` so it is never confused with the T7 link tiers (decision 038). |
 | near_duplicate | int | 1 if another row of the same host, channel and `record_id` exists with a different uid |
 | window_source | text | copied from `data/trial_windows.csv` |
 | time_basis | text | `raw` or `corrected` |
 
 Example (illustrative values): `s04_t00-g0007, R4_smb, ep-02, 2026-09-24T10:57:36.9Z, 2026-09-24T10:57:36.9Z, <4624 uid>, <4624 uid>, 873286, 0xd5346, 3, 192.168.50.21, ipv4, svc_backup, LAB, NTLM, 0, <5140 uid>;<5145 uid>, logon_id, 1, 412, A, 0, computed_agent_run, raw`.
 
-**`dispositions.csv`** — exactly one row per in-window event of a trigger type (4624 type 3/10; 5140/5145; 7045; 4697;
+**`dispositions.csv`** — exactly one row per in-window event of a trigger type (4624 type 3/10, and type 2/11 —
+*amended by the owner 2026-11-12, decision 041, so that `interactive_logon` can appear*; 5140/5145; 7045; 4697;
 Sysmon 1 with `image` or `parent_image` ending `\wsmprovhost.exe`; WinRM 91; Sysmon 3 with `destination_port` 3389):
 `event_uid, host, event_id, event_utc, disposition, reason_detail, anchor_logon_uid`.
 Disposition, in this precedence order (first match wins): `excluded_source_ip`, `excluded_source_ip_session`,
 `interactive_logon`, `system_logon_id`, `loopback_or_self`, `paired_excluded`, `trigger`, `supporting`,
 `unmatched_remote`, `no_rule`.
+*Amended by the owner 2026-11-12 (decision 041):* `trigger` = the event is the `trigger_event_uid` **or the
+`anchor_logon_uid`** of any `triggers.csv` row; `supporting` = the event is in any row's `supporting_event_uids`, or
+is listed in `supporting.csv` (an `R8_parent` Sysmon 1 → `supporting`).
 
-**`unmatched_remote.csv`** — remote 4624 type 3/10 that fired no rule (GT-15). T7 reads it next to `triggers.csv`.
+**`unmatched_remote.csv`** — remote 4624 type 3/10 that fired no rule and is the anchor of no trigger row (GT-15). T7 reads it next to `triggers.csv`.
 Same columns as `triggers.csv` minus `rule`.
 
 **`supporting.csv`** — supporting signals, listed, never triggers: `R1_lsass`, `R3_explicit`, `R8_parent`.
@@ -142,11 +150,11 @@ Applied in this order; each step sees only what the previous step kept.
 | GT-06 | **Remote** = not removed by GT-02..05 and one of: a parseable IP (`ipv4`/`ipv6`), a blank or `-` IP (`blank`), or an IPv6 link-local address (`link_local`). Blank and link-local logons can fire rules (recall first, §7.1) with `ip_kind` set, so they are visible. | count per `ip_kind` | handoff §7.1; decision 038 |
 | GT-07 | **Machine accounts are kept** (owner, Q1). A remote logon by an account ending in `$` goes through the rules like any other; it is flagged `machine_account = 1` and counted per host in stats. | count per host | owner 2026-11-11 |
 | GT-10 | **R4 SMB.** A remote 4624 type 3 fires R4 when at least one 5140 or 5145 on the same host has `subject_logon_id` = its `target_logon_id` and `event_utc` ≥ the logon. Supporting = all such share events. Method `logon_id`, tier A. | triggers per host | handoff §7.2 table; decision 038 |
-| GT-11 | **R5 RDP.** A remote 4624 type 10 fires R5 (its own anchor, method `none`, tier A). A remote 4624 type 3 also fires R5 when an inbound Sysmon 3 (`initiated` = 0) to `destination_port` 3389 on the same host has the same `source_ip` **and the same `source_port`**, within `RDP_PAIR_S` = 5 s (method `ip_port_time`, tier B). If the 4624 port is 0 or NULL (decision 015), IP + time is used (method `ip_time`, tier B). `candidate_count` = number of 4624s matching the Sysmon 3; the reverse count is in `reason_detail`. | triggers per host | handoff §7.2 caveat; decisions 035 N17, 036 |
-| GT-12 | **R6 service.** Every remaining 7045 and 4697 fires R6. A 7045 and a 4697 on the same host with the same `service_name` within `SERVICE_PAIR_S` = 5 s are one install: one row, the 4697 is `trigger_event_uid`, the 7045 is supporting (method `service_name_time`). Anchor = the remote 4624 whose `target_logon_id` = the 4697 `subject_logon_id` (tier A). A 7045 with no 4697 has no anchor (tier D); tying it to a logon by time and file name is T7's job. Installs with no anchor are counted as local installs in stats. | triggers per host | handoff §7.2; CLAUDE.md cross-host link |
-| GT-13 | **R8 WinRM.** A Sysmon 1 whose `image` ends `\wsmprovhost.exe` (case-insensitive) fires R8. Anchor = remote 4624 type 3 on the same host whose `target_logon_id` or `target_linked_logon_id` = the Sysmon 1 `session_id` (method `logon_id`, tier A); none → tier D. WinRM 91 on the same host with the anchor's IP within 5 s is supporting. A Sysmon 1 whose `parent_image` (not `image`) is wsmprovhost goes to `supporting.csv` as `R8_parent`. | triggers per host | handoff §7.2, §3.6.3; decision 038 |
+| GT-11 | **R5 RDP.** A remote 4624 type 10 fires R5 (its own anchor, method `none`, tier A). A remote 4624 type 3 also fires R5 when an inbound Sysmon 3 (`initiated` = 0) to `destination_port` 3389 on the same host has the same `source_ip` **and the same `source_port`**, within `RDP_PAIR_S` = 5 s (method `ip_port_time`, tier B). If the 4624 port is 0 or NULL (decision 015), IP + time is used (method `ip_time`, tier B). `candidate_count` = number of 4624s matching the Sysmon 3; the reverse count is in `reason_detail`. *Amended by the owner 2026-11-12 (decision 041):* "within 5 s" = \|Δt\| ≤ 5.000 s, either order, inclusive. An inbound 3389 Sysmon 3 that matches a type 10 R5 row the same way (same IP and port, or IP + time when the 4624 port is 0/NULL; \|Δt\| ≤ 5 s) is added to that row's `supporting_event_uids` (disposition `supporting`). | triggers per host | handoff §7.2 caveat; decisions 035 N17, 036 |
+| GT-12 | **R6 service.** Every remaining 7045 and 4697 fires R6. A 7045 and a 4697 on the same host with the same `service_name` within `SERVICE_PAIR_S` = 5 s are one install: one row, the 4697 is `trigger_event_uid`, the 7045 is supporting (*amended by the owner 2026-11-12, decision 041:* the pairing is shown by the 7045 uid in `supporting_event_uids` and by `service_name_time` in the 7045's `reason_detail` in `dispositions.csv`; the row's `method`/`gate_tier` describe the anchor tie only: anchored → `logon_id`, A; no anchor → `none`, D). Anchor = the remote 4624 whose `target_logon_id` = the 4697 `subject_logon_id` (tier A). A 7045 with no 4697 has no anchor (tier D); tying it to a logon by time and file name is T7's job. Installs with no anchor are counted as local installs in stats. *Amended by the owner 2026-11-12 (decision 041):* "within 5 s" = \|Δt\| ≤ 5.000 s, either order, inclusive; a 7045 pairs with the **nearest** 4697 of the same name on the same host, one-to-one, ties broken by uid. The anchor is a remote 4624 of **type 3 or 10** with that logon ID whose `event_utc` is **≤ the 4697's**; with no such logon the row is tier D. Several matching anchors give **one row per anchor**, each with `candidate_count` = their number. | triggers per host | handoff §7.2; CLAUDE.md cross-host link |
+| GT-13 | **R8 WinRM.** A Sysmon 1 whose `image` ends `\wsmprovhost.exe` (case-insensitive) fires R8. Anchor = remote 4624 type 3 on the same host whose `target_logon_id` or `target_linked_logon_id` = the Sysmon 1 `session_id` (method `logon_id`, tier A); none → tier D. WinRM 91 on the same host with the anchor's IP within 5 s is supporting. A Sysmon 1 whose `parent_image` (not `image`) is wsmprovhost goes to `supporting.csv` as `R8_parent`. *Amended by the owner 2026-11-12 (decision 041):* the anchor's `event_utc` must be **≤ the Sysmon 1's**; several matching anchors give **one row per anchor**, each with `candidate_count` = their number. Supporting WinRM 91 = same host, clientIP = the anchor's `source_ip`, \|91 − anchor 4624\| ≤ 5.000 s (either order, inclusive). A tier-D row takes the **latest** WinRM 91 on the same host 0–5 s before the Sysmon 1: its clientIP is the row's `source_ip` and its uid is supporting. An `R8_parent` Sysmon 1 has disposition `supporting`. | triggers per host | handoff §7.2, §3.6.3; decision 038 |
 | GT-14 | **Several rules on one anchor** give several rows (for example R4 and R6 on one SMB logon). T7 groups rows by `anchor_logon_uid`. Nothing is merged or dropped. | – | Correction G.4 |
-| GT-15 | **Unmatched remote logons.** A remote 4624 type 3/10 that fires no rule is not a trigger; it goes to `unmatched_remote.csv` so T7 can still use it and a missed movement stays visible. | count | decision 038 |
+| GT-15 | **Unmatched remote logons.** A remote 4624 type 3/10 that fires no rule is not a trigger; it goes to `unmatched_remote.csv` so T7 can still use it and a missed movement stays visible. *Amended by the owner 2026-11-12 (decision 041):* a 4624 that is the `anchor_logon_uid` of any trigger row (e.g. of R6 or R8 only) **counts as fired**: disposition `trigger`, not in `unmatched_remote.csv`. Every remote type 3/10 logon is in exactly one of the two files. | count | decisions 038, 041 |
 | GT-16 | **Supporting signals.** R1 (Sysmon 10, `target_image` ends `\lsass.exe`, `granted_access` in the R1 set), R3 (4648) and R8_parent are listed after GT-01 and GT-02 and never start the stitcher. | count | handoff §7.2, Correction D |
 | GT-17 | **No threshold.** Every trigger is kept; no score, no cut-off. | – | Correction J |
 | GT-18 | **NULL never joins; near duplicates are flagged.** No rule matches on a NULL logon ID, port or IP. Rows with the same host, channel and `record_id` but different uids (left by `events_dedup`) are all kept and flagged `near_duplicate`, and their uids are listed in stats. | count | decision 005; NF-08 |
@@ -159,9 +167,9 @@ Applied in this order; each step sees only what the previous step kept.
 | `LAB_HOST_IPS` | dc01 .10, ep-01 .21, ep-02 .22, ep-03 .23 (as `src/log_check/params.py`); Caldera .50 listed for display only | self check; source host by IP | no |
 | `SYSTEM_LOGON_IDS` | 996, 997, 999 | handoff §7.2 | no |
 | `LOOPBACK` | 127.0.0.1, ::1, ::ffff:127.0.0.1 | handoff §7.2 | no |
-| `RDP_PAIR_S` | 5 s | decisions 035 N17, 036 (same host) | report counts at 2 s and 10 s |
-| `SERVICE_PAIR_S` | 5 s | same-host 7045/4697 pairing | report counts at 2 s and 10 s |
-| `WINRM_PAIR_S` | 5 s | WinRM 91 ↔ anchor / wsmprovhost | report counts at 2 s and 10 s |
+| `RDP_PAIR_S` | 5 s (\|Δt\| ≤ 5 s, either order, inclusive; amended by the owner 2026-11-12, decision 041) | decisions 035 N17, 036 (same host) | report counts at 2 s and 10 s |
+| `SERVICE_PAIR_S` | 5 s (\|Δt\| ≤ 5 s, either order, inclusive; decision 041) | same-host 7045/4697 pairing | report counts at 2 s and 10 s |
+| `WINRM_PAIR_S` | 5 s (91 ↔ anchor: \|Δt\| ≤ 5 s, either order, inclusive; 91 → wsmprovhost: 0–5 s after, GT-02(c) and tier-D R8; decision 041) | WinRM 91 ↔ anchor / wsmprovhost | report counts at 2 s and 10 s |
 | `R1_ACCESS_MASKS` | 0x1010, 0x1410, 0x143a, 0x1fffff | handoff §7.2 R1 | no |
 | `NEAR_WINDOW_S` | 300 s | edge counts make clock skew and clipped events visible | no |
 | `CLOCK_CORRECTION_AVAILABLE` | false | until decision 032's correction exists: t00 only, nothing collected on or after 2026-10-26 | no |
@@ -197,7 +205,7 @@ Unit tests (synthetic rows, `tests/unit/test_gate.py`):
 | GTT-04 | Type 2/11, logon IDs 996/997/999, loopback and own-IP logons never fire. |
 | GTT-05 | Each rule fires on its minimal positive case and not with one condition removed: R4 without a share event (→ `unmatched_remote`); R5 type 3 with the 3389 Sysmon 3 at 6 s, or with a different port; R6 4697 by 0x3e7 (its 7045 → `paired_excluded`); R8 with wsmprovhost as parent only (→ `R8_parent`). |
 | GTT-06 | A 7045 + 4697 pair gives one R6 row with the 4697 as trigger; two installs of one name 20 s apart give two rows. |
-| GTT-07 | Refused, nothing written: a quarantined DB; a trial with no row (or an empty edge) in `data/trial_windows.csv`; while `CLOCK_CORRECTION_AVAILABLE` is false, a non-t00 trial and a trial whose window starts on or after 2026-10-26. |
+| GTT-07 | Refused, nothing written: a quarantined DB; a trial with no row (or an empty edge) in `data/trial_windows.csv`; while `CLOCK_CORRECTION_AVAILABLE` is false, a non-t00 trial and a trial whose window starts on or after 2026-10-26; *(decision 041)* a row whose `db_sha256` is not the DB's hash, or whose `time_basis` is not the gate's. |
 | GTT-08 | DB hash unchanged; two runs give byte-identical files (all but `run_info.json`). |
 | GTT-09 | Excluded-IP 4624 outside the window + wsmprovhost inside → excluded, no tier-D R8; 7045 paired with an excluded 4697 → `paired_excluded`. |
 | GTT-10 | Blank-IP type 3 with a 5145 fires R4; blank-IP type 10 fires R5; `ip_kind` = `blank`. |
