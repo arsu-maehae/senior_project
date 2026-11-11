@@ -1,8 +1,8 @@
 # Stage spec: 02_gate
 
-**Owner:** <stage owner> · **Status:** approved (owner, 2026-11-11); attacker-reviewed; owner answers Q1–Q4 applied · **Last updated:** 2026-11-11
+**Owner:** <stage owner> · **Status:** approved (owner, 2026-11-11); attacker-reviewed; owner answers Q1–Q4 applied; §2.1 window rule and GTA-06 amended by the owner 2026-11-11 (decision 040) · **Last updated:** 2026-11-11
 
-Decisions: [037](../decisions/037-gate-excluded-source-ips.md) excluded source IPs, [038](../decisions/038-gate-rule-choices.md) rule choices, [039](../decisions/039-gate-window-input-and-clock.md) window input and clock rule. Review: [02_gate-spec-2026-11-11](../reviews/02_gate-spec-2026-11-11.md).
+Decisions: [037](../decisions/037-gate-excluded-source-ips.md) excluded source IPs, [038](../decisions/038-gate-rule-choices.md) rule choices, [039](../decisions/039-gate-window-input-and-clock.md) window input and clock rule, [040](../decisions/040-trial-window-agent-tree-and-gta06-containment.md) window from the agent tree, GTA-06 containment. Review: [02_gate-spec-2026-11-11](../reviews/02_gate-spec-2026-11-11.md).
 
 ## 1. Purpose
 The gate reads one trial database and marks the events that show one host being reached from another host over
@@ -44,11 +44,14 @@ A separate step (`src/trial_window/`, PLAN T6.4) writes this file. The gate only
 | time_basis | `raw` or `corrected` (section 2.2) |
 
 How the window is computed:
-- **Trials with agent activity (S02–S07):** the run interval of decision 026, computed from the trial DB and
-  `data/manifest.csv` with the same function the answer-key builder uses. Start = the earliest agent (splunkd.exe)
-  root of the run, found by walking back while roots are less than 30 minutes apart, **minus 60 s**. End = the last
-  agent step or command **plus 300 s**, clipped to the latest export end of the trial's files in `data/manifest.csv`
-  (decision 026 amendment). The step does not read `ground_truth/` or the owner-review file.
+- **Trials with agent activity (S02–S07):** computed from the **agent process tree only**, using the trial DB and
+  `data/manifest.csv` (decision 040). The key builder (`build_draft`), intended steps and identified hops are not used.
+  - Start = the earliest agent (`C:\Users\Public\splunkd.exe`) root of the run, found by walking back while roots
+    are less than 30 minutes apart (decision 026), **minus 60 s**.
+  - End = the last Sysmon 1 descended from the run's agent roots (by ProcessGuid, any depth) **plus 300 s**.
+  - Both edges are clipped to the export span of the trial's files in `data/manifest.csv` (decision 026 amendment).
+  - The step does not read `ground_truth/` or the owner-review file.
+  - The agent identity (image, server `192.168.50.50:8888`) is lab metadata in `src/trial_window/params.py`.
 - **Trials with no agent activity (S01, manual RDP):** the trial start and end written down by the operator
   (T2 checklist), with the same margins: start − 60 s, end + 300 s, clipped to the manifest export end.
   `window_source = operator`.
@@ -144,7 +147,7 @@ Applied in this order; each step sees only what the previous step kept.
 ## 5. Parameters
 | Name | Value | Why | Sensitivity test? |
 |---|---|---|---|
-| Window | row of `data/trial_windows.csv` (start = first agent root − 60 s, end = last agent step or command + 300 s, clipped to the manifest export end; S01: operator times with the same margins) | PLAN T6.4, decisions 026, 039 | no (owner rule) |
+| Window | row of `data/trial_windows.csv` (start = first agent root − 60 s, end = last Sysmon 1 in the agent tree + 300 s, clipped to the manifest export span; S01: operator times with the same margins) | PLAN T6.4, decisions 026, 039, 040 | no (owner rule) |
 | `EXCLUDED_SOURCE_IPS` | 192.168.50.97, .98, .99 | decisions 032, 037 | no |
 | `LAB_HOST_IPS` | dc01 .10, ep-01 .21, ep-02 .22, ep-03 .23 (as `src/log_check/params.py`); Caldera .50 listed for display only | self check; source host by IP | no |
 | `SYSTEM_LOGON_IDS` | 996, 997, 999 | handoff §7.2 | no |
@@ -166,7 +169,7 @@ Applied in this order; each step sees only what the previous step kept.
 | 7045 paired with an excluded 4697 | any | `paired_excluded` | GTT-09 |
 | Blank / `-` / link-local source IP | Kerberos logons (decision 015) | can fire R4/R5, `ip_kind` set | GTT-10 |
 | Window end in ms, DB event at +7 µs | `s04_t00` end 11:00:07.787Z vs manifest .787007 | kept | GTT-01b |
-| Answer key has a top-level `window` different from `run_interval` | `s04_t00` (10:55:56 vs 10:53:55) | the gate reads neither; the computed window must equal `run_interval` | GTA-06 |
+| Answer key has a top-level `window` different from `run_interval` | `s04_t00` (10:55:56 vs 10:53:55) | the gate reads neither; the computed start must equal the `run_interval` start, and every key-hop event must lie inside the computed window (decision 040) | GTA-06 |
 | Trial collected on or after 2026-10-26 before the clock correction exists | S04, S06, S07 ×10 (2026-10-26/27) | refused | GTT-07 |
 | SMB logon and RDP connect from one IP within 5 s | possible in S01 | no R5 unless ports match (or port 0 → `ip_time`) | GTT-05 |
 | Hop with no share event | 4624-led background hops | `unmatched_remote.csv`, never lost | GTT-05, GTA-01 |
@@ -204,7 +207,7 @@ Real-data tests (development data only, decision 019; `data/sample/` first, then
 | GTA-03 | On every trial gated: no row of `triggers.csv`, `unmatched_remote.csv` or `supporting.csv` has `event_utc` outside the window or an excluded `source_ip`; for every tier-D row, the unclipped lookup of its logon ID's IP is not an excluded IP. |
 | GTA-04 | `dispositions.csv` partitions the in-window trigger-type events (GTT-11 on real data); `stats.json` counts equal the file counts. |
 | GTA-05 | (only after the clock correction exists and a window row exists for `s04_t01`) the .99 logon at 04:12:22 UTC is `excluded_source_ip`; if that session has a 4697, 7045 or share write, the run stops and reports to the owner. Skipped with a reason until then. |
-| GTA-06 | **Window equality:** on the six t00 trials s02–s07, the window computed by `src/trial_window` equals the approved key's `agent.run_interval` (start and end, to the millisecond). The test reads the key; `src/trial_window` does not. If it fails on any t00 trial, stop and report the computed and key windows side by side. Do not change the window rule or margins to make it pass. |
+| GTA-06 | **Window start and containment** (amended by the owner 2026-11-11, decision 040), on the six t00 trials s02–s07, for the window computed by `src/trial_window`. (1) Its start equals the approved key's `agent.run_interval` start, to the millisecond. (2) **Pass/fail:** every event referenced by the key's hops (attack, benign and background, with their supporting events) lies inside it (`start ≤ t < end + 1 ms`). (3) Reported per trial: the end difference from `run_interval` in seconds, and the smallest gap between any key-hop event and the window end. The test reads the key; `src/trial_window` does not. If any key event is outside, stop and report it with both windows side by side. Do not change the window rule or margins to make it pass. Millisecond equality of the end was dropped: the key's end includes target-side 4624 times that the agent tree cannot see (measured s02 +0.976 s, s03 −2.762 s, s05 −2.420 s). |
 
 Note: the t00 development data has no session from .97/.98/.99 in any key (they appear in ×10 S04 trials), so on
 development data the excluded-IP rule is proven by GTT-02/03/09 only, until GTA-05 can run.
