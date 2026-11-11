@@ -1,6 +1,6 @@
 # 038 — Gate rule choices where handoff §7.2 is ambiguous
 
-**Date:** 2026-11-11 · **Status:** proposed in the spec draft after the attacker review; `gate_tier` name set by the owner 2026-11-11; accepted when spec 02_gate is approved · **Task:** T6 (6.1)
+**Date:** 2026-11-11 · **Status:** accepted (owner, 2026-11-11, with spec 02_gate approval; `gate_tier` name set by the owner) · **Task:** T6 (6.1)
 
 ## Context
 Handoff §7.2 gives the gate as a table and as pseudo-code, and they disagree in places: the table's R4 is "4624 type 3 **then** 5140/5145", the pseudo-code fires on any remote type 3/10 logon; the table's R8 says "`Image`/`ParentImage` ends `wsmprovhost.exe`"; `is_remote` is not defined for a blank (`-`) IP. The attacker review of the spec draft (ATK-03, 07, 08) showed each reading changes which hops reach T7. CLAUDE.md also asks every linking row to carry `confidence_tier`, a name that T7 uses for its link tiers.

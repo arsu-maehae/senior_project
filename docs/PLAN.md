@@ -1,7 +1,7 @@
 # Build plan
 
 Status marks: `[ ]` todo · `[~]` in progress · `[x]` done. The coordinator (`/next`) updates this file.
-Critical path: T1 → T3 → T4 → T6 → **T7** → T9 → T10. T2, T5, T8 run alongside.
+Critical path: T1 → T3 → T4 → T6 → **T7** → T9 → T10. T2, T5, T8 run alongside. T6b (clock offset correction) runs alongside T6 and must be done before any trial collected on or after 2026-10-26 is gated and before T7.6 on t01.
 
 Data split (decision 019): **development** = t00 (dry run) for S02–S07 + t01 for all 7 scenarios once ingested (S01 t00 is excluded: target side only — source EP-01 and DC01 files are S02 exports filed under S01) · **test** = t02–t10 for all 7 scenarios (locked answer keys).
 Never tune code or weights on the test set.
@@ -55,11 +55,17 @@ Never tune code or weights on the test set.
 - [ ] 5.7 Lock test keys: git tag `answer-keys-locked` (before T10). Gate (AK-21): every hop in an approved key is `confirmed` or explicitly excluded by the owner; no `unconfirmed` hop may remain; every hop has `role` (attack | benign | background)
 
 ## T6. Gate — depends on: T4 — spec: docs/specs/02_gate.md (create with /stage-spec)
-- [~] 6.1 Spec from handoff §7.2 — docs/specs/02_gate.md drafted, attacker-reviewed, owner answers Q1–Q4 applied; waiting for owner approval (decisions 037–039)
+- [x] 6.1 Spec from handoff §7.2 — docs/specs/02_gate.md approved by the owner 2026-11-11 (decisions 037–039)
 - [ ] 6.2 Implement as specified; trigger list + stats per trial
 - [ ] 6.3 Tests + stage review
 - [ ] 6.4 Trial window clip (decision 026, owner 2026-11-10; window source amended by decision 039, owner 2026-11-11): the pipeline clips each trial DB to that trial's window BEFORE gating and linking, so earlier trials' events and paths are never scored (the 07:05:15 admin_it logon appears in the s05, s06 and s07 DBs; files start 2026-09-17). The window is computed from the data by the decision 026 rule into `data/trial_windows.csv` (S01: operator-recorded start/end); the pipeline never reads `ground_truth/`; on the six t00 trials it must equal the key's `agent.run_interval`. Until the decision 032 clock correction exists, only t00 trials are gated. Acceptance test: an event outside the window never reaches the gate or the stitcher (tests in 02_gate.md; repeated for the stitcher in 7.7)
 **Done when:** every movement in the development answer keys produces a trigger.
+
+## T6b. Clock offset correction — depends on: T4 (alongside T6) — spec: docs/specs/08_clock_offset.md — decision 032
+- [ ] 6b.1 Spec: per-host, per-trial offset vs dc01 from the trial's own endpoint 4624 ↔ dc01 4769 LogonGuid pairs; method, minimum pairs and handling of hosts with too few pairs decided on development data only (t00, valid t01), never on test trials
+- [ ] 6b.2 Implement as a separate step: offsets stored per trial next to the DB and reported with every result; original times kept; a host with no usable pairs gets no correction and the trial is flagged
+- [ ] 6b.3 Tests + stage review (includes the decision 032 kill criterion: corrected host pairs within 5 s)
+**Must be done before:** gating any trial collected on or after 2026-10-26 (spec 02_gate §2.2), and T7.6 link accuracy on t01.
 
 ## T7. Cross-host linking — depends on: T6 — CRITICAL — spec: docs/specs/03_stitch.md
 - [ ] 7.1 Spec; council on the NTLM linking approach and the time window
@@ -67,7 +73,7 @@ Never tune code or weights on the test set.
 - [ ] 7.3 Cross-host links per protocol (Correction I); Kerberos confirmation
 - [ ] 7.4 Every link records method, candidate count, time gap, confidence
 - [ ] 7.5 Candidate paths from triggers; merge on shared nodes; never drop isolated paths
-- [ ] 7.6 Link accuracy vs development keys
+- [ ] 7.6 Link accuracy vs development keys (on t01: after T6b)
 - [ ] 7.7 Tests + stage review (includes: an event outside the trial's window never reaches the stitcher as an anchor, trigger or path node; exception, decision 039: a source-host session open logged before the window may be looked up for the identity check only)
 **Done when:** the attack path is among the candidates in every development trial.
 

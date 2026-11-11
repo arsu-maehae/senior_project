@@ -1,6 +1,6 @@
 # Stage spec: 02_gate
 
-**Owner:** <stage owner> · **Status:** draft (attacker-reviewed 2026-11-11; owner answers Q1–Q4 applied 2026-11-11; not approved) · **Last updated:** 2026-11-11
+**Owner:** <stage owner> · **Status:** approved (owner, 2026-11-11); attacker-reviewed; owner answers Q1–Q4 applied · **Last updated:** 2026-11-11
 
 Decisions: [037](../decisions/037-gate-excluded-source-ips.md) excluded source IPs, [038](../decisions/038-gate-rule-choices.md) rule choices, [039](../decisions/039-gate-window-input-and-clock.md) window input and clock rule. Review: [02_gate-spec-2026-11-11](../reviews/02_gate-spec-2026-11-11.md).
 
@@ -204,7 +204,7 @@ Real-data tests (development data only, decision 019; `data/sample/` first, then
 | GTA-03 | On every trial gated: no row of `triggers.csv`, `unmatched_remote.csv` or `supporting.csv` has `event_utc` outside the window or an excluded `source_ip`; for every tier-D row, the unclipped lookup of its logon ID's IP is not an excluded IP. |
 | GTA-04 | `dispositions.csv` partitions the in-window trigger-type events (GTT-11 on real data); `stats.json` counts equal the file counts. |
 | GTA-05 | (only after the clock correction exists and a window row exists for `s04_t01`) the .99 logon at 04:12:22 UTC is `excluded_source_ip`; if that session has a 4697, 7045 or share write, the run stops and reports to the owner. Skipped with a reason until then. |
-| GTA-06 | **Window equality:** on the six t00 trials s02–s07, the window computed by `src/trial_window` equals the approved key's `agent.run_interval` (start and end, to the millisecond). The test reads the key; `src/trial_window` does not. A difference is reported per trial and stops the task. |
+| GTA-06 | **Window equality:** on the six t00 trials s02–s07, the window computed by `src/trial_window` equals the approved key's `agent.run_interval` (start and end, to the millisecond). The test reads the key; `src/trial_window` does not. If it fails on any t00 trial, stop and report the computed and key windows side by side. Do not change the window rule or margins to make it pass. |
 
 Note: the t00 development data has no session from .97/.98/.99 in any key (they appear in ×10 S04 trials), so on
 development data the excluded-IP rule is proven by GTT-02/03/09 only, until GTA-05 can run.
