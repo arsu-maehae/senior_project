@@ -14,6 +14,7 @@ from .db import iso
 from .design import HopDesign, ScenarioDesign, hop_groups
 from .events import file_name_of, in_range, is_write, logons_to, service_names_of
 from .params import CMD_AFTER_S, CMD_BEFORE_S, HOST_IP
+from .rdp import resolve_rdp_hop
 from .textmatch import norm_account
 
 
@@ -26,6 +27,7 @@ class TrialEvents:
     winrm91: list[Mapping]
     wsmprov: list[Mapping]
     session_src: dict[tuple[str, int], str | None] = field(default_factory=dict)   # (host, logon id) -> 4624 source IP
+    rdp_rows: list[Mapping] = field(default_factory=list)    # window Sysmon 3 + 4624 rows, only read by RDP hops
 
 
 @dataclass
@@ -170,6 +172,8 @@ def evaluate_hops(design: ScenarioDesign, executions: Sequence[Execution], ev: T
     assigned, groups = assign_executions(design, executions)
     cands: list[HopCandidate] = []
     for hop in design.hops:
+        if hop.protocol == "RDP":        # no command, no artefact binding: see ``rdp`` (decision 035)
+            continue
         ex = assigned[hop.hop_id]
         key = (hop.source, hop.target, hop.protocol, hop.lane)
         lo, hi = command_window(ex, groups[key]) if ex else window
@@ -186,4 +190,6 @@ def evaluate_hops(design: ScenarioDesign, executions: Sequence[Execution], ev: T
             continue
         claimed = set().union(*(ids for j, ids in art.items() if j != i))
         results.append(resolve_hop(c, others[i], claimed))
-    return results, groups, assigned
+    by_id = {r["hop_id"]: r for r in results}
+    by_id.update({h.hop_id: resolve_rdp_hop(h, ev.rdp_rows, window) for h in design.hops if h.protocol == "RDP"})
+    return [by_id[h.hop_id] for h in design.hops], groups, assigned

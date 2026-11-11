@@ -12,7 +12,7 @@ from .agent import Execution, agent_executions, attach_4688, manual_executions, 
 from .db import iso, parse_ts
 from .design import ScenarioDesign
 from .events import (admin_binary_access, agent_beacons, agent_starts, find_dumps, in_range, kerberos_pairs_input,
-                     remote_logons, services, winrm91, wsmprovhost)
+                     rdp_source_connections, remote_logons, services, winrm91, wsmprovhost)
 from .hops import TrialEvents, evaluate_hops
 from .params import CLOCK_PAD_S, ENDPOINTS, IMPLEMENTATION_NOTES
 from .window import anchors_of, clusters_of, design_window, run_start, window_of
@@ -44,7 +44,26 @@ def shape_of(counts: Mapping[str, Mapping[str, int]], ingest: Mapping | None, ho
     svc = sorted({n for h in hops for n in h["steps"].get("service", {}).get("names", [])})
     return {"hosts_present": hosts, "steps_found": sorted(found), "service_names": svc,
             "target_accounts": {h["hop_id"]: h["hop_accounts"] for h in hops},
-            "protocols": {h["hop_id"]: (h["execution"] or {}).get("protocols", []) for h in hops}}
+            "protocols": {h["hop_id"]: (h["execution"] or {}).get("protocols", [h["protocol"]] if h["protocol"] == "RDP" else [])
+                          for h in hops}}
+
+
+def design_rdp_connections(design: ScenarioDesign, rows: Sequence[Mapping]) -> list[Mapping]:
+    """mstsc -> 3389 Sysmon 3 of every RDP hop of the design, any time in the DB (anchors of the run, N16)."""
+    out: list[Mapping] = []
+    for hop in design.hops:
+        if hop.protocol == "RDP":
+            out += rdp_source_connections(rows, hop.source, hop.target)
+    return sorted(out, key=lambda r: r["ts"])
+
+
+def attach_rundll32_listing(hops: Sequence[dict], dumps_w: Sequence) -> None:
+    """List rundll32 -> lsass reads of the window in the RDP hops' evidence; no status depends on it (N20)."""
+    listing = [{"host": d.host, "utc": iso(d.ts), "account": d.account, "user_token": d.user_token,
+                "event_uids": d.event_uids[:4]} for d in dumps_w]
+    for h in hops:
+        if h.get("rdp") is not None:
+            h["rdp"]["rundll32_lsass_in_window"] = listing
 
 
 def _public_hops(hops: Sequence[Mapping]) -> list[dict]:
@@ -58,7 +77,8 @@ def validate_trial(trial_id: str, scenario: str, quarantine: bool, design: Scena
     executions, tree_uids = build_executions(rows, counts)
     dumps = find_dumps(rows)
     logons = remote_logons(rows)
-    anchors = anchors_of(executions, dumps, logons)
+    rdp_conns = design_rdp_connections(design, rows)
+    anchors = anchors_of(executions, dumps, logons, rdp_conns)
     clusters = clusters_of(anchors)
     base = {"trial_id": trial_id, "scenario": scenario, "quarantine": quarantine, "design_source": design.source,
             "db_span_utc": list(span), "anchor_clusters": len(clusters),
@@ -85,12 +105,16 @@ def validate_trial(trial_id: str, scenario: str, quarantine: bool, design: Scena
                      smb_binaries=admin_binary_access(rows_w), services=services(rows_w),
                      winrm91=winrm91(rows_w), wsmprov=wsmprovhost(rows_w),
                      session_src={(r["host"], r["target_logon_id"]): r["source_ip"] for r in rows_w
-                                  if r["channel"] == "Security" and r["event_id"] == 4624 and r["target_logon_id"]})
+                                  if r["channel"] == "Security" and r["event_id"] == 4624 and r["target_logon_id"]},
+                     rdp_rows=[r for r in rows_w if (r["channel"], r["event_id"]) in (("Sysmon", 3), ("Security", 4624))]
+                     if any(h.protocol == "RDP" for h in design.hops) else [])
     hops, groups, _ = evaluate_hops(design, execs_w, ev, (lo, hi))
+    attach_rundll32_listing(hops, dumps_w)
     dsteps = C.dump_steps(design, dumps_w)
     dwin = design_window([e.ts_first for cands in groups.values() for e in cands]
                          + [d.ts for d in dumps_w if d.user_token]
-                         + [h["_first_logon_ts"] for h in hops] + [h["_last_logon_ts"] for h in hops])
+                         + [h["_first_logon_ts"] for h in hops] + [h["_last_logon_ts"] for h in hops]
+                         + [t for h in hops for t in h.get("_rdp_source_ts", [])])
     guid_session = {(r["process_guid"] or "").lower(): r["session_id"] for r in rows_w
                     if r["channel"] == "Sysmon" and r["event_id"] == 1}
     e4624, d4769 = kerberos_pairs_input([r for r in rows if in_range(r["ts"], lo - CLOCK_PAD_S, hi + CLOCK_PAD_S)])
@@ -104,7 +128,7 @@ def validate_trial(trial_id: str, scenario: str, quarantine: bool, design: Scena
         "e": C.crit_e(design, beacons, r_lo, hi),
         "f": C.crit_f_local(older, (lo, hi)),
         "g": C.crit_g(e4624, d4769, hops, dc_security),
-        "h": C.crit_h(design, groups, execs_w, dumps_w),
+        "h": C.crit_h(design, groups, execs_w, dumps_w, hops),
         "i": C.result("n/a", reason="computed across trials"),
     }
     return {**base,

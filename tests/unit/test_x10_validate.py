@@ -702,9 +702,18 @@ def test_apply_cross_does_not_mutate_input_and_keeps_all_rows():
     assert [a, b] == snap and len(out) == 2 and [r["trial_id"] for r in out] == ["s02_t01", "s02_t02"]
 
 
-def test_design_for_rejects_s01():
+def test_design_for_s01_matches_035_and_s08_still_rejected():
+    d = design_for("s01")
+    assert tuple(d.path_hosts) == ("ep-01", "ep-02")
+    assert tuple(d.dumps) == ()
+    assert len(d.hops) == 1
+    h = d.hops[0]
+    assert (h.hop_id, h.protocol, h.source, h.target, h.lane, h.intended_account) ==         ("s01-h1", "RDP", "ep-01", "ep-02", "manual", "svc_backup")
+    assert tuple(h.steps) == ("rdp_source", "logon")
+    assert d.benign is None
+    assert tuple(d.caldera_hosts) == ()
     with pytest.raises(KeyError):
-        design_for("s01")
+        design_for("s08")
 
 
 def test_path_hosts_match_029():
@@ -736,3 +745,147 @@ def test_real_s02_t03_a_warn_and_g_na():
     res = _real("s02_t03")
     assert st(res, "a") == "WARN", res["criteria"]["a"]
     assert st(res, "g") == "n/a", res["criteria"]["g"]
+
+
+# ============================================================================ S01 (decision 035): manual RDP ep-01 -> ep-02
+
+MSTSC = r"C:\Windows\System32\mstsc.exe"
+
+
+def mstsc(t0, off, *, dst=None, port=3389, image=MSTSC):
+    """Sysmon 3 on ep-01: the RDP client connecting to the target (the source-side anchor)."""
+    return row(t0, off, "ep-01", "Sysmon", 3, image=image, destination_ip=dst or IP["ep-02"], destination_port=port,
+               source_ip=IP["ep-01"], account_name="svc_backup")
+
+
+def rdp_logon(t0, off, ltype=10, acct="svc_backup", lid=7000, src="ep-01"):
+    """4624 on ep-02 from the source's IP."""
+    return row(t0, off, "ep-02", "Security", 4624, logon_type=ltype, source_ip=IP[src], account_name=acct,
+               target_logon_id=lid, authentication_package="Negotiate")
+
+
+def rdp_inbound(t0, off, port=3389):
+    """Sysmon 3 on ep-02: the inbound RDP connection (svchost, Initiated = false)."""
+    return row(t0, off, "ep-02", "Sysmon", 3, image=r"C:\Windows\System32\svchost.exe", source_ip=IP["ep-01"],
+               destination_ip=IP["ep-02"], destination_port=port, account_name="NETWORK SERVICE")
+
+
+def s01_rows(t0: datetime = T0, **kw) -> list[dict]:
+    """Passing minimal S01: mstsc on ep-01, then a type 10 logon by svc_backup on ep-02."""
+    return [mstsc(t0, 0), rdp_logon(t0, 5, **kw)]
+
+
+def s01_run(rows, trial_id="s01_t01"):
+    return run_trial(rows, "s01", trial_id=trial_id)
+
+
+def test_s01_baseline_statuses():
+    res = s01_run(s01_rows())
+    assert st(res, "b") == "PASS", res["criteria"]["b"]
+    assert st(res, "c") == "PASS", res["criteria"]["c"]
+    assert st(res, "d") == "n/a"
+    assert st(res, "e") == "n/a"
+    assert res["criteria"]["e"]["evidence"].get("reason"), "e is n/a with a reason (manual, no agent)"
+    assert st(res, "h") == "PASS", res["criteria"]["h"]
+    assert res["scenario"] == "s01" and res["quarantine"] is False
+
+
+def test_s01_no_mstsc_fails_b():
+    res = s01_run([rdp_logon(T0, 5)])
+    assert st(res, "b") == "FAIL"
+
+
+@pytest.mark.parametrize("kw", [
+    {"dst": IP["ep-03"]},                       # wrong destination IP
+    {"port": 445},                              # wrong port
+    {"image": r"C:\Windows\System32\cmd.exe"},  # not mstsc
+], ids=["wrong_ip", "wrong_port", "not_mstsc"])
+def test_s01_bad_source_connection_fails_b(kw):
+    res = s01_run([mstsc(T0, 0, **kw), rdp_logon(T0, 5)])
+    assert st(res, "b") == "FAIL", res["criteria"]["b"]
+
+
+def test_s01_no_logon_fails_b_and_c():
+    res = s01_run([mstsc(T0, 0)])
+    assert st(res, "b") == "FAIL"
+    assert st(res, "c") == "FAIL"
+
+
+@pytest.mark.parametrize("ltype", [7, 11])
+def test_s01_reconnect_or_cached_logon_type_does_not_count(ltype):
+    res = s01_run([mstsc(T0, 0), rdp_logon(T0, 5, ltype=ltype)])
+    assert st(res, "b") == "FAIL", res["criteria"]["b"]
+
+
+def test_s01_type10_by_other_account_fails_c_and_reports_observed():
+    res = s01_run(s01_rows(acct="admin_it"))
+    assert st(res, "c") == "FAIL"
+    assert "admin_it" in json.dumps(res["criteria"]["c"]["evidence"]), res["criteria"]["c"]
+
+
+def test_s01_type3_with_inbound_3389_counts_as_rdp():
+    res = s01_run([mstsc(T0, 0), rdp_logon(T0, 5, ltype=3), rdp_inbound(T0, 6)])
+    assert st(res, "b") == "PASS", res["criteria"]["b"]
+    assert st(res, "c") == "PASS", res["criteria"]["c"]
+
+
+def test_s01_type3_inbound_before_logon_within_seconds_counts():
+    res = s01_run([mstsc(T0, 0), rdp_inbound(T0, 3), rdp_logon(T0, 5, ltype=3)])
+    assert st(res, "b") == "PASS", res["criteria"]["b"]
+
+
+def test_s01_type3_without_inbound_fails_b():
+    res = s01_run([mstsc(T0, 0), rdp_logon(T0, 5, ltype=3)])
+    assert st(res, "b") == "FAIL", res["criteria"]["b"]
+
+
+def test_s01_type3_with_inbound_on_other_port_fails_b():
+    res = s01_run([mstsc(T0, 0), rdp_logon(T0, 5, ltype=3), rdp_inbound(T0, 6, port=445)])
+    assert st(res, "b") == "FAIL", res["criteria"]["b"]
+
+
+def test_s01_type3_with_inbound_far_in_time_fails_b():
+    res = s01_run([mstsc(T0, 0), rdp_logon(T0, 5, ltype=3), rdp_inbound(T0, 65)])
+    assert st(res, "b") == "FAIL", res["criteria"]["b"]
+
+
+def test_s01_two_sessions_same_account_far_apart_fails_h():
+    rows = s01_rows() + [mstsc(T0, 495), rdp_logon(T0, 500, lid=7001)]
+    res = s01_run(rows)
+    assert st(res, "h") == "FAIL", res["criteria"]["h"]
+
+
+def test_s01_two_sessions_different_accounts_warns_h():
+    rows = s01_rows() + [mstsc(T0, 495), rdp_logon(T0, 500, acct="admin_it", lid=7001)]
+    res = s01_run(rows)
+    assert st(res, "h") == "WARN", res["criteria"]["h"]
+
+
+def test_s01_rundll32_lsass_dump_changes_no_status():
+    base = s01_run(s01_rows())
+    with_dump = s01_run(s01_rows() + [dump(T0, 3, "ep-01", "svc_backup")])
+    assert {c: st(with_dump, c) for c in "abcdefgh"} == {c: st(base, c) for c in "abcdefgh"}
+
+
+def test_s01_validate_via_db_and_discover(tmp_path):
+    path = tmp_path / "data" / "processed" / "s01_t01.sqlite3"
+    _write_db(path, s01_rows(), scenario="s01")
+    assert "s01_t01" in cli.discover(tmp_path)
+    res = cli.validate_one(tmp_path, "s01_t01", None)
+    assert res["scenario"] == "s01" and st(res, "b") == "PASS" and st(res, "c") == "PASS"
+
+
+def _ten_s01(bad: dict[int, tuple]):
+    return [_fake(f"s01_t{n:02d}", bad.get(n, ()), scenario="s01") for n in range(1, 11)]
+
+
+def test_s01_groups_as_s01_with_expected_ten():
+    ts = _ten_s01({})
+    assert all(cross.group_of(t) == "s01" for t in ts)
+    v = cross.verdict(ts)
+    assert v["expected"] == 10 and v["verdict"] == "pass"
+
+
+def test_s01_verdict_replace_two_and_full_rerun_six():
+    assert cross.verdict(_ten_s01({3: ("b",), 7: ("c",)}))["verdict"] == "replace 2"
+    assert cross.verdict(_ten_s01({n: ("b",) for n in range(1, 7)}))["verdict"] == "full rerun"

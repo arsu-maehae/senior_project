@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Iterable, Mapping, Sequence
 
 from .params import (AGENT_IMAGE, CALDERA_IP, CALDERA_PORT, DUMP_PAIR_S, ENDPOINTS, HOST_IP, IP_HOST,
-                     NON_USER_ACCOUNTS, WRITE_MASK)
+                     NON_USER_ACCOUNTS, RDP_PORT, WRITE_MASK)
 from .textmatch import field as fv_field
 from .textmatch import norm_account, winrm91_client
 
@@ -157,6 +157,34 @@ def wsmprovhost(rows: Sequence[Mapping]) -> list[Mapping]:
     """Sysmon 1 of wsmprovhost.exe (the WinRM work process on the target)."""
     return sorted((r for r in rows if r["channel"] == "Sysmon" and r["event_id"] == 1
                    and _endswith(r["image"], "\\wsmprovhost.exe")), key=lambda r: r["ts"])
+
+
+# ----------------------------------------------------------------------------- RDP (decision 035)
+
+def rdp_source_connections(rows: Sequence[Mapping], source: str, target: str) -> list[Mapping]:
+    r"""Sysmon 3 on ``source`` from ``\mstsc.exe`` to the target's IP, port 3389 (the RDP source anchor).
+
+    WHY by IP: the RDP client may be started from the interface, so no command line names the target.
+    """
+    ip = HOST_IP[target]
+    return sorted((r for r in rows if r["channel"] == "Sysmon" and r["event_id"] == 3 and r["host"] == source
+                   and _endswith(r["image"], "\\mstsc.exe") and (r["destination_ip"] or "").strip() == ip
+                   and r["destination_port"] == RDP_PORT), key=lambda r: r["ts"])
+
+
+def rdp_inbound_connections(rows: Sequence[Mapping], source: str, target: str) -> list[Mapping]:
+    """Sysmon 3 on ``target`` from ``source``'s IP to port 3389 (any image; the target's svchost logs it)."""
+    ip = HOST_IP[source]
+    return sorted((r for r in rows if r["channel"] == "Sysmon" and r["event_id"] == 3 and r["host"] == target
+                   and (r["source_ip"] or "").strip() == ip and r["destination_port"] == RDP_PORT),
+                  key=lambda r: r["ts"])
+
+
+def logons_from(rows: Sequence[Mapping], target: str, source: str) -> list[Mapping]:
+    """Every 4624 on ``target`` from ``source``'s IP, any logon type (the RDP step reports them all)."""
+    ip = HOST_IP[source]
+    return sorted((r for r in rows if r["channel"] == "Security" and r["event_id"] == 4624 and r["host"] == target
+                   and (r["source_ip"] or "").strip() == ip), key=lambda r: r["ts"])
 
 
 # ----------------------------------------------------------------------------- agent network and DC

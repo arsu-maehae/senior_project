@@ -105,10 +105,15 @@ def crit_c(design: ScenarioDesign, hops: Sequence[Mapping], rows_w: Sequence[Map
     per_hop, bad = [], []
     for h in hops:
         seen = target_side_accounts(rows_w, h["source"], h["target"])
-        allacc = set(seen["4624"]) | set(seen["5145"]) | set(seen["4697"])
+        rdp = h.get("rdp")
+        # RDP (035): only the counted logons of the hop count; the 4624s of types 3/10 are still reported
+        allacc = set(h["hop_accounts"]) if rdp else set(seen["4624"]) | set(seen["5145"]) | set(seen["4697"])
         ok = h["intended_account"] in allacc
         entry = {"hop_id": h["hop_id"], "intended": h["intended_account"], "observed_in_window": seen,
                  "observed_tied_to_hop": h["hop_accounts"], "intended_seen": ok}
+        if rdp:
+            entry["observed_logon_types"] = rdp["logon_types_observed"]
+            entry["observed_accounts_all_types"] = rdp["accounts_observed"]
         if h["hop_id"] == "s07-Y":
             entry["note"] = "design svc_sql; t00 logged svc_backup for Y (decision 027)"
         per_hop.append(entry)
@@ -154,6 +159,8 @@ def crit_d(design: ScenarioDesign, hops: Sequence[Mapping], rows_w: Sequence[Map
 
 def crit_e(design: ScenarioDesign, beacons: Sequence[Mapping], run_lo: float | None, run_hi: float | None) -> dict:
     """Agent evidence: each Caldera source host needs a splunkd -> 192.168.50.50:8888 Sysmon 3 in the run."""
+    if not design.caldera_hosts:
+        return result("n/a", reason="manual lane, no agent in the S01 design (decision 035)")
     if run_lo is None:
         return result("FAIL", reason="no trial window")
     per_host, missing = {}, []
@@ -269,10 +276,25 @@ def _exec_brief(e: Execution) -> dict:
             "protocols": sorted(e.protocols), "event_uids": e.event_uids[:4]}
 
 
-def crit_h(design: ScenarioDesign, groups: Mapping[tuple, Sequence[Execution]], execs_w: Sequence[Execution],
-           dumps_w: Sequence[Dump]) -> dict:
-    """Single run: indistinguishable duplicate of a design step -> FAIL; identifiable duplicate -> WARN."""
+def _rdp_duplicates(design: ScenarioDesign, hops: Sequence[Mapping]) -> tuple[list[dict], list[dict]]:
+    """RDP sessions beyond the designed hops of one (source, target): same account -> FAIL, else WARN (N19)."""
     fails, warns = [], []
+    pairs = {(h["source"], h["target"]) for h in hops if h.get("rdp")}
+    for src, tgt in sorted(pairs):
+        k = sum(1 for h in design.hops if h.protocol == "RDP" and (h.source, h.target) == (src, tgt))
+        sessions = [s for h in hops if h.get("rdp") and (h["source"], h["target"]) == (src, tgt) for s in h["rdp"]["sessions"]]
+        if len(sessions) > k:
+            counts = _by_account(sessions, lambda s: s["account"])
+            same = {a: n for a, n in counts.items() if n > k}
+            item = {"step": f"manual RDP {src}->{tgt}", "expected": k, "found_by_account": counts, "sessions": sessions}
+            (fails if same else warns).append({**item, "why": "same user, same source, same target" if same else "another user"})
+    return fails, warns
+
+
+def crit_h(design: ScenarioDesign, groups: Mapping[tuple, Sequence[Execution]], execs_w: Sequence[Execution],
+           dumps_w: Sequence[Dump], hops: Sequence[Mapping] = ()) -> dict:
+    """Single run: indistinguishable duplicate of a design step -> FAIL; identifiable duplicate -> WARN."""
+    fails, warns = _rdp_duplicates(design, hops)
     for dd in design.dumps:
         user = [d for d in dumps_w if d.host == dd.host and d.user_token]
         if len(user) > dd.count:

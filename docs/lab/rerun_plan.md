@@ -45,10 +45,10 @@ For the full reruns, new `t01` = development and `t02`–`t10` = test. Replaceme
 
 ## Work needed before the first `x10_v2` trial is ingested
 - The batch ingest takes `x10_v2` as a source, with its own report folder (`out/ingest/x10_v2/`).
-- The validator takes `x10_v2` as a source, with its own output folder (`out/x10_validate_v2/`), and a design table for S01 (decision record first).
+- The validator takes `x10_v2` as a source, with its own output folder (`out/x10_validate_v2/`), and lists `s01` among the expected scenarios (`X10_SCENARIOS` in `src/x10_validate/cli.py`). The S01 design table is done (decision 035, manual RDP hop; open point: whether S01 includes an LSASS dump).
 - The archive step above, with hash checks, run once.
 These are implementation tasks and are not part of this plan.
 
 ## Open points for the owner
-- **S07 and S01** need a confirmed design before their first trial.
+- **S07 and S01** need a confirmed design before their first trial. For S01 the validator design is decision 035 (draft); confirm it and its open points (LSASS dump on ep-01? type 3 + port 3389 accepted as RDP?).
 - **Collector sessions and trial windows.** The end-of-trial sessions from 192.168.50.97, .98 and .99 are excluded by the trial window (PLAN T6.4); the IPs are recorded in decision 032. Whether T6.4 also excludes them by source IP is open.

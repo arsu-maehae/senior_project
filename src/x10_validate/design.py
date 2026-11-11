@@ -1,4 +1,4 @@
-"""Design steps per scenario, transcribed from decision 029 (Decision 2, "Design steps").
+"""Design steps per scenario, transcribed from decision 029 (Decision 2, "Design steps") and 035 (S01).
 
 WHY data, not code: the design is fixed before the data was seen (029), so it is written once as
 a table that the owner can compare line by line with the decision record.
@@ -12,12 +12,12 @@ from dataclasses import dataclass
 class HopDesign:
     """One designed cross-host move and the target-side steps that must follow it."""
     hop_id: str
-    protocol: str                 # SMB | WinRM
+    protocol: str                 # SMB | WinRM | RDP (RDP: decision 035, handled in ``rdp``)
     source: str
     target: str
     lane: str                     # agent (Caldera, splunkd tree) | manual (interactive session)
     intended_account: str
-    steps: tuple[str, ...]        # subset of command, logon, binary_write, service, winrm
+    steps: tuple[str, ...]        # subset of command, logon, binary_write, service, winrm; RDP: rdp_source, logon
     note: str = ""
 
 
@@ -46,7 +46,13 @@ class ScenarioDesign:
 _SMB_FULL = ("command", "logon", "binary_write", "service")
 
 DESIGNS: dict[str, ScenarioDesign] = {
-    "s02": ScenarioDesign(
+    "s01": ScenarioDesign(
+        "s01", ("ep-01", "ep-02"),
+        (),
+        (HopDesign("s01-h1", "RDP", "ep-01", "ep-02", "manual", "svc_backup", ("rdp_source", "logon"),
+                   "manual RDP, no agent (decision 035)"),),
+        None, (), source="decision 035"),
+    "s02":ScenarioDesign(
         "s02", ("ep-01", "ep-02"),
         (DumpDesign("dump_ep-01", "ep-01", 1),),
         (HopDesign("s02-h1", "SMB", "ep-01", "ep-02", "agent", "svc_backup", _SMB_FULL),),
@@ -89,9 +95,9 @@ DESIGNS: dict[str, ScenarioDesign] = {
 
 
 def design_for(scenario: str) -> ScenarioDesign:
-    """The design of a scenario; refuses scenarios that decision 029 does not define (e.g. s01)."""
+    """The design of a scenario; refuses scenarios that no decision defines (S01: 035, S02-S07: 029)."""
     if scenario not in DESIGNS:
-        raise KeyError(f"no design in decision 029 for scenario {scenario!r}")
+        raise KeyError(f"no design in decision 029 or 035 for scenario {scenario!r}")
     return DESIGNS[scenario]
 
 

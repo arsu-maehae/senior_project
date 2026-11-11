@@ -29,6 +29,9 @@ CLOCK_WARN_S = 5.0          # decision 029, g
 CLOCK_PAD_S = 1800.0        # LogonGuid pairs are searched in the window +- 30 min (implementation note)
 DUMP_PAIR_S = 1.0           # Sysmon 10 records within 1 s are one dump (spec 07 AK-10)
 MANUAL_GAP_S = 120.0        # manual commands of one session closer than this are one execution
+RDP_PORT = 3389             # decision 035: RDP source anchor and the type 3 corroboration
+RDP_CORR_S = 5.0            # type 3 4624 and inbound Sysmon 3 to 3389 on the same host, either order (N17)
+RDP_SESSION_GAP_S = 120.0   # counted RDP logons of one account closer than this are one session (N19)
 
 # Account classes.
 NON_USER_ACCOUNTS = frozenset({"", "system", "local service", "network service", "localsystem",
@@ -97,4 +100,27 @@ IMPLEMENTATION_NOTES: tuple[str, ...] = (
     "file from a missing one.",
     "N15 quarantine DBs keep scenario_id s05 / trial_id tNN in their rows; the trial id is taken from "
     "the file name (s05q_tNN) per decision 030.",
+    "N16 RDP step rdp_source (decision 035): Sysmon 3 on the source host whose image ends \\mstsc.exe, "
+    "destination IP = the target's lab IP (the target is named by IP, not by a command line), destination "
+    "port 3389, inside the trial window. Every such connection in the DB is also an anchor of the run "
+    "window (kind rdp_source), because S01 has no agent command or dump.",
+    "N17 RDP step logon (decision 035): 4624 on the target from the source host's IP by a user account "
+    "that is logon type 10, or logon type 3 with an inbound Sysmon 3 on the target (source IP = the "
+    "source's IP, destination port 3389, any image) within 5 s of it, either order (same host clock). "
+    "Types 7 and 11 and every other type 3 never count; all 4624s from the source IP are listed with "
+    "type, account and counted flag. The step counts a logon of any user account (as for the other "
+    "hops); the intended account is checked by c, not by b.",
+    "N18 RDP criteria: c uses only the accounts of the counted logons (not 5145/4697, which an RDP hop "
+    "does not produce), next to the observed 4624 accounts of types 3/10; d and e are n/a (no benign "
+    "track, no agent in the S01 design); g takes no lower bounds from an RDP hop (no source command); "
+    "time_delta_ms = first counted logon - first rdp_source connection; criterion i takes the hop's "
+    "protocol (RDP) as its protocol.",
+    "N19 RDP criterion h: an RDP session = counted logons of one account from the source to the target "
+    "with gaps <= 120 s. More sessions than designed hops: same account more than designed -> FAIL "
+    "(indistinguishable), otherwise WARN (another account). Source-side mstsc connection bursts "
+    "(gaps <= 120 s) are reported in the evidence only.",
+    "N20 Any rundll32 -> lsass Sysmon 10 in the window of a design without dumps and without a benign "
+    "track (S01) is listed in the hop evidence (rdp.rundll32_lsass_in_window); it never changes a status "
+    "(decision 035, measurement notes). A user-token dump stays an anchor of the run window (N1), as in "
+    "every scenario, so it can only move the window edges.",
 )

@@ -47,11 +47,17 @@ class Cluster:
                 "example_event_uids": [a.event_uid for a in self.anchors[:3]]}
 
 
-def anchors_of(executions: Sequence[Execution], dumps: Sequence[Dump], logons: Sequence[Mapping]) -> list[Anchor]:
-    """All anchors: agent executions naming an endpoint, user-token dumps, remote endpoint 4624s."""
+def anchors_of(executions: Sequence[Execution], dumps: Sequence[Dump], logons: Sequence[Mapping],
+               rdp_conns: Sequence[Mapping] = ()) -> list[Anchor]:
+    """All anchors: agent executions naming an endpoint, user-token dumps, remote endpoint 4624s.
+
+    ``rdp_conns`` (mstsc -> 3389 Sysmon 3 of a design RDP hop, decision 035) are anchors of their own
+    kind, because a manual RDP trial has no agent command and no dump.
+    """
     out = [Anchor(e.ts_first, "agent_command", e.host, e.procs[0].event_uid) for e in executions if e.lane == "agent"]
     out += [Anchor(d.ts, "dump", d.host, d.event_uids[0]) for d in dumps if d.user_token]
     out += [Anchor(r["ts"], "remote_4624", r["host"], r["event_uid"]) for r in logons]
+    out += [Anchor(r["ts"], "rdp_source", r["host"], r["event_uid"]) for r in rdp_conns]
     return sorted(out, key=lambda a: a.ts)
 
 
