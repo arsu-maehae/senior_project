@@ -1,46 +1,63 @@
-# S05 agent start (07:06:28) in the approved s06_t00 and s07_t00 keys
+# Other-run leftovers in the approved t00 keys (S05 agent run in s06_t00 and s07_t00)
 
-**Date:** 2026-11-12 · **Found by:** T6 stage A pre-check (decision 040) · **Status:** drafts written for owner review; `ground_truth/approved/` unchanged
+**Date:** 2026-11-12 · **Found by:** T6 stage A pre-check (decision 040), then a scan of all six t00 keys · **Status:** corrected drafts written for owner review; `ground_truth/approved/` unchanged
 
-## What
-The approved s06_t00 and s07_t00 keys each list an `agent_start` step that belongs to S05 (the run of 2026-10-12 07:03–07:17), not to their own trial:
+## Scan (all six t00 keys, s02–s07)
+A finding is a key entry whose event meets both conditions:
+- it lies **outside** the key's `agent.run_interval`;
+- it belongs to **another run's agent tree**: the agent roots before this trial's run start (30-min walk-back, decision 026), their Sysmon 1 descendants, the splunkd process that parented only those roots, or a 4688 that corroborates such a process.
 
-| Key | Step | Host | Time (UTC) | Account | Event uids (in `event_keys`) |
-|---|---|---|---|---|---|
-| s06_t00 | `s06-agent-ep-02-1` | ep-02 | 2026-10-12T07:06:28.532 | admin_it | Sysmon 1 `7b4d1cf6…a451` (record 49473); Security 4688 `6147fc0c…56d1` (record 1705666) |
-| s07_t00 | `s07-agent-ep-02-1` | ep-02 | 2026-10-12T07:06:28.532 | admin_it | Sysmon 1 `a765fe8d…182f`; Security 4688 `8b4a334a…4273` |
+The scan looked at every event uid referenced anywhere in the key (steps, hops, unconfirmed, paths, agent fields; `event_keys` is the index of those) and at `agent.accounts`.
 
-Both steps lie well before their key's own `agent.run_interval`: s06 starts at 08:57:25.672, s07 at 09:09:49.665. No hop, path or other step refers to these events.
+| Key | Other-run roots in the DB | Findings |
+|---|---|---|
+| s02_t00 | 0 | none |
+| s03_t00 | 9 (ep-03, 2026-09-11…22) | none (no key entry refers to them) |
+| s04_t00 | 0 | none |
+| s05_t00 | 9 | none (no key entry refers to them) |
+| s06_t00 | 11 (S05 run and earlier) | yes, see below |
+| s07_t00 | 2 (S05 ep-02) | yes, see below |
 
-## Why it is there (decision 026 leftover)
-The s05, s06 and s07 t00 DBs share host files from the same day. The ep-02 `pivot_admin` agent start at 07:06:28 is in all three (decision 026, Context; `docs/research/agent_evidence.md` finding 2).
+The only events outside `run_interval` in any key are the s06/s07 entries below. Every other referenced event lies inside its key's interval.
 
-The key builder scopes the two kinds of entry differently:
-- `agent_start` steps are scoped to the **run days**, a 6-hour walk-back (`RUN_GAP_S`), so every splunkd launch on 2026-10-12 becomes a step;
-- the leftover-logon search is scoped to the 30-minute **run interval**.
+## Why they are there (decision 026 leftover)
+The s05, s06 and s07 t00 DBs share the ep-02 host files of 2026-10-12. The S05 ep-02 `pivot_admin` agent (start 07:06:28, decision 026 Context; `docs/research/agent_evidence.md` finding 2) and its splunkd network events are in all three.
 
-So the S05 launch is listed as a step of s06 and s07. It never affected the run interval:
-- the interval start comes from the 30-minute walk-back, which begins at each trial's own first root;
-- the interval end is the latest step or hop time, and this step is earlier than all of them.
+The key builder scopes `agent_start` steps, `agent.sysmon3_event_uids` and `agent.accounts` to the **run days** (6-hour walk-back, `RUN_GAP_S`). Only the leftover-logon search uses the 30-minute run interval. So the S05 entries were listed in the s06 and s07 keys.
 
-## Correction (drafts)
-- `ground_truth/drafts/s06_t00.yaml` and `ground_truth/drafts/s07_t00.yaml` are the approved keys with only these entries removed:
-  - the one `agent_start` step;
-  - its two `event_keys` entries.
-- The diff is 28 deleted lines per file and nothing else. The other step ids are not renumbered: the first remaining one is still `…-agent-ep-01-2`.
-- Before writing, the script checked that re-serialising the approved key gives byte-identical text, and that no other part of the key refers to the removed uids.
-- `python -m answer_key verify` on both drafts: `ok: true`, `lock_ready: true` (s06 88 events checked, s07 105).
-- To accept: move the drafts to `ground_truth/approved/` (owner only).
+They never affected the run interval:
+- its start comes from the 30-minute walk-back, which begins at each trial's own first root;
+- its end is the latest step or hop time, and these entries are earlier than all of them.
 
-## Same cause, found but NOT changed in the drafts
-These come from the same run-day scope. They are listed for the owner to decide; they do not affect any hop, path or GTA-06 result.
-- `agent.sysmon3_event_uids`: ep-02 splunkd connections to 192.168.50.50:8888 from the S05 run:
-  - s06: 4 of 8 (07:03:46, 07:06:29, 07:07:40, 07:08:03);
-  - s07: 6 of 12 (the same four, plus 07:12:36 and 07:12:46).
-- `agent.accounts`: `system` comes only from S05-era ep-02 splunkd children (07:03:46). Within each trial's run interval the agent accounts are admin_it, svc_backup and svc_sql. admin_it stays either way, through ep-01.
-- The same pattern may exist in the s05 key (an earlier ep-02 start) or the t01 keys. It was not checked here.
+## Entries removed in the drafts
+| Key | Field | Entries removed | Times (UTC, 2026-10-12) |
+|---|---|---|---|
+| s06_t00 | `steps` | `s06-agent-ep-02-1` (agent_start, ep-02, admin_it): Sysmon 1 `7b4d1cf6…a451`, 4688 `6147fc0c…56d1` | 07:06:28.532 |
+| s06_t00 | `agent.sysmon3_event_uids` | 4 of 8, ep-02 splunkd → 192.168.50.50:8888: `a3a57752…`, `f982bfd9…`, `558929f1…`, `6de32964…` | 07:03:46, 07:06:29, 07:07:40, 07:08:03 |
+| s06_t00 | `event_keys` | the 6 uids above | |
+| s07_t00 | `steps` | `s07-agent-ep-02-1` (agent_start, ep-02, admin_it): Sysmon 1 `a765fe8d…182f`, 4688 `8b4a334a…4273` | 07:06:28.532 |
+| s07_t00 | `agent.sysmon3_event_uids` | 6 of 12, ep-02 splunkd → 192.168.50.50:8888: `a82e79c4…`, `7abfb572…`, `99d22a45…`, `9744ca66…`, `3c8a5998…`, `404e8163…` | 07:03:46, 07:06:29, 07:07:40, 07:08:03, 07:12:36, 07:12:46 |
+| s07_t00 | `agent.accounts` | `system` (only the S05 ep-02 root at 07:03:46 has it; the s07 run's own roots are admin_it, svc_backup, svc_sql) | |
+| s07_t00 | `event_keys` | the 8 uids above | |
+
+**Not removed: `system` in s06 `agent.accounts`.** The s06 run's own first root has that account: an ep-03 PowerShell at 08:58:25.672, tied to the agent through the 4688 PID match. That root also sets the s06 run start. This corrects the earlier version of this note, which said `system` was S05-only in both keys; that check had looked only at Sysmon 1 roots whose parent image is splunkd.
+
+The other step ids are not renumbered: the first remaining one is still `…-agent-ep-01-2`.
+
+## Draft files and checks
+| Draft | Diff vs approved (lines added / deleted) | `python -m answer_key verify` |
+|---|---|---|
+| `ground_truth/drafts/s06_t00.yaml` | +0 / −60 | ok, lock_ready; 84 events checked (approved 88; Sysmon 3 11 → 7) |
+| `ground_truth/drafts/s07_t00.yaml` | +1 / −78 (the one added line is `"svc_sql"` without its trailing comma) | ok, lock_ready; 99 events checked (approved 105; Sysmon 3 12 → 6) |
+
+Before writing, the script checked three things:
+- re-serialising each approved key gives byte-identical text;
+- every scan finding was handled;
+- no other part of the key refers to a removed uid.
+
+Nothing else in the keys changed. Unchanged drafts: s02, s03, s04 and s05 (identical to their approved keys). To accept: move the s06 and s07 drafts to `ground_truth/approved/` (owner only).
 
 ## Does this change anything already built?
 No.
-- `src/trial_window` does not read the keys, and its windows start at each trial's own first root: 08:57:25.672 and 09:09:49.665.
-- GTA-06 checks only the events of the key's hops, so the removed step was never part of it.
+- `src/trial_window` does not read the keys.
+- GTA-06 checks only the events of the key's hops, and none of the removed entries is a hop event.

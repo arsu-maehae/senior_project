@@ -23,12 +23,6 @@
     "server_port": 8888,
     "server_confirmed": true,
     "sysmon3_event_uids": [
-      "a82e79c4f31aa8a0f4b64e54c5b8f3c85d1a5631e2d6fdfb6c78e4e7e0d71d01",
-      "7abfb57216fad526121fe35ed3333d90726e2dbfb9e6306876756e8b830b1389",
-      "99d22a45da0f7135ef85e10c51436b58705f7e6d47ebdd2f7a60dec9b2f5b858",
-      "9744ca66d21357a641c044debfc6e53cf11fda33b51fd789de35677b5f09c31e",
-      "3c8a59982de6c492daf580ea2b925add67e2633845b6d50ec07bed675455d9fb",
-      "404e81637d1dacd84d8251bf49f9cd99d86f3a21d7e7f1e8da974b7f23f0661f",
       "669862110cb04514c892dcb4d7a59844902019cd13b51d513a1dae62982cd328",
       "a097f905c8997dd0a2106586b3d12de4d2fdace17232823ce3cc7fd0cd1c5d15",
       "3b9cdf6c3db737f7d4b5d17ba5b182ac623bb365a687e01b7442f1ade9d13513",
@@ -39,8 +33,7 @@
     "accounts": [
       "admin_it",
       "svc_backup",
-      "svc_sql",
-      "system"
+      "svc_sql"
     ],
     "run_days": [
       "2026-10-12"
@@ -665,26 +658,12 @@
       "record_id": 63945,
       "time_utc": "2026-10-12T09:17:06.233000Z"
     },
-    "3c8a59982de6c492daf580ea2b925add67e2633845b6d50ec07bed675455d9fb": {
-      "host": "ep-02",
-      "channel": "Sysmon",
-      "event_id": 3,
-      "record_id": 49769,
-      "time_utc": "2026-10-12T07:12:36.282000Z"
-    },
     "3eab684be59243d61314d78ee34afacdbe727248df3d5e3bb26f1abb63e881a6": {
       "host": "ep-01",
       "channel": "Sysmon",
       "event_id": 10,
       "record_id": 64027,
       "time_utc": "2026-10-12T09:18:36.231000Z"
-    },
-    "404e81637d1dacd84d8251bf49f9cd99d86f3a21d7e7f1e8da974b7f23f0661f": {
-      "host": "ep-02",
-      "channel": "Sysmon",
-      "event_id": 3,
-      "record_id": 49788,
-      "time_utc": "2026-10-12T07:12:46.731000Z"
     },
     "421fe0fb2a661ba5560b0a519ebfd47c23e3cebfdf73d00685a84193030bd5a0": {
       "host": "ep-01",
@@ -812,13 +791,6 @@
       "record_id": 1733133,
       "time_utc": "2026-10-12T09:19:33.062842Z"
     },
-    "7abfb57216fad526121fe35ed3333d90726e2dbfb9e6306876756e8b830b1389": {
-      "host": "ep-02",
-      "channel": "Sysmon",
-      "event_id": 3,
-      "record_id": 49485,
-      "time_utc": "2026-10-12T07:06:29.674000Z"
-    },
     "8177dd10788b86407f46a7da283fc81097dea5a73b3a120536edff007df472a7": {
       "host": "ep-02",
       "channel": "Security",
@@ -846,20 +818,6 @@
       "event_id": 10,
       "record_id": 63947,
       "time_utc": "2026-10-12T09:17:06.238000Z"
-    },
-    "9744ca66d21357a641c044debfc6e53cf11fda33b51fd789de35677b5f09c31e": {
-      "host": "ep-02",
-      "channel": "Sysmon",
-      "event_id": 3,
-      "record_id": 49561,
-      "time_utc": "2026-10-12T07:08:03.694000Z"
-    },
-    "99d22a45da0f7135ef85e10c51436b58705f7e6d47ebdd2f7a60dec9b2f5b858": {
-      "host": "ep-02",
-      "channel": "Sysmon",
-      "event_id": 3,
-      "record_id": 49548,
-      "time_utc": "2026-10-12T07:07:40.382000Z"
     },
     "9be7637247fb27f5bae6a6c4e6a6182c1daadfb2cd67d3a7c84f098c9839a492": {
       "host": "ep-02",
@@ -895,13 +853,6 @@
       "event_id": 4688,
       "record_id": 2339387,
       "time_utc": "2026-10-12T09:10:40.254135Z"
-    },
-    "a82e79c4f31aa8a0f4b64e54c5b8f3c85d1a5631e2d6fdfb6c78e4e7e0d71d01": {
-      "host": "ep-02",
-      "channel": "Sysmon",
-      "event_id": 3,
-      "record_id": 49113,
-      "time_utc": "2026-10-12T07:03:46.685000Z"
     },
     "a86ea93dbf47a74eb4bacaccf46143cf9c69dff09ebcf4c86b713578eef71573": {
       "host": "ep-02",
