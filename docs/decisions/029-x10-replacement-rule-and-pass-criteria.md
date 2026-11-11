@@ -60,3 +60,5 @@ If a criterion turns out to be unmeasurable on the data (for example a log type 
 
 ## Note added after the B1 file scan (2026-11-11, facts only, criteria unchanged)
 The scan of `data/incoming/x10` shows the missing ENDPOINT-02 and ENDPOINT-03 folders in **S05 trial_06** and **S06 trial_09** (not S05 trial_09, which is complete). S02 trial_03 and trial_04 lack DC-01 Sysmon and Security, as stated. The endpoint logs were not cleared between trials (for example s02_t03 ep-03 Security holds records from 2026-09-21 to 2026-10-15), which criterion f measures.
+
+Amended after the validation run by decision 031 (criterion f window anchors and end clip; owner accepted 2026-11-11). No verdict depends on f.
