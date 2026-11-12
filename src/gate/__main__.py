@@ -1,7 +1,9 @@
-"""CLI: ``python -m gate --trial T [--db PATH] [--windows PATH] [--out DIR] [--repo PATH]`` (cwd=src).
+"""CLI: ``python -m gate --trial T [--db PATH] [--windows PATH] [--out DIR] [--repo PATH] [--offsets PATH]
+[--clock-changes PATH]`` (cwd=src).
 
 Writes ``out/gate/<trial_id>/`` (spec 02_gate section 3). Reads the trial DB read-only (view
-``events_dedup``, hash before = after) and the trial's row of ``data/trial_windows.csv``. A
+``events_dedup``, hash before = after), the trial's row of ``data/trial_windows.csv`` and the trial's
+``data/processed/<trial>.clock_offsets.csv`` / ``.clock_changes.csv`` (T6b.2, decision 043). A
 refusal or input error exits 2 with the reason on stderr and writes nothing.
 """
 from __future__ import annotations
@@ -29,13 +31,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--windows", type=Path, default=None)
     ap.add_argument("--out", type=Path, default=None, help="output root (default out/gate)")
     ap.add_argument("--repo", type=Path, default=REPO)
+    ap.add_argument("--offsets", type=Path, default=None,
+                    help="clock offsets file (default data/processed/<trial>.clock_offsets.csv)")
+    ap.add_argument("--clock-changes", type=Path, default=None,
+                    help="clock changes file (default data/processed/<trial>.clock_changes.csv)")
     a = ap.parse_args(argv)
     repo = a.repo.resolve()
     db = a.db or default_db(repo, a.trial)
     windows = a.windows or repo / WINDOWS_REL
     out_root = a.out or repo / "out" / "gate"
     try:
-        result = run_gate(a.trial, db, windows, out_root, repo=repo)
+        result = run_gate(a.trial, db, windows, out_root, repo=repo, offsets_csv=a.offsets,
+                          changes_csv=a.clock_changes)
     except GateError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

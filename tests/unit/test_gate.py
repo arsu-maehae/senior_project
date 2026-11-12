@@ -36,26 +36,32 @@ from gate.__main__ import main as gate_main  # noqa: E402
 from gate.inputs import GateError  # noqa: E402
 from gate.run import run_gate  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import clock_fixtures as cf  # noqa: E402
+
 SRC_GATE = REPO / "src" / "gate"
 SRC_LAB_COMMON = REPO / "src" / "lab_common"
 OUT_3389_REASON = "outbound 3389, source side of an RDP connection"   # spec 3 / GT-05, literal
 
 # ------------------------------------------------------------------------------------------ spec literals
+CLOCK_COLUMNS = ["clock_flag", "clock_change_in_window", "clock_unreliable"]    # spec 3 (T6b.2, decision 043)
 SPEC_TRIGGER_COLUMNS = [
-    "trigger_id", "rule", "host", "event_utc", "event_utc_raw", "trigger_event_uid", "anchor_logon_uid",
+    "trigger_id", "rule", "host", "event_utc", "event_utc_corrected", "trigger_event_uid", "anchor_logon_uid",
     "target_logon_id", "target_logon_id_hex", "logon_type", "source_ip", "ip_kind", "account_name", "domain_short",
     "authentication_package", "machine_account", "supporting_event_uids", "method", "candidate_count",
     "time_delta_ms", "gate_tier", "near_duplicate", "window_source", "time_basis",
-]
+] + CLOCK_COLUMNS
 SPEC_UNMATCHED_COLUMNS = [c for c in SPEC_TRIGGER_COLUMNS if c != "rule"]
 SPEC_DISPOSITION_COLUMNS = ["event_uid", "host", "event_id", "event_utc", "disposition", "reason_detail",
-                            "anchor_logon_uid"]
-SPEC_SUPPORTING_COLUMNS = ["rule", "event_uid", "host", "event_utc", "account_name", "session_id"]
+                            "anchor_logon_uid", "event_utc_corrected"] + CLOCK_COLUMNS
+SPEC_SUPPORTING_COLUMNS = ["rule", "event_uid", "host", "event_utc", "account_name", "session_id",
+                           "event_utc_corrected"] + CLOCK_COLUMNS
 SPEC_DISPOSITIONS = ["excluded_source_ip", "excluded_source_ip_session", "interactive_logon", "system_logon_id",
                      "loopback_or_self", "paired_excluded", "trigger", "supporting", "unmatched_remote", "no_rule"]
 SPEC_METHODS = {"logon_id", "ip_port_time", "ip_time", "none"}
 WINDOW_COLUMNS = ["trial_id", "start_utc", "end_utc", "window_source", "margin_start_s", "margin_end_s", "rule",
-                  "db_sha256", "time_basis"]
+                  "db_sha256", "time_basis", "offsets_sha256", "clock_changes_sha256", "clock_flag",
+                  "clock_change_in_window", "start_host", "end_host"]       # spec 2.1 (T6b.2, decision 043)
 OUTPUT_FILES = ["triggers.csv", "unmatched_remote.csv", "dispositions.csv", "supporting.csv", "stats.json",
                 "report.md", "run_info.json"]
 
@@ -189,7 +195,9 @@ def write_windows(path: Path, row: dict | None, other_trial: bool = True) -> Non
         if other_trial:
             w.writerow({"trial_id": "s03_t00", "start_utc": WIN_START, "end_utc": WIN_END,
                         "window_source": "computed_agent_run", "margin_start_s": 60, "margin_end_s": 300,
-                        "rule": "other", "db_sha256": "0" * 64, "time_basis": "raw"})
+                        "rule": "other", "db_sha256": "0" * 64, "time_basis": "corrected",
+                        "offsets_sha256": "0" * 64, "clock_changes_sha256": "0" * 64, "clock_flag": "",
+                        "clock_change_in_window": "false", "start_host": "", "end_host": ""})
         if row is not None:
             w.writerow(row)
 
@@ -201,10 +209,38 @@ class Case:
     db: Path
     windows: Path
     out_root: Path
+    # What make_case wrote, so `refresh` can rebuild the clock files and the window row after a change.
+    offsets: dict | None = None
+    changes: list | None = None
+    window_kw: dict | None = None
 
     @property
     def out_dir(self) -> Path:
         return self.out_root / self.trial
+
+    @property
+    def offsets_file(self) -> Path:
+        return cf.offsets_path(self.repo, self.trial)
+
+    @property
+    def changes_file(self) -> Path:
+        return cf.changes_path(self.repo, self.trial)
+
+    def refresh(self, **row_overrides) -> None:
+        """Rewrite offsets + changes files for the CURRENT db bytes and the window row from the files on disk.
+        `row_overrides` replace window-row cells (e.g. db_sha256 to keep an old one)."""
+        db_sha = sha256_of(self.db)
+        o_sha, c_sha = cf.write_clock_files(self.repo, self.trial, db_sha, self.offsets, self.changes)
+        kw = dict(self.window_kw or {})
+        row = {"trial_id": self.trial, "start_utc": kw.get("start", WIN_START), "end_utc": kw.get("end", WIN_END),
+               "window_source": kw.get("window_source", "computed_agent_run"), "margin_start_s": 60,
+               "margin_end_s": 300, "rule": "synthetic test window", "db_sha256": db_sha,
+               "time_basis": kw.get("time_basis", "corrected"), "offsets_sha256": o_sha,
+               "clock_changes_sha256": c_sha, "clock_flag": kw.get("clock_flag", ""),
+               "clock_change_in_window": kw.get("clock_change_in_window", "false"),
+               "start_host": kw.get("start_host", ""), "end_host": kw.get("end_host", "")}
+        row.update(row_overrides)
+        write_windows(self.windows, row)
 
     def run(self, **kw) -> "Out":
         run_gate(self.trial, self.db, self.windows, self.out_root, repo=self.repo, **kw)
@@ -220,23 +256,42 @@ class Case:
 
 
 def make_case(tmp_path: Path, rows: list[dict] | None, trial: str = TRIAL, *, start: str = WIN_START,
-              end: str = WIN_END, sha: str | None = None, time_basis: str = "raw",
+              end: str = WIN_END, sha: str | None = None, time_basis: str = "corrected",
               window_source: str = "computed_agent_run", db_subdir: str = "", omit_row: bool = False,
-              no_windows_file: bool = False, no_db: bool = False, name: str = "repo") -> Case:
+              no_windows_file: bool = False, no_db: bool = False, name: str = "repo",
+              offsets: dict | None = None, changes: list | None = None, clock_flag: str = "",
+              clock_change_in_window: str = "false", start_host: str = "", end_host: str = "",
+              no_offsets_file: bool = False, no_changes_file: bool = False, offsets_db_sha: str | None = None,
+              row_offsets_sha: str | None = None, row_changes_sha: str | None = None) -> Case:
+    """A temp repo with one synthetic trial: DB, valid clock files (ZERO offsets by default, every host `ok`) and a
+    window row on the corrected basis with matching SHA-256 values. Keyword arguments break one thing at a time."""
     repo = tmp_path / name
-    db = repo / "data" / "processed" / db_subdir / f"{trial}.sqlite3" if db_subdir else \
-        repo / "data" / "processed" / f"{trial}.sqlite3"
+    db = repo / "data" / "processed" / db_subdir / f"{trial}.sqlite3" if db_subdir else         repo / "data" / "processed" / f"{trial}.sqlite3"
     windows = repo / "data" / "trial_windows.csv"
+    offsets = cf.default_offsets() if offsets is None else offsets
+    case = Case(repo, trial, db, windows, repo / "out" / "gate", offsets, changes,
+                dict(start=start, end=end, window_source=window_source, time_basis=time_basis,
+                     clock_flag=clock_flag, clock_change_in_window=clock_change_in_window,
+                     start_host=start_host, end_host=end_host))
     if not no_db:
         write_db(db, rows if rows else [noise()])
+    db_sha = sha256_of(db) if db.exists() else "0" * 64
+    o_sha = c_sha = "0" * 64
+    if not no_offsets_file:
+        o_sha = cf.write_offsets(cf.offsets_path(repo, trial), trial, offsets_db_sha or db_sha, offsets)
+    if not no_changes_file:
+        c_sha = cf.write_changes(cf.changes_path(repo, trial), changes)
     if not no_windows_file:
         row = None if omit_row else {
             "trial_id": trial, "start_utc": start, "end_utc": end, "window_source": window_source,
             "margin_start_s": 60, "margin_end_s": 300, "rule": "synthetic test window",
-            "db_sha256": sha if sha is not None else (sha256_of(db) if db.exists() else "0" * 64),
-            "time_basis": time_basis}
+            "db_sha256": sha if sha is not None else db_sha, "time_basis": time_basis,
+            "offsets_sha256": row_offsets_sha if row_offsets_sha is not None else o_sha,
+            "clock_changes_sha256": row_changes_sha if row_changes_sha is not None else c_sha,
+            "clock_flag": clock_flag, "clock_change_in_window": clock_change_in_window,
+            "start_host": start_host, "end_host": end_host}
         write_windows(windows, row)
-    return Case(repo, trial, db, windows, repo / "out" / "gate")
+    return case
 
 
 def go(tmp_path: Path, rows: list[dict], **kw) -> "Out":
@@ -328,9 +383,7 @@ def test_gtt08_second_run_rebuilds_outputs(tmp_path):
     c = make_case(tmp_path, [logon("L", 0, 10), share("S", 1, 10)])
     assert len(c.run().trig) == 1
     write_db(c.db, [noise()])
-    write_windows(c.windows, {"trial_id": TRIAL, "start_utc": WIN_START, "end_utc": WIN_END,
-                              "window_source": "computed_agent_run", "margin_start_s": 60, "margin_end_s": 300,
-                              "rule": "t", "db_sha256": sha256_of(c.db), "time_basis": "raw"})
+    c.refresh()                       # new DB bytes: offsets file, clock-changes hash and window row follow
     o = c.run()
     assert o.trig == [] and o.disp == []
 
@@ -608,7 +661,8 @@ def test_gtt05_r4_minimal_positive_row_values(tmp_path):
     assert len(o.trig) == 1 and o.unm == []
     assert r["trigger_id"] == f"{TRIAL}-g0001"
     assert r["host"] == "ep-02"
-    assert parse(r["event_utc"]) == parse(at(0)) and parse(r["event_utc_raw"]) == parse(at(0))
+    assert parse(r["event_utc"]) == parse(at(0)) and parse(r["event_utc_corrected"]) == parse(at(0))   # zero offset
+    assert "event_utc_raw" not in r                                                       # removed (spec 3, T6b.2)
     assert r["trigger_event_uid"] == "L" and r["anchor_logon_uid"] == "L"
     assert r["target_logon_id"] == "873286" and r["target_logon_id_hex"].lower() == "0xd5346"
     assert r["logon_type"] == "3"
@@ -619,7 +673,8 @@ def test_gtt05_r4_minimal_positive_row_values(tmp_path):
     assert r["method"] == "logon_id" and r["gate_tier"] == "A"
     assert r["candidate_count"] == "1" and r["time_delta_ms"] == "1000"
     assert r["near_duplicate"] == "0"
-    assert r["window_source"] == "computed_agent_run" and r["time_basis"] == "raw"
+    assert r["window_source"] == "computed_agent_run" and r["time_basis"] == "corrected"
+    assert r["clock_flag"] == "" and r["clock_change_in_window"] == "false" and r["clock_unreliable"] == "0"
     assert o.d("L")["disposition"] == "trigger" and o.d("S")["disposition"] == "supporting"
 
 
@@ -1161,38 +1216,124 @@ REFUSALS = {
     "no_windows_file": dict(no_windows_file=True),
     "empty_start": dict(start=""),
     "empty_end": dict(end=""),
-    "non_t00_t01": dict(trial="s02_t01"),
-    "non_t00_t05": dict(trial="s04_t05"),
-    "start_on_cutoff_date": dict(start="2026-10-26T00:00:00.000Z", end="2026-10-26T01:00:00.000Z"),
-    "start_after_cutoff_date": dict(start="2026-11-02T08:00:00.000Z", end="2026-11-02T09:00:00.000Z"),
     "db_sha256_mismatch": dict(sha="0" * 64),
-    "db_sha256_empty": dict(sha=""),
-    "time_basis_corrected": dict(time_basis="corrected"),
+    "time_basis_raw": dict(time_basis="raw"),
+    "missing_offsets_file": dict(no_offsets_file=True),
+    "missing_clock_changes_file": dict(no_changes_file=True),
+    "offsets_db_sha256_not_the_db": dict(offsets_db_sha="1" * 64),
+    "row_offsets_sha256_mismatch": dict(row_offsets_sha="2" * 64),
+    "row_clock_changes_sha256_mismatch": dict(row_changes_sha="3" * 64),
+    "row_offsets_sha256_empty": dict(row_offsets_sha=""),
+    "row_clock_changes_sha256_empty": dict(row_changes_sha=""),
+    "clock_only_s04_t01": dict(trial="s04_t01"),
+    "clock_only_s07_t01": dict(trial="s07_t01"),
+    # CO-17: window start on/after 2026-10-26 with a none / stale host that has events
+    "co17_none_host_on_cutoff_date": dict(start="2026-10-26T00:00:00.000Z", end="2026-10-26T01:00:00.000Z",
+                                          offsets=cf.offsets_spec(ep_01=(None, "none", True))),
+    "co17_none_host_after_cutoff_date": dict(start="2026-11-02T08:00:00.000Z", end="2026-11-02T09:00:00.000Z",
+                                             offsets=cf.offsets_spec(ep_03=(None, "none", True))),
+    "co17_stale_host_after_cutoff_date": dict(start="2026-10-27T08:00:00.000Z", end="2026-10-27T09:00:00.000Z",
+                                              offsets=cf.offsets_spec(ep_02=(None, "stale", True))),
 }
 
 
 def _refusal_case(tmp_path: Path, kw: dict) -> Case:
-    kw = dict(kw)
-    if "sha" in kw and kw["sha"] == "":
-        # make_case treats "" as "use the real hash"; write the empty hash explicitly
-        c = make_case(tmp_path, [noise()])
-        write_windows(c.windows, {"trial_id": TRIAL, "start_utc": WIN_START, "end_utc": WIN_END,
-                                  "window_source": "computed_agent_run", "margin_start_s": 60, "margin_end_s": 300,
-                                  "rule": "t", "db_sha256": "", "time_basis": "raw"})
-        return c
-    return make_case(tmp_path, [noise()], **kw)
+    """make_case with one defect. Window-row cells passed as "" (row_*_sha) are written as an empty cell."""
+    return make_case(tmp_path, [noise()], **dict(kw))
 
 
 @pytest.mark.parametrize("name", sorted(REFUSALS))
 def test_gtt07_refused_input_raises_gate_error_writes_nothing_cli_returns_2(tmp_path, capsys, name):
-    """GTT-07: every refusal raises GateError, creates no output dir, and the CLI returns 2."""
+    """GTT-07 (replaced, T6b.2): every refusal raises GateError, creates no output dir, and the CLI returns 2."""
     c = _refusal_case(tmp_path, REFUSALS[name])
     with pytest.raises(GateError):
         c.run_raw()
     assert not c.out_dir.exists(), f"{name}: output dir created"
+    assert not (c.repo / "out").exists(), f"{name}: something was written under out/"
     assert c.cli() == 2
     assert not c.out_dir.exists(), f"{name}: output dir created by CLI"
     assert capsys.readouterr().err.strip(), "refusal reason must be printed to stderr"
+
+
+def test_gtt07_refused_run_leaves_a_previous_output_untouched(tmp_path):
+    """GTT-07: a refused run writes nothing and deletes nothing: the previous run's files stay byte-identical."""
+    c = make_case(tmp_path, [logon("L", 0, 10), share("S", 1, 10)])
+    c.run()
+    names = [f for f in OUTPUT_FILES if f != "run_info.json"]
+    before = {f: (c.out_dir / f).read_bytes() for f in names}
+    write_windows(c.windows, None)                                   # now there is no row for the trial
+    with pytest.raises(GateError):
+        c.run_raw()
+    assert {f: (c.out_dir / f).read_bytes() for f in names} == before
+
+
+@pytest.mark.parametrize("trial", ["s02_t01", "s04_t05", "s03_t10", "s07_t02", "s06_t01"])
+def test_gtt07_non_t00_trial_is_no_longer_refused(tmp_path, trial):
+    """GTT-07 (T6b.2): a non-t00 trial (not clock-only) is allowed when its clock files are valid."""
+    c = make_case(tmp_path, [logon("L", 0, 10), share("S", 1, 10)], trial=trial)
+    assert c.cli() == 0
+    assert len(read_csv(c.out_dir / "triggers.csv")) == 1
+
+
+def test_gtt07_clock_only_trial_refused_even_with_valid_clock_files(tmp_path):
+    """GTT-07 / spec 2: s04_t01 and s07_t01 are refused although every file, hash and row is valid (decision 034)."""
+    for i, trial in enumerate(("s04_t01", "s07_t01")):
+        c = make_case(tmp_path, [logon("L", 0, 10), share("S", 1, 10)], trial=trial, name=f"repo{i}")
+        with pytest.raises(GateError) as ei:
+            c.run_raw()
+        assert "clock-only" in str(ei.value).lower() or "clock only" in str(ei.value).lower(), str(ei.value)
+        assert not c.out_dir.exists()
+
+
+def test_gtt07_refusal_reasons_name_the_cause(tmp_path):
+    """GTT-07: the refusal text says what was wrong (offsets, clock changes, hash, basis, CO-17), not a bare error."""
+    expect = {
+        "missing_offsets_file": ("clock_offsets",), "missing_clock_changes_file": ("clock_changes",),
+        "offsets_db_sha256_not_the_db": ("db_sha256",), "row_offsets_sha256_mismatch": ("offsets_sha256",),
+        "row_clock_changes_sha256_mismatch": ("clock_changes_sha256",), "time_basis_raw": ("time_basis",),
+        "db_sha256_mismatch": ("db_sha256",), "co17_none_host_on_cutoff_date": ("CO-17", "ep-01"),
+        "co17_stale_host_after_cutoff_date": ("CO-17", "ep-02"),
+    }
+    for i, (name, words) in enumerate(sorted(expect.items())):
+        c = _refusal_case(tmp_path / f"c{i}", REFUSALS[name])
+        with pytest.raises(GateError) as ei:
+            c.run_raw()
+        for w in words:
+            assert w in str(ei.value), f"{name}: {w!r} not in {str(ei.value)!r}"
+
+
+def test_gtt07_co17_wide_host_runs_and_is_flagged(tmp_path):
+    """GTT-07 / CO-17: on or after 2026-10-26 a `wide` host (corrected, flagged) does not refuse the trial; rows with
+    events of that host carry clock_unreliable = 1 and the clock_flag."""
+    day = "2026-10-26T"
+    rows = [logon("L", None, 10, utc=f"{day}10:00:00.000000Z"), share("S", None, 10, utc=f"{day}10:00:01.000000Z")]
+    c = make_case(tmp_path, rows, start=f"{day}00:00:00.000Z", end=f"{day}23:00:00.000Z",
+                  offsets=cf.offsets_spec(ep_02=(2000, "wide", True)), clock_flag="ep-02")
+    o = c.run()
+    assert len(o.trig) == 1
+    assert o.trig[0]["clock_unreliable"] == "1" and o.trig[0]["clock_flag"] == "ep-02"
+    assert parse(o.trig[0]["event_utc_corrected"]) == parse(o.trig[0]["event_utc"]) - timedelta(seconds=2)  # wide is corrected
+
+
+def test_gtt07_co17_none_host_before_the_date_runs_flagged(tmp_path):
+    """GTT-07 / CO-17: before 2026-10-26 a `none` host runs on raw time; the flag is carried, rows of that host are
+    clock_unreliable = 1 and event_utc_corrected = event_utc."""
+    rows = [logon("L", None, 10, utc="2026-10-25T23:30:00.000000Z"),
+            share("S", None, 10, utc="2026-10-25T23:30:01.000000Z")]
+    c = make_case(tmp_path, rows, start="2026-10-25T23:00:00.000Z", end="2026-10-25T23:59:59.999Z",
+                  offsets=cf.offsets_spec(ep_02=(None, "none", True)), clock_flag="ep-02")
+    o = c.run()
+    r = o.one("R4_smb")
+    assert r["event_utc_corrected"] == r["event_utc"] and r["clock_unreliable"] == "1" and r["clock_flag"] == "ep-02"
+
+
+def test_gtt07_co17_none_host_without_events_does_not_refuse(tmp_path):
+    """CO-17 only concerns hosts WITH events in the window (`host_has_events`): a none host with no events runs."""
+    rows = [logon("L", None, 10, utc="2026-10-26T10:00:00.000000Z"),
+            share("S", None, 10, utc="2026-10-26T10:00:01.000000Z")]
+    c = make_case(tmp_path, rows, start="2026-10-26T00:00:00.000Z", end="2026-10-26T23:00:00.000Z",
+                  offsets=cf.offsets_spec(ep_03=(None, "none", False)))
+    assert c.cli() == 0
 
 
 def test_gtt07_missing_db_raises_gate_error_writes_nothing(tmp_path):
@@ -1213,8 +1354,9 @@ def test_gtt07_control_valid_inputs_run_and_cli_returns_0(tmp_path):
 
 
 def test_gtt07_start_just_before_cutoff_is_allowed(tmp_path):
-    """GTT-07 boundary: window start 2026-10-25T23:59:59.999Z (before the cutoff date) is not refused on t00."""
-    c = make_case(tmp_path, [noise()], start="2026-10-25T23:00:00.000Z", end="2026-10-25T23:59:59.999Z")
+    """GTT-07 boundary: window start before 2026-10-26 with a `none` host (it has events) is not refused (CO-17 boundary)."""
+    c = make_case(tmp_path, [noise()], start="2026-10-25T23:00:00.000Z", end="2026-10-25T23:59:59.999Z",
+                  offsets=cf.offsets_spec(ep_01=(None, "none", True)), clock_flag="ep-01")
     c.run_raw()
     assert c.out_dir.is_dir()
 
@@ -1223,9 +1365,14 @@ def test_gtt07_db_hash_mismatch_checked_on_actual_file_bytes(tmp_path):
     """Decision 041: a window row made for another version of the DB is refused; the same row after a rewrite is accepted."""
     c = make_case(tmp_path, [noise()])
     c.run_raw()
+    old_sha = sha256_of(c.db)
     write_db(c.db, [noise("NOISE2", 8.0)])           # DB changed after the window row was computed
-    with pytest.raises(GateError):
+    c.refresh(db_sha256=old_sha)                     # offsets file / hashes follow the new DB; the ROW keeps the old DB hash
+    with pytest.raises(GateError) as ei:
         c.run_raw()
+    assert "db_sha256" in str(ei.value)
+    c.refresh()                                      # the row now describes this DB: accepted
+    c.run_raw()
 
 
 # ====================================================================================== GTT-08
@@ -1352,12 +1499,14 @@ def test_gtt08_rows_sorted_by_event_utc_uid_rule_and_trigger_ids_follow(tmp_path
     assert [r["rule"] for r in both] == ["R4_smb", "R5_rdp"]          # tie on time and uid -> rule order
 
 
-def test_gtt08_event_utc_raw_equals_event_utc_while_time_basis_raw(tmp_path):
-    """Spec 3: event_utc_raw equals event_utc while time_basis = raw; time_basis column says raw."""
+def test_gtt08_event_utc_corrected_equals_event_utc_with_zero_offsets_and_basis_is_corrected(tmp_path):
+    """Spec 3 (T6b.2): with zero offsets event_utc_corrected equals event_utc as an instant; time_basis says corrected;
+    event_utc_raw no longer exists in any CSV."""
     o = go(tmp_path, mixed_rows())
     assert o.trig
     for r in o.trig:
-        assert r["event_utc_raw"] == r["event_utc"] and r["time_basis"] == "raw"
+        assert parse(r["event_utc_corrected"]) == parse(r["event_utc"]) and r["time_basis"] == "corrected"
+        assert "event_utc_raw" not in r
 
 
 def test_gtt08_window_source_copied_from_window_row(tmp_path):
@@ -1887,6 +2036,8 @@ def test_gtt14_run_gate_never_opens_ground_truth(tmp_path, monkeypatch):
     c.run_raw()
     assert any(Path(x).name == "s02_t00.sqlite3" for x in rec.paths), "recorder did not see the DB open"
     assert any(Path(x).name == "trial_windows.csv" for x in rec.paths)
+    assert any(Path(x).name == f"{TRIAL}.clock_offsets.csv" for x in rec.paths), "recorder did not see the offsets file"
+    assert any(Path(x).name == f"{TRIAL}.clock_changes.csv" for x in rec.paths), "recorder did not see the changes file"
     bad = [p for p in rec.paths if _under(p, c.repo / "ground_truth")]
     assert bad == [], f"run_gate opened ground_truth paths: {bad}"
 
@@ -1909,6 +2060,7 @@ def test_gtt14_source_text_has_no_forbidden_strings():
     forbidden = ["ground_truth", "build_draft", "intended_steps", "owner_reviews", "provisional_windows"]
     files = sorted(SRC_GATE.glob("*.py"))
     assert files, "src/gate has no python files"
+    assert "clock.py" in {f.name for f in files}, "the T6b.2 module gate/clock.py must be covered by the scan"
     hits = [(f.name, s) for f in files for s in forbidden if s in f.read_text(encoding="utf-8")]
     assert hits == [], f"forbidden strings in gate source: {hits}"
 
@@ -2241,10 +2393,12 @@ def test_gtt17_r4_flag_still_follows_the_anchor_4624(tmp_path):
 
 
 # ====================================================================================== GTT-18 stats keys + sensitivity
-STATS_TOP_KEYS = {"trial_id", "db", "window", "time_basis", "events", "removed_by_window", "near_window",
+STATS_TOP_KEYS = {"trial_id", "db", "window", "time_basis", "clock", "events", "removed_by_window", "near_window",
                   "dispositions", "triggers", "unmatched_remote", "supporting", "remote_logons_per_ip_kind",
                   "machine_account_triggers_per_host", "local_installs", "excluded", "near_duplicate_uids",
                   "tier_d_ip_lookup", "own_link_local", "sensitivity", "parameters"}
+CLOCK_STATS_KEYS = {"offsets_file", "offsets_sha256", "clock_changes_file", "clock_changes_sha256", "clock_flag",
+                    "clock_change_in_window", "offsets", "unreliable_rows"}
 SENS_NAMES = {"rdp_pairs", "service_pairs", "winrm_91_anchor_pairs", "winrm_91_to_wsmprovhost_pairs"}
 SENS_TOLS = {"2", "5", "10"}
 
@@ -2253,6 +2407,8 @@ def _check_stats_shape(st: dict) -> None:
     assert set(st) == STATS_TOP_KEYS, (sorted(set(st) - STATS_TOP_KEYS), sorted(STATS_TOP_KEYS - set(st)))
     assert set(st["db"]) == {"path", "sha256_before", "sha256_after"}
     assert set(st["window"]) == {"row", "file", "file_sha256"}
+    assert set(st["clock"]) == CLOCK_STATS_KEYS
+    assert set(st["clock"]["unreliable_rows"]) == {"triggers", "unmatched_remote", "dispositions", "supporting"}
     assert set(st["events"]) == {"loaded_total", "in_window_total", "trigger_type_in_window",
                                  "trigger_type_in_window_per_host"}
     assert set(st["dispositions"]) == {"total", "per_host"}
@@ -2275,7 +2431,7 @@ def test_gtt18_stats_top_level_keys_are_exactly_spec_3_1(tmp_path):
     """GTT-18 / spec 3.1: stats.json has exactly the 20 listed top-level keys (own_link_local: decision 042), with the documented sub-keys."""
     o = go(tmp_path, mixed_rows())
     _check_stats_shape(o.stats)
-    assert o.stats["time_basis"] == "raw" and o.stats["trial_id"] == TRIAL
+    assert o.stats["time_basis"] == "corrected" and o.stats["trial_id"] == TRIAL
 
 
 def test_gtt18_stats_keys_are_present_on_a_trial_with_no_events_of_interest(tmp_path):
@@ -2436,9 +2592,7 @@ def write_db_missing(path: Path, rows: list[dict], missing: str, *, hide_in_view
 def _missing_case(tmp_path: Path, missing: str, *, view_only: bool = False) -> Case:
     c = make_case(tmp_path, [noise()])
     write_db_missing(c.db, [noise()], missing, hide_in_view_only=view_only)
-    write_windows(c.windows, {"trial_id": TRIAL, "start_utc": WIN_START, "end_utc": WIN_END,
-                              "window_source": "computed_agent_run", "margin_start_s": 60, "margin_end_s": 300,
-                              "rule": "t", "db_sha256": sha256_of(c.db), "time_basis": "raw"})
+    c.refresh()
     return c
 
 
@@ -2505,7 +2659,7 @@ print(json.dumps({{"banned": [b for b in banned if b in sys.modules], "loaded": 
                    "margins": "lab_common.margins" in sys.modules}}))
 """
     res = _fresh_interpreter(code)
-    assert {"gate.run", "gate.rules", "gate.__main__", "trial_window.window", "trial_window.params",
+    assert {"gate.run", "gate.rules", "gate.__main__", "gate.clock", "trial_window.window", "trial_window.params",
             "trial_window.__main__"} <= set(res["loaded"]), res["loaded"]
     assert res["banned"] == [], f"key-builder modules loaded by gate / trial_window: {res['banned']}"
     assert res["margins"] is True, "trial_window does not take its margins from lab_common.margins"
@@ -2765,3 +2919,426 @@ def test_gtt20_paired_91_removed_by_gt05_is_not_used_for_tier_d(tmp_path):
     r = o.one("R8_winrm")
     assert r["gate_tier"] == "D" and r["source_ip"] == "" and sup(r) == set()
     assert o.d("V91")["disposition"] == "loopback_or_self"
+
+
+# ====================================================================================== GTT-21 corrected times (T6b.2)
+# Offsets follow spec 08 CO-09: event_utc_corrected = event_utc - offset_ms(host). A host ahead of dc01 has a POSITIVE
+# offset, so its corrected time is earlier. A `none` / `stale` host keeps its raw time.
+def _all_rows(o: "Out") -> list[tuple[str, dict]]:
+    """(file label, row) for every row of the four CSV outputs."""
+    return [(label, r) for label, rows in (("triggers", o.trig), ("unmatched", o.unm), ("dispositions", o.disp),
+                                           ("supporting", o.sup)) for r in rows]
+
+
+def _uid_of(label: str, r: dict) -> str:
+    return r["event_uid"] if label in ("dispositions", "supporting") else r["trigger_event_uid"]
+
+
+def _ms(n: float) -> timedelta:
+    return timedelta(milliseconds=n)
+
+
+def test_gtt21_clip_uses_corrected_time_inside_raw_outside_corrected_and_reverse(tmp_path):
+    """GTT-21 / GT-01: ep-02 +7 s (ahead): a logon at raw 10:00:03 (inside the raw window) is at 09:59:56 corrected, so it
+    is clipped; one at raw 11:00:03 (outside raw) is at 10:59:56 corrected, so it is kept. ep-03 -7 s (behind) is the
+    mirror image. Clipped events are in no output file and only counted; near_window counts follow the corrected time."""
+    rows = [
+        logon("A-RAWIN-CORROUT", None, 1, host="ep-02", utc="2026-09-24T10:00:03.000000Z", ip="192.168.50.11"),
+        logon("B-RAWOUT-CORRIN", None, 2, host="ep-02", utc="2026-09-24T11:00:03.000000Z", ip="192.168.50.12"),
+        logon("C-RAWOUT-CORRIN", None, 3, host="ep-03", utc="2026-09-24T09:59:55.000000Z", ip="192.168.50.13"),
+        logon("D-RAWIN-CORROUT", None, 4, host="ep-03", utc="2026-09-24T10:59:55.000000Z", ip="192.168.50.14"),
+        logon("E-MID", 0, 5, host="ep-01", ip="192.168.50.15"),
+    ]
+    c = make_case(tmp_path, rows, offsets=cf.offsets_spec(ep_02=(7000, "ok", True), ep_03=(-7000, "ok", True)))
+    o = c.run()
+    text = o.all_text()
+    assert "A-RAWIN-CORROUT" not in text and "D-RAWIN-CORROUT" not in text
+    assert {"B-RAWOUT-CORRIN", "C-RAWOUT-CORRIN", "E-MID"} <= o.unm_uids()
+    st = o.stats
+    assert st["removed_by_window"]["ep-02"] == {"Security/4624": 1}      # A only
+    assert st["removed_by_window"]["ep-03"] == {"Security/4624": 1}      # D only
+    assert st["near_window"]["ep-02"] == {"before": 1, "after": 0}       # A, 4 s before the corrected start
+    assert st["near_window"]["ep-03"] == {"before": 0, "after": 1}       # D, 2 s after the corrected end
+    assert st["events"]["loaded_total"] == 5 and st["events"]["in_window_total"] == 3
+    b = next(r for r in o.unm if r["trigger_event_uid"] == "B-RAWOUT-CORRIN")
+    assert parse(b["event_utc"]) == parse("2026-09-24T11:00:03.000000Z")
+    assert parse(b["event_utc_corrected"]) == parse("2026-09-24T10:59:56.000000Z")
+
+
+@pytest.mark.parametrize("offset_ms,raw,kept", [
+    (7000, "2026-09-24T10:00:07.000000Z", True),         # corrected = start exactly
+    (7000, "2026-09-24T10:00:06.999000Z", False),        # 1 ms before the corrected start
+    (7000, "2026-09-24T11:00:07.000999Z", True),         # corrected = end + 999 us
+    (7000, "2026-09-24T11:00:07.001000Z", False),        # corrected = end + 1 ms
+    (-2500, "2026-09-24T09:59:57.500000Z", True),        # behind host: corrected = raw + 2.5 s = start
+    (-2500, "2026-09-24T09:59:57.499000Z", False),
+])
+def test_gtt21_gt01_edges_are_judged_on_the_corrected_instant(tmp_path, offset_ms, raw, kept):
+    """GTT-01 x GTT-21: start <= corrected < end + 1 ms, exactly at the edges, for an ahead and a behind host."""
+    c = make_case(tmp_path, [logon("EDGE", None, 1, host="ep-02", utc=raw)],
+                  offsets=cf.offsets_spec(ep_02=(offset_ms, "ok", True)))
+    o = c.run()
+    assert ("EDGE" in o.unm_uids()) is kept
+
+
+def _clock_event_rows() -> list[dict]:
+    """Per host: an R4 hop (4624 + 5145), an unmatched logon, and an R1 lsass access; microsecond times."""
+    rows: list[dict] = []
+    for i, h in enumerate(cf.HOSTS):
+        base = 100.0 + 10 * i
+        rows += [logon(f"{h}-L", base + 0.123456, 1000 + i, host=h, ip="192.168.50.60"),
+                 share(f"{h}-S", base + 1.654321, 1000 + i, host=h),
+                 logon(f"{h}-U", base + 3.000001, 2000 + i, host=h, ip="192.168.50.61"),
+                 ev(f"{h}-R1", 10, "Sysmon", base + 5.5, host=h, target_image=LSASS, granted_access="0x1010")]
+    return rows
+
+
+CLOCK_OFFSETS_MS = {"dc01": 0, "ep-01": 1676, "ep-02": -2500, "ep-03": 7000}
+
+
+def test_gtt21_event_utc_is_original_and_corrected_is_original_minus_offset_in_all_four_csvs(tmp_path):
+    """GTT-21 / CO-09: in triggers, unmatched_remote, dispositions and supporting, event_utc is the logged time and
+    event_utc_corrected = event_utc - offset_ms(host), to the microsecond; ep-02 is behind (negative offset)."""
+    spec = {"dc01": (0, "reference", True), "ep-01": (1676, "ok", True), "ep-02": (-2500, "ok", True),
+            "ep-03": (7000, "ok", True)}
+    rows = _clock_event_rows()
+    db_time = {r["event_uid"]: r["event_utc"] for r in rows}
+    o = go(tmp_path, rows, offsets=spec)
+    seen = {"triggers": 0, "unmatched": 0, "dispositions": 0, "supporting": 0}
+    for label, r in _all_rows(o):
+        uid = _uid_of(label, r)
+        assert parse(r["event_utc"]) == parse(db_time[uid]), f"{label} {uid}: event_utc is not the logged time"
+        want = parse(db_time[uid]) - _ms(CLOCK_OFFSETS_MS[r["host"]])
+        assert parse(r["event_utc_corrected"]) == want, f"{label} {uid} ({r['host']}): {r['event_utc_corrected']}"
+        seen[label] += 1
+    assert all(n >= 4 for n in seen.values()), seen        # every file had rows for every host
+
+
+def test_gtt21_none_and_stale_hosts_keep_raw_time(tmp_path):
+    """GTT-21 / CO-09: a `none` host and a `stale` host (even with an offset value) are not corrected:
+    event_utc_corrected = event_utc; their rows are clock_unreliable = 1; a corrected `ok` host's rows are 0."""
+    spec = {"dc01": (0, "reference", True), "ep-01": (3000, "ok", True), "ep-02": (None, "none", True),
+            "ep-03": (5000, "stale", True)}
+    o = go(tmp_path, _clock_event_rows(), offsets=spec, clock_flag="ep-02;ep-03")
+    for label, r in _all_rows(o):
+        if r["host"] in ("ep-02", "ep-03"):
+            assert parse(r["event_utc_corrected"]) == parse(r["event_utc"]), (label, r["host"])
+            assert r["clock_unreliable"] == "1", (label, r["host"])
+        elif r["host"] == "ep-01":
+            assert parse(r["event_utc_corrected"]) == parse(r["event_utc"]) - _ms(3000), label
+            assert r["clock_unreliable"] == "0", (label, r["host"])
+        else:
+            assert r["clock_unreliable"] == "0", (label, r["host"])
+
+
+def test_gtt21_wide_host_is_corrected_and_clock_unreliable(tmp_path):
+    """GTT-21 / CO-06, CO-09: a `wide` host is corrected (offset applied) and its rows are clock_unreliable = 1."""
+    spec = cf.offsets_spec(ep_02=(2000, "wide", True))
+    rows = [logon("W-L", 0, 1, host="ep-02"), share("W-S", 1, 1, host="ep-02"),
+            logon("OK-L", 0, 2, host="ep-01", ip="192.168.50.23"), share("OK-S", 1, 2, host="ep-01")]
+    o = go(tmp_path, rows, offsets=spec, clock_flag="ep-02")
+    by_host = {r["host"]: r for r in o.trig}
+    assert by_host["ep-02"]["clock_unreliable"] == "1"
+    assert parse(by_host["ep-02"]["event_utc_corrected"]) == parse(at(0)) - _ms(2000)
+    assert by_host["ep-01"]["clock_unreliable"] == "0"
+    for r in o.disp:
+        assert r["clock_unreliable"] == ("1" if r["host"] == "ep-02" else "0"), r["event_uid"]
+
+
+def test_gtt21_reference_and_ok_hosts_are_not_unreliable_with_zero_flags(tmp_path):
+    """GTT-21: with every host `reference`/`ok`, no changes and no edge host, clock_unreliable is 0 in all four CSVs and
+    the stats count is 0."""
+    o = go(tmp_path, _clock_event_rows())
+    assert all(r["clock_unreliable"] == "0" for _, r in _all_rows(o))
+    assert o.stats["clock"]["unreliable_rows"] == {"triggers": 0, "unmatched_remote": 0, "dispositions": 0,
+                                                    "supporting": 0}
+
+
+# -- events logged before a counted clock change (spec 08 CO-15, D4/D5) --------------------------------------------
+# ep-02 clock stepped forward: previous time 10:30:12, new time 10:30:20.48, recorded (change_utc) 10:30:20.48.
+# "Logged before" = recorded time in [last boot before, max(previous, change)) = [-inf, 10:30:20.48).
+CHG = at(20.48)
+
+
+def _change(host="ep-02", *, counted=True, prev=at(12), new=at(20.48), at_utc=CHG, boot=None, shift=8480,
+            cls="expected_before_first_pair"):
+    return cf.change(TRIAL, host, at_utc, previous_time=prev, new_time=new, shift_ms=shift, counted=counted,
+                     classification=cls if counted else "routine", last_boot_before_utc=boot)
+
+
+def test_gtt21_event_logged_before_a_counted_change_is_clock_unreliable_in_every_file(tmp_path):
+    """GTT-21 / CO-15: on the host with a counted change, an R4 hop recorded before the change and a supporting R1 event
+    recorded before it are clock_unreliable = 1 in triggers, unmatched, dispositions and supporting; a hop after the
+    change and the same events on another host are 0. The host status is `ok`, so only the change causes the flag."""
+    rows = [logon("PRE-L", 5, 1, host="ep-02"), share("PRE-S", 6, 1, host="ep-02"),
+            ev("PRE-R1", 10, "Sysmon", 8, host="ep-02", target_image=LSASS, granted_access="0x1010"),
+            logon("PRE-U", 9, 3, host="ep-02", ip="192.168.50.23"),
+            logon("POST-L", 25, 2, host="ep-02", ip="192.168.50.60"), share("POST-S", 26, 2, host="ep-02"),
+            ev("POST-R1", 10, "Sysmon", 30, host="ep-02", target_image=LSASS, granted_access="0x1010"),
+            logon("OTHER-L", 5, 4, host="ep-01", ip="192.168.50.24"), share("OTHER-S", 6, 4, host="ep-01"),
+            ev("OTHER-R1", 10, "Sysmon", 8, host="ep-01", target_image=LSASS, granted_access="0x1010")]
+    o = go(tmp_path, rows, changes=[_change()], clock_change_in_window="true")
+    t = {r["anchor_logon_uid"]: r for r in o.trig}
+    assert t["PRE-L"]["clock_unreliable"] == "1"
+    assert t["POST-L"]["clock_unreliable"] == "0"
+    assert t["OTHER-L"]["clock_unreliable"] == "0"
+    assert {r["trigger_event_uid"]: r["clock_unreliable"] for r in o.unm} == {"PRE-U": "1"}
+    d = {r["event_uid"]: r["clock_unreliable"] for r in o.disp}
+    assert d["PRE-L"] == "1" and d["PRE-S"] == "1" and d["PRE-U"] == "1"
+    assert d["POST-L"] == "0" and d["POST-S"] == "0" and d["OTHER-L"] == "0" and d["OTHER-S"] == "0"
+    s = {r["event_uid"]: r["clock_unreliable"] for r in o.sup}
+    assert s == {"PRE-R1": "1", "POST-R1": "0", "OTHER-R1": "0"}
+    assert o.stats["clock"]["unreliable_rows"] == {"triggers": 1, "unmatched_remote": 1, "dispositions": 3,
+                                                    "supporting": 1}
+
+
+def test_gtt21_row_is_unreliable_when_only_a_supporting_event_was_logged_before_the_change(tmp_path):
+    """GTT-21 / spec 3: the row flag looks at the trigger, the anchor AND every supporting event. An R5 type 3 hop whose
+    4624 is after the change but whose paired inbound 3389 Sysmon 3 (3 s earlier) is before it is clock_unreliable = 1."""
+    rows = [logon("L", 22, 7, ltype=3, port=51000, host="ep-02"),
+            s3("S3", 19, "192.168.50.21", 51000, host="ep-02")]
+    o = go(tmp_path, rows, changes=[_change()])
+    r = o.one("R5_rdp")
+    assert sup(r) == {"S3"} and r["trigger_event_uid"] == "L"
+    assert r["clock_unreliable"] == "1"
+    # control: the same hop entirely after the change
+    rows2 = [logon("L", 24, 7, ltype=3, port=51000, host="ep-02"), s3("S3", 23, "192.168.50.21", 51000, host="ep-02")]
+    assert go(tmp_path / "c", rows2, changes=[_change()]).one("R5_rdp")["clock_unreliable"] == "0"
+
+
+def test_gtt21_change_interval_ends_at_max_of_previous_and_change_time(tmp_path):
+    """CO-15 / D4: the 'logged before' interval is [last boot, max(previous_time, change time)). For a BACKWARD step
+    (previous 10:30:30 after the change at 10:30:20) the whole overlap up to previous_time is unreliable; later events are
+    not. The exact previous_time instant is not asserted: spec 08 writes the end half-open, the code and the clock_offset
+    test D5 treat previous_time itself as before the change (reported to the owner)."""
+    chg = _change(prev=at(30), new=at(20), at_utc=at(20), shift=-10000)
+    rows = [logon("IN-OVERLAP", None, 1, host="ep-02", utc=at(29.999999), ip="192.168.50.11"),
+            logon("MID-OVERLAP", None, 2, host="ep-02", utc=at(25), ip="192.168.50.12"),
+            logon("BEFORE-CHANGE", None, 3, host="ep-02", utc=at(19), ip="192.168.50.13"),
+            logon("LATER", None, 4, host="ep-02", utc=at(31), ip="192.168.50.14")]
+    o = go(tmp_path, rows, changes=[chg])
+    got = {r["trigger_event_uid"]: r["clock_unreliable"] for r in o.unm}
+    assert got == {"IN-OVERLAP": "1", "MID-OVERLAP": "1", "BEFORE-CHANGE": "1", "LATER": "0"}
+
+
+def test_gtt21_forward_step_event_exactly_at_the_change_time_is_not_before_it(tmp_path):
+    """CO-15 / D4: forward step: an event recorded at the change time is not 'before' it (the interval is half open)."""
+    rows = [logon("AT", None, 1, host="ep-02", utc=CHG, ip="192.168.50.11"),
+            logon("JUST-BEFORE", None, 2, host="ep-02", utc=at(20.479999), ip="192.168.50.12")]
+    o = go(tmp_path, rows, changes=[_change()])
+    got = {r["trigger_event_uid"]: r["clock_unreliable"] for r in o.unm}
+    assert got == {"AT": "0", "JUST-BEFORE": "1"}
+
+
+def test_gtt21_events_before_the_hosts_last_boot_are_outside_the_interval(tmp_path):
+    """CO-15 / D4: the interval starts at the host's last boot before the change (`last_boot_before_utc`); an event
+    recorded before that boot belongs to another boot and is not flagged by this change."""
+    chg = _change(boot=at(2))
+    rows = [logon("BEFORE-BOOT", None, 1, host="ep-02", utc=at(1), ip="192.168.50.11"),
+            logon("AFTER-BOOT", None, 2, host="ep-02", utc=at(3), ip="192.168.50.12")]
+    o = go(tmp_path, rows, changes=[chg])
+    got = {r["trigger_event_uid"]: r["clock_unreliable"] for r in o.unm}
+    assert got == {"BEFORE-BOOT": "0", "AFTER-BOOT": "1"}
+
+
+def test_gtt21_uncounted_routine_change_does_not_flag_events(tmp_path):
+    """CO-15: a change with counted = false (routine, |shift| < 1 s) changes nothing, even for events before it."""
+    chg = _change(counted=False, shift=1, prev=at(20), new=at(20.001), at_utc=at(20.001))
+    o = go(tmp_path, [logon("PRE", 5, 1, host="ep-02", ip="192.168.50.11")], changes=[chg])
+    assert [r["clock_unreliable"] for r in o.unm] == ["0"]
+
+
+def test_gtt21_change_on_another_host_does_not_flag_this_host(tmp_path):
+    """CO-15: the interval is per host: a counted change on ep-03 does not mark ep-02 events."""
+    o = go(tmp_path, [logon("PRE", 5, 1, host="ep-02", ip="192.168.50.11")], changes=[_change(host="ep-03")])
+    assert [r["clock_unreliable"] for r in o.unm] == ["0"]
+
+
+def test_gtt21_change_is_judged_on_recorded_time_not_corrected_time(tmp_path):
+    """CO-15 / D5: the changes file is in recorded time. ep-02 offset +7 s: an event recorded at 10:30:22 is at 10:30:15
+    corrected, i.e. before the change at 10:30:20.48 on the corrected clock but AFTER it as recorded -> not flagged; an
+    event recorded at 10:30:15 is before it -> flagged."""
+    rows = [logon("REC-AFTER", None, 1, host="ep-02", utc=at(22), ip="192.168.50.11"),
+            logon("REC-BEFORE", None, 2, host="ep-02", utc=at(15), ip="192.168.50.12")]
+    o = go(tmp_path, rows, offsets=cf.offsets_spec(ep_02=(7000, "ok", True)), changes=[_change()])
+    got = {r["trigger_event_uid"]: r["clock_unreliable"] for r in o.unm}
+    assert got == {"REC-AFTER": "0", "REC-BEFORE": "1"}
+
+
+@pytest.mark.parametrize("edge,host,status,expect", [
+    ("start_host", "ep-03", "wide", "1"), ("end_host", "ep-03", "wide", "1"),
+    ("start_host", "ep-03", "none", "1"), ("end_host", "ep-03", "stale", "1"),
+    ("start_host", "ep-03", "ok", "0"), ("end_host", "dc01", "reference", "0"),
+])
+def test_gtt21_every_row_is_unreliable_when_a_window_edge_host_is_wide_none_or_stale(tmp_path, edge, host, status,
+                                                                                    expect):
+    """GTT-21 / spec 3: the clip compares against the edge host clock, so with an edge host (start_host / end_host) that
+    is wide / none / stale EVERY row of all four CSVs is clock_unreliable = 1, even rows of healthy hosts."""
+    offs = {"wide": 2000, "none": None, "stale": None, "ok": 0, "reference": 0}[status]
+    spec = cf.offsets_spec(**{host.replace("-", "_"): (offs, status, True)})
+    kw = {edge: host}
+    o = go(tmp_path, _clock_event_rows()[:12], offsets=spec, **kw)       # dc01, ep-01, ep-02 events only
+    rows = _all_rows(o)
+    assert rows
+    healthy = [r for _, r in rows if r["host"] != host]
+    assert healthy, "the test needs rows on a healthy host"
+    assert {r["clock_unreliable"] for r in healthy} == {expect}
+    assert {label for label, _ in rows} == {"triggers", "unmatched", "dispositions", "supporting"}
+    if expect == "1":
+        assert o.stats["clock"]["unreliable_rows"] == {
+            "triggers": len(o.trig), "unmatched_remote": len(o.unm), "dispositions": len(o.disp),
+            "supporting": len(o.sup)}
+
+
+def test_gtt21_clock_flag_and_clock_change_in_window_are_copied_from_the_window_row(tmp_path):
+    """GTT-21 / spec 3: clock_flag and clock_change_in_window are trial-level; every row of the four CSVs carries the
+    window row values."""
+    spec = cf.offsets_spec(ep_03=(None, "none", True), ep_02=(2000, "wide", True))
+    o = go(tmp_path, _clock_event_rows(), offsets=spec, clock_flag="ep-02;ep-03", clock_change_in_window="true")
+    rows = _all_rows(o)
+    assert {label for label, _ in rows} == {"triggers", "unmatched", "dispositions", "supporting"}
+    assert {r["clock_flag"] for _, r in rows} == {"ep-02;ep-03"}
+    assert {r["clock_change_in_window"] for _, r in rows} == {"true"}
+    o2 = go(tmp_path / "f", _clock_event_rows())
+    assert {r["clock_flag"] for _, r in _all_rows(o2)} == {""}
+    assert {r["clock_change_in_window"] for _, r in _all_rows(o2)} == {"false"}
+
+
+def test_gtt21_same_host_pairings_give_identical_rows_with_offset_plus_7s_and_zero(tmp_path):
+    """GTT-21 / spec 2.2: every pairing is same-host, so a host offset of +7 s moves times only: every output row (R4, R5,
+    R6, R8 and their dispositions, unmatched, supporting) is identical to the zero-offset run except
+    event_utc_corrected, which is 7 s earlier; sensitivity counts and the trigger ids are equal."""
+    rows = [r for r in mixed_rows() + [logon("M-L-both", 200, 400, port=53000), share("M-S-both", 201, 400),
+                                       s3("M-S3-both", 202, "192.168.50.21", 53000)] if r["host"] == "ep-02"]
+    z = make_case(tmp_path / "zero", rows).run()
+    p = make_case(tmp_path / "plus", rows, offsets=cf.offsets_spec(ep_02=(7000, "ok", True))).run()
+    assert {r["rule"] for r in z.trig} >= {"R4_smb", "R5_rdp", "R6_service", "R8_winrm"}
+    for label, rz, rp in (("triggers", z.trig, p.trig), ("unmatched", z.unm, p.unm), ("dispositions", z.disp, p.disp),
+                          ("supporting", z.sup, p.sup)):
+        assert len(rz) == len(rp), label
+        for a, b in zip(rz, rp):
+            assert {k: v for k, v in a.items() if k != "event_utc_corrected"} == \
+                   {k: v for k, v in b.items() if k != "event_utc_corrected"}, f"{label}: {a} != {b}"
+            assert parse(b["event_utc_corrected"]) == parse(a["event_utc_corrected"]) - timedelta(seconds=7)
+    assert z.stats["sensitivity"] == p.stats["sensitivity"]
+    assert z.stats["triggers"] == p.stats["triggers"] and z.stats["dispositions"] == p.stats["dispositions"]
+
+
+def test_gtt21_rows_are_sorted_by_corrected_time_then_uid_then_rule_in_all_four_csvs(tmp_path):
+    """GTT-21 / spec 3: rows are sorted by (event_utc_corrected, uid, rule), not by the original time. ep-02 is 10 s
+    ahead: its R4 hop logged at raw 10:30:12 is at 10:30:02 corrected and sorts BEFORE an ep-03 hop at 10:30:05."""
+    spec = cf.offsets_spec(ep_02=(10000, "ok", True))
+    rows = [logon("X-L", 12, 1, host="ep-02"), share("X-S", 13, 1, host="ep-02"),
+            logon("Y-L", 5, 2, host="ep-03", ip="192.168.50.60"), share("Y-S", 6, 2, host="ep-03"),
+            ev("X-R1", 10, "Sysmon", 14, host="ep-02", target_image=LSASS, granted_access="0x1010"),
+            ev("Y-R1", 10, "Sysmon", 7, host="ep-03", target_image=LSASS, granted_access="0x1010"),
+            # unmatched pair with a tie on corrected time (10:30:00): uid order decides, not the raw order
+            logon("U-a", 10, 3, host="ep-02", ip="192.168.50.31"), logon("U-b", 0, 4, host="ep-03", ip="192.168.50.32")]
+    o = go(tmp_path, rows, offsets=spec)
+    assert [r["anchor_logon_uid"] for r in o.trig] == ["X-L", "Y-L"]
+    assert [r["trigger_id"] for r in o.trig] == [f"{TRIAL}-g0001", f"{TRIAL}-g0002"]
+    assert [r["trigger_event_uid"] for r in o.unm] == ["U-a", "U-b"]
+    assert [r["trigger_id"] for r in o.unm] == [f"{TRIAL}-u0001", f"{TRIAL}-u0002"]
+    assert [r["event_uid"] for r in o.sup] == ["X-R1", "Y-R1"]
+    for label, key, rows_ in (("triggers", "trigger_event_uid", o.trig), ("unmatched", "trigger_event_uid", o.unm),
+                              ("dispositions", "event_uid", o.disp), ("supporting", "event_uid", o.sup)):
+        keys = [(parse(r["event_utc_corrected"]), r[key]) for r in rows_]
+        assert keys == sorted(keys), label
+    raw_keys = [parse(r["event_utc"]) for r in o.disp]
+    assert raw_keys != sorted(raw_keys), "the test data must make raw order differ from corrected order"
+
+
+def test_gtt21_stats_clock_key_has_exactly_the_spec_31_fields(tmp_path):
+    """GTT-21 / spec 3.1: stats.json `clock` = {offsets_file, offsets_sha256, clock_changes_file, clock_changes_sha256,
+    clock_flag, clock_change_in_window, offsets: host -> {offset_ms, offset_status, offset_unc_ms}, unreliable_rows}. The
+    hashes are the SHA-256 of the files, flag and change flag come from the window row, the row counts equal the CSV
+    counts."""
+    spec = {"dc01": (0, "reference", True), "ep-01": (1676, "ok", True), "ep-02": (2000, "wide", True),
+            "ep-03": (None, "none", True)}
+    rows = _clock_event_rows() + [logon("PRE", 5, 9, host="ep-01", ip="192.168.50.44")]
+    c = make_case(tmp_path, rows, offsets=spec, changes=[_change(host="ep-01")], clock_flag="ep-02;ep-03",
+                  clock_change_in_window="true")
+    o = c.run()
+    ck = o.stats["clock"]
+    assert set(ck) == CLOCK_STATS_KEYS
+    assert ck["offsets_sha256"] == sha256_of(c.offsets_file) and ck["clock_changes_sha256"] == sha256_of(c.changes_file)
+    assert ck["offsets_file"].replace("\\", "/").endswith(f"data/processed/{TRIAL}.clock_offsets.csv")
+    assert ck["clock_changes_file"].replace("\\", "/").endswith(f"data/processed/{TRIAL}.clock_changes.csv")
+    assert ck["clock_flag"] == "ep-02;ep-03" and str(ck["clock_change_in_window"]).lower() == "true"
+    assert set(ck["offsets"]) == set(spec)
+    for h, (off, status, _) in spec.items():
+        assert set(ck["offsets"][h]) == {"offset_ms", "offset_status", "offset_unc_ms"}, h
+        assert ck["offsets"][h]["offset_ms"] == off and ck["offsets"][h]["offset_status"] == status, h
+    assert ck["offsets"]["ep-03"]["offset_ms"] is None
+    ur = ck["unreliable_rows"]
+    assert set(ur) == {"triggers", "unmatched_remote", "dispositions", "supporting"}
+    assert ur == {"triggers": sum(r["clock_unreliable"] == "1" for r in o.trig),
+                  "unmatched_remote": sum(r["clock_unreliable"] == "1" for r in o.unm),
+                  "dispositions": sum(r["clock_unreliable"] == "1" for r in o.disp),
+                  "supporting": sum(r["clock_unreliable"] == "1" for r in o.sup)}
+    assert ur["triggers"] > 0 and ur["dispositions"] > 0 and ur["supporting"] > 0
+    row = o.stats["window"]["row"]
+    assert row["offsets_sha256"] == ck["offsets_sha256"] and row["clock_changes_sha256"] == ck["clock_changes_sha256"]
+
+
+def test_gtt21_two_runs_with_clock_files_are_byte_identical_except_run_info(tmp_path):
+    """GTT-08 x GTT-21: with non-zero offsets and a clock change the outputs are still byte-identical on a rerun."""
+    c = make_case(tmp_path, _clock_event_rows(), offsets=cf.offsets_spec(ep_02=(7000, "ok", True)),
+                  changes=[_change()])
+    c.run()
+    first = {f: (c.out_dir / f).read_bytes() for f in OUTPUT_FILES if f != "run_info.json"}
+    c.run()
+    assert {f: (c.out_dir / f).read_bytes() for f in first} == first
+
+
+def test_gtt21_db_and_clock_files_are_not_modified_by_a_run(tmp_path):
+    """GTT-08: the DB, the offsets file, the clock-changes file and the window file are byte-identical after a run."""
+    c = make_case(tmp_path, _clock_event_rows(), changes=[_change()])
+    paths = [c.db, c.offsets_file, c.changes_file, c.windows]
+    before = [sha256_of(p) for p in paths]
+    c.run()
+    assert [sha256_of(p) for p in paths] == before
+
+
+def test_gtt21_clock_fixture_headers_equal_the_code_lists():
+    """Self-check of the fixtures: their literal copies of the spec 08 section 3 headers equal the code lists."""
+    from clock_offset.changes import CLOCK_CHANGES_COLUMNS
+    from clock_offset.params import OFFSETS_COLUMNS
+    assert list(OFFSETS_COLUMNS) == cf.OFFSETS_COLUMNS
+    assert list(CLOCK_CHANGES_COLUMNS) == cf.CHANGES_COLUMNS
+
+
+# ====================================================================================== spec 5 parameters (T6b.2)
+def test_spec5_gate_clock_parameters_values():
+    """Spec 5 (T6b.2): CLOCK_CORRECTION_AVAILABLE true, TIME_BASIS corrected, RAW_TIME_CUTOFF_DATE 2026-10-26 (the CO-17
+    date), CLOCK_ONLY_TRIALS s04_t01 and s07_t01; GateParams defaults carry them."""
+    from datetime import date
+    from clock_offset import params as co_params
+    assert gparams.CLOCK_CORRECTION_AVAILABLE is True
+    assert gparams.TIME_BASIS == "corrected"
+    assert gparams.RAW_TIME_CUTOFF_DATE == date(2026, 10, 26)
+    assert tuple(gparams.CLOCK_ONLY_TRIALS) == ("s04_t01", "s07_t01")
+    assert tuple(gparams.CLOCK_ONLY_TRIALS) == tuple(co_params.CLOCK_ONLY_TRIALS)
+    p = gparams.GateParams()
+    assert p.clock_correction_available is True and p.time_basis == "corrected"
+    assert p.raw_time_cutoff_date == date(2026, 10, 26)
+    assert tuple(p.clock_only_trials) == ("s04_t01", "s07_t01")
+
+
+def test_spec5_clock_parameters_are_written_into_stats_parameters(tmp_path):
+    """Spec 3.1: stats.json `parameters` carries every spec 5 parameter, including the clock ones."""
+    pr = go(tmp_path, [noise()]).stats["parameters"]
+    assert pr["time_basis"] == "corrected" and pr["clock_correction_available"] is True
+    assert pr["raw_time_cutoff_date"] == "2026-10-26"
+    assert list(pr["clock_only_trials"]) == ["s04_t01", "s07_t01"]
+
+
+def test_spec2_window_row_columns_are_all_kept_in_stats_window_row(tmp_path):
+    """Spec 3.1: stats `window.row` holds all 15 columns of the window row, with the clock cells as written."""
+    c = make_case(tmp_path, [noise()], clock_flag="ep-02", clock_change_in_window="true", start_host="ep-02",
+                  end_host="ep-01", offsets=cf.offsets_spec(ep_02=(2000, "wide", True)))
+    row = c.run().stats["window"]["row"]
+    assert list(row) == WINDOW_COLUMNS or set(row) == set(WINDOW_COLUMNS)
+    assert row["clock_flag"] == "ep-02" and row["clock_change_in_window"] == "true"
+    assert row["start_host"] == "ep-02" and row["end_host"] == "ep-01"
+    assert row["offsets_sha256"] == sha256_of(c.offsets_file) and row["clock_changes_sha256"] == sha256_of(c.changes_file)

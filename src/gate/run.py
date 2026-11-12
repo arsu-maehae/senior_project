@@ -12,8 +12,10 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from answer_key.db import sha256_file
+from trial_window.window import ClockFiles, clock_changes_path, offsets_path
 
 from . import classify, inputs, outputs, rules
+from .clock import ClockContext, clock_stats, context_from_row
 from .inputs import GateError, ScanResult  # GateError re-exported: run_gate raises it
 from .params import (DISPOSITION_COLUMNS, RULES, SUPPORTING_COLUMNS, SUPPORTING_RULES, TOOL_VERSION,
                      TRIGGER_COLUMNS, UNMATCHED_COLUMNS, GateParams)
@@ -54,19 +56,28 @@ def params_dict(params: GateParams) -> dict[str, Any]:
     return out
 
 
-def check_allowed(trial_id: str, db_path: Path, windows_csv: Path, repo: Path | None,
-                  params: GateParams) -> tuple[dict[str, str], int, int]:
-    """GT-00 before any event is read: trial id, quarantine, early clock rule, window row, clock rule
-    on the window start, window time_basis. (The window db_sha256 check runs in ``load_events``, once the
-    DB is hashed and before any event row is read.) Returns (window row, start µs, end µs); raises GateError on refusal."""
+def check_allowed(trial_id: str, db_path: Path, windows_csv: Path, repo: Path | None, params: GateParams,
+                  offsets_csv: Path, changes_csv: Path) -> tuple[dict[str, str], int, int, ClockFiles]:
+    """GT-00 before any event is read (spec 2, 2.2 as amended in T6b.2, decision 043), in this order: trial
+    id; quarantine; decision-019 exclusion and clock-only trial; window row and edges; window time_basis
+    (must be the gate's, ``corrected``); offsets and clock-changes files present; the row's
+    ``offsets_sha256`` / ``clock_changes_sha256`` equal the files' hashes; CO-17 on the window start.
+
+    The window ``db_sha256`` and the offsets ``db_sha256`` checks run in ``load_events``, once the DB is
+    hashed and before any event row is read. Returns (window row, start µs, end µs, clock files); raises
+    GateError on refusal.
+    """
     inputs.check_trial_id(trial_id)
     inputs.check_not_quarantined(trial_id, db_path, repo)
     inputs.check_clock(trial_id, None, params)
     row = inputs.read_window_row(windows_csv, trial_id)
     start_us, end_us = inputs.window_edges_us(row)
-    inputs.check_clock(trial_id, start_us, params)
     inputs.check_time_basis(row, params)
-    return row, start_us, end_us
+    clock = inputs.load_clock(offsets_csv, changes_csv)
+    inputs.check_clock(trial_id, None, params, clock)
+    inputs.check_clock_hashes(row, clock)
+    inputs.check_clock(trial_id, start_us, params, clock)
+    return row, start_us, end_us, clock
 
 
 def apply_rules(events: Sequence[Mapping], logons_all: Sequence[Mapping], params: GateParams,
@@ -128,8 +139,9 @@ def sensitivity(events: Sequence[Mapping], res: Mapping[str, Any], params: GateP
 def build_stats(trial_id: str, db_text: str, sha_before: str, sha_after: str, window_row: Mapping[str, str],
                 windows_text: str, windows_sha: str, scan: ScanResult, res: Mapping[str, Any],
                 trig_rows: Sequence[Mapping], unm_rows: Sequence[Mapping], disp_rows: Sequence[Mapping],
-                sup_rows: Sequence[Mapping], params: GateParams) -> dict[str, Any]:
-    """stats.json content, exactly the spec 3 list plus the spec 5 sensitivity counts and parameters."""
+                sup_rows: Sequence[Mapping], params: GateParams, clock: ClockContext) -> dict[str, Any]:
+    """stats.json content, exactly the spec 3.1 keys (``clock`` added in T6b.2, decision 043) plus the spec 5
+    sensitivity counts and parameters."""
     events = scan.in_window
     ordered = sorted(res["drafts"], key=outputs.draft_sort_key)
     ids = [r["trigger_id"] for r in trig_rows]
@@ -141,6 +153,7 @@ def build_stats(trial_id: str, db_text: str, sha_before: str, sha_after: str, wi
         "db": {"path": db_text, "sha256_before": sha_before, "sha256_after": sha_after},
         "window": {"row": dict(window_row), "file": windows_text, "file_sha256": windows_sha},
         "time_basis": params.time_basis,
+        "clock": clock_stats(clock, trig_rows, unm_rows, disp_rows, sup_rows),
         "events": {"loaded_total": scan.loaded_total, "in_window_total": scan.in_window_total,
                    "trigger_type_in_window": len(disp_rows),
                    "trigger_type_in_window_per_host": outputs.nested_counts(disp_rows, "host")},
@@ -177,28 +190,37 @@ def run_info(now: datetime | None = None) -> dict[str, str]:
 
 
 def run_gate(trial_id: str, db_path: Path, windows_csv: Path, out_root: Path, repo: Path | None = None,
-             params: GateParams = GateParams()) -> dict[str, Any]:
+             params: GateParams = GateParams(), offsets_csv: Path | None = None,
+             changes_csv: Path | None = None) -> dict[str, Any]:
     """Gate one trial and write ``out_root/<trial_id>/``; return the in-memory results.
 
-    Returns {"out_dir", "triggers", "unmatched", "dispositions", "supporting", "stats", "run_info",
-    "drafts"}. Raises GateError (and writes nothing) on any refusal or input error.
+    ``offsets_csv`` / ``changes_csv`` default to ``<repo>/data/processed/<trial>.clock_offsets.csv`` and
+    ``.clock_changes.csv`` (spec 08 section 3). Returns {"out_dir", "triggers", "unmatched", "dispositions",
+    "supporting", "stats", "run_info", "drafts"}. Raises GateError (and writes nothing) on any refusal or
+    input error.
     """
     repo_path = Path(repo) if repo is not None else REPO
-    window_row, start_us, end_us = check_allowed(trial_id, Path(db_path), Path(windows_csv), repo_path, params)
+    offsets_file = Path(offsets_csv) if offsets_csv is not None else offsets_path(repo_path, trial_id)
+    changes_file = Path(changes_csv) if changes_csv is not None else clock_changes_path(repo_path, trial_id)
+    window_row, start_us, end_us, clock_files = check_allowed(trial_id, Path(db_path), Path(windows_csv), repo_path,
+                                                              params, offsets_file, changes_file)
     windows_sha = sha256_file(Path(windows_csv))
     scan, sha_before, sha_after = inputs.load_events(Path(db_path), start_us, end_us, params,
-                                                       expected_sha256=window_row["db_sha256"])
+                                                       expected_sha256=window_row["db_sha256"], clock=clock_files)
+    assert clock_files.offsets is not None and clock_files.changes is not None   # check_allowed refused otherwise
+    clock = context_from_row(window_row, clock_files.offsets, clock_files.changes,
+                             display_path(offsets_file, repo_path), display_path(changes_file, repo_path))
     res = apply_rules(scan.in_window, scan.logons_all, params, scan.own_ll_sysmon3_all)
     near_dup = {u for uids in scan.near_dup_groups.values() if len(set(uids)) > 1 for u in uids}
     ws, tb = window_row["window_source"], params.time_basis
-    trig_rows = outputs.numbered_rows(res["drafts"], trial_id, "g", ws, tb, near_dup, TRIGGER_COLUMNS)
-    unm_rows = outputs.numbered_rows(res["unmatched"], trial_id, "u", ws, tb, near_dup, UNMATCHED_COLUMNS)
-    sup_rows = outputs.supporting_rows(res["signals"])
+    trig_rows = outputs.numbered_rows(res["drafts"], trial_id, "g", ws, tb, near_dup, TRIGGER_COLUMNS, clock)
+    unm_rows = outputs.numbered_rows(res["unmatched"], trial_id, "u", ws, tb, near_dup, UNMATCHED_COLUMNS, clock)
+    sup_rows = outputs.supporting_rows(res["signals"], clock)
     disp_rows = outputs.disposition_rows(scan.in_window, res["suppressed"], res["drafts"], res["unmatched"],
-                                         res["signals"], res["service_pairs"], res["r5_reverse"])
+                                         res["signals"], res["service_pairs"], res["r5_reverse"], clock)
     stats = build_stats(trial_id, display_path(Path(db_path), repo_path), sha_before, sha_after, window_row,
                         display_path(Path(windows_csv), repo_path), windows_sha, scan, res,
-                        trig_rows, unm_rows, disp_rows, sup_rows, params)
+                        trig_rows, unm_rows, disp_rows, sup_rows, params, clock)
     info = run_info()
     files = {
         "triggers.csv": outputs.csv_text(trig_rows, TRIGGER_COLUMNS),

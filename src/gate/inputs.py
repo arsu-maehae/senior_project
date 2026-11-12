@@ -14,8 +14,9 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping
 
 from answer_key.db import open_ro, sha256_file
+from clock_offset.correct import Offsets, corrected_us
 from trial_window.params import COLUMNS as WINDOW_COLUMNS
-from trial_window.window import is_quarantined, refusal
+from trial_window.window import ClockFiles, clock_refusal, is_quarantined, load_clock_files, refusal
 
 from . import classify
 from .params import DB_COLUMNS, VIEW, GateParams
@@ -80,15 +81,52 @@ def window_edges_us(row: Mapping[str, str]) -> tuple[int, int]:
     return start, end
 
 
-def check_clock(trial_id: str, start_us: int | None, params: GateParams) -> None:
-    """GT-00 clock rule (spec 2.2, decision 039) via the trial window step's own ``refusal``.
+def check_clock(trial_id: str, start_us: int | None, params: GateParams, clock: ClockFiles | None = None) -> None:
+    """GT-00 clock rule (spec 2, 2.2 as amended in T6b.2, decision 043) via the trial window step's own
+    ``refusal``, so the window step and the gate refuse exactly the same trials.
 
-    WHY the start is reformatted to ``...Z``: ``refusal`` parses with the key builder's parser,
-    which does not accept ``+00:00``; the gate has already parsed the instant itself.
+    Always: quarantined id, decision-019 exclusion, clock-only trial. With ``clock``: a missing offsets or
+    clock-changes file, and (with ``start_us``) CO-17 on the window start. WHY the start is reformatted to
+    ``...Z``: the gate has already parsed the instant itself; one text form keeps ``refusal`` simple.
     """
     start_text = fmt_us(start_us) if start_us is not None else None
-    reason = refusal(trial_id, start_text, clock_correction_available=params.clock_correction_available,
-                     raw_time_cutoff_date=params.raw_time_cutoff_date)
+    reason = refusal(trial_id, start_text, clock_only_trials=params.clock_only_trials, clock=clock,
+                     co17_date=params.raw_time_cutoff_date)
+    if reason:
+        raise GateError(f"refused: {reason}")
+
+
+def load_clock(offsets_csv: Path, changes_csv: Path) -> ClockFiles:
+    """Read the trial's offsets and clock-changes files (a missing one is refused later by ``check_clock``).
+
+    WHY GateError on a parse error: a file that exists but does not match spec 08 section 3 is wrong data;
+    the gate must stop and write nothing rather than correct times with a misread offset.
+    """
+    try:
+        return load_clock_files(Path(offsets_csv), Path(changes_csv))
+    except (ValueError, KeyError, UnicodeDecodeError) as exc:
+        raise GateError(f"refused: cannot read the clock files {Path(offsets_csv).name} / "
+                        f"{Path(changes_csv).name}: {exc}") from exc
+
+
+def check_clock_hashes(row: Mapping[str, str], clock: ClockFiles) -> None:
+    """Refuse a window row whose ``offsets_sha256`` / ``clock_changes_sha256`` differ from the files' SHA-256
+    (spec 2 as amended in T6b.2, decision 043).
+
+    WHY: the window edges were corrected with those exact files; other offsets would clip with a different
+    clock than the edges were taken on. Call only after ``check_clock`` has confirmed both files exist.
+    """
+    assert clock.offsets is not None and clock.changes is not None
+    for column, file_sha, path in (("offsets_sha256", clock.offsets.file_sha256, clock.offsets_path),
+                                   ("clock_changes_sha256", clock.changes.file_sha256, clock.changes_path)):
+        if (row.get(column) or "").strip().lower() != file_sha.lower():
+            raise GateError(f"refused: window {column} {row.get(column)!r} differs from the SHA-256 of "
+                            f"{Path(path).name} {file_sha!r}")
+
+
+def check_offsets_db(clock: ClockFiles, db_sha: str) -> None:
+    """Refuse offsets computed from another version of the DB (spec 2 as amended in T6b.2, spec 08 4.1 item 3)."""
+    reason = clock_refusal(clock, None, db_sha)
     if reason:
         raise GateError(f"refused: {reason}")
 
@@ -127,8 +165,9 @@ def iter_events(con: sqlite3.Connection) -> Iterator[Row]:
 class ScanResult:
     """What one pass over the DB yields: in-window rule events, all 4624s (unclipped), window counts.
 
-    ``logons_all`` is used only for the GT-02(b) excluded-logon map and the tier-D IP lookup
-    (spec 3), never as an anchor or trigger. ``near_dup_groups`` holds the uids of in-window events
+    Every row carries ``us_raw`` (its logged ``event_utc``) and ``us`` (its corrected instant, T6b.2): the
+    clip, the near-window counts, every rule and the sort use ``us``. ``logons_all`` is used only for the
+    GT-02(b) excluded-logon map and the tier-D IP lookup (spec 3), never as an anchor or trigger. ``near_dup_groups`` holds the uids of in-window events
     sharing (host, channel, record_id).
     """
     in_window: list[Row] = field(default_factory=list)
@@ -162,13 +201,17 @@ def _near_side(us: int, start_us: int, end_excl_us: int, near_us: int) -> str | 
     return None
 
 
-def scan_events(rows: Iterable[Mapping], start_us: int, end_us: int, params: GateParams) -> ScanResult:
+def scan_events(rows: Iterable[Mapping], start_us: int, end_us: int, params: GateParams,
+                offsets: Offsets | None = None) -> ScanResult:
     """GT-01 window clip in one pass: keep in-window rule events, count what the window removed.
 
-    Window: ``start <= t < end + 1 ms`` (the window file has ms, the DB µs). Out-of-window events
-    are only counted (per host x event, and near-window trigger-type counts), except 4624s, which
-    are also kept in ``logons_all`` for the unclipped lookups. Raises GateError for an event with
-    no parseable ``event_utc`` (data wrong; the gate does not guess a time).
+    Window: ``start <= t < end + 1 ms`` (the window file has ms, the DB µs), on the corrected time
+    ``us`` = ``corrected_us(us_raw, host, offsets)`` (spec 08 CO-09, T6b.2); ``us_raw`` keeps the logged
+    time for the output ``event_utc`` and the clock-change check. ``offsets`` None applies no correction
+    (``us`` = ``us_raw``; ``run_gate`` always passes the trial's offsets). Out-of-window events are only
+    counted (per host x event, and near-window trigger-type counts), except 4624s, which are also kept in
+    ``logons_all`` for the unclipped lookups. Raises GateError for an event with no parseable
+    ``event_utc`` (data wrong; the gate does not guess a time).
     """
     end_excl = end_us + US_PER_MS
     near_us = seconds_to_us(params.near_window_s)
@@ -177,9 +220,10 @@ def scan_events(rows: Iterable[Mapping], start_us: int, end_us: int, params: Gat
         row = dict(raw)
         res.loaded_total += 1
         try:
-            row["us"] = to_us(row["event_utc"])
+            row["us_raw"] = to_us(row["event_utc"])
         except (TypeError, ValueError) as exc:
             raise GateError(f"event {row.get('event_uid')} has no valid event_utc ({exc})") from exc
+        row["us"] = row["us_raw"] if offsets is None else corrected_us(row["us_raw"], str(row.get("host")), offsets)
         if classify.is_4624(row):
             res.logons_all.append(row)
         elif classify.is_own_link_local_sysmon3(row):
@@ -222,13 +266,14 @@ def check_db_hash(window_sha: str, db_sha: str, db_path: Path) -> None:
 
 
 def load_events(db_path: Path, start_us: int, end_us: int, params: GateParams,
-                expected_sha256: str | None = None) -> tuple[ScanResult, str, str]:
-    """Hash the DB, check it against the window row's ``db_sha256``, then open it read-only and scan it.
+                expected_sha256: str | None = None, clock: ClockFiles | None = None) -> tuple[ScanResult, str, str]:
+    """Hash the DB, check it against the window row's ``db_sha256`` and the offsets' ``db_sha256``, then open
+    it read-only and scan it on corrected times.
 
     Returns (scan, sha256 before, sha256 after). Raises GateError if the DB is missing, if its hash
-    differs from ``expected_sha256`` (checked before any event row is read; None skips the check),
-    if the view lacks a required column (all missing ones named), or if its hash changed while open
-    (it must never be written).
+    differs from ``expected_sha256`` or from the offsets file's ``db_sha256`` (both checked before any
+    event row is read; None skips the check), if the view lacks a required column (all missing ones
+    named), or if its hash changed while open (it must never be written).
     """
     path = Path(db_path)
     if not path.is_file():
@@ -236,11 +281,14 @@ def load_events(db_path: Path, start_us: int, end_us: int, params: GateParams,
     before = sha256_file(path)
     if expected_sha256 is not None:
         check_db_hash(expected_sha256, before, path)
+    if clock is not None:
+        check_offsets_db(clock, before)
+    offsets = clock.offsets if clock is not None else None
     try:
         con = open_ro(path)
         try:
             check_columns(con)
-            scan = scan_events(iter_events(con), start_us, end_us, params)
+            scan = scan_events(iter_events(con), start_us, end_us, params, offsets)
         finally:
             con.close()
     except sqlite3.Error as exc:

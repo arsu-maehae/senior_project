@@ -103,7 +103,7 @@ Evidence: CO-19 scan of the decoded exports of the 11 allowlisted trials (`out/c
    - The counted in-window steps are on ep-02: s02_t00 +8.48 s; s06_t00 +1 h 50 min; s07_t00 +2 h 2 min; every t01.
    - 0 of the 225 key-hop events in the six t00 keys were logged before a counted step on their host (owner check, COA-08). The t01 trials have no approved keys yet.
 5. **Events before a counted change → `clock_unreliable = 1` in every output** (owner addition).
-   - "Logged before" = recorded time in [the host's last boot before the change, max(previous time, change time)). For a backward step, the whole interval counts. Boots do not trigger this rule.
+   - "Logged before" = recorded time in [the host's last boot before the change, max(previous time, change time)). For a backward step, the interval runs up to and including the previous time. Boots do not trigger this rule.
    - **Carrier:** the new `data/processed/<trial>.clock_changes.csv`, with DB and export changes together. It adds `channel`, `event_id` and `last_boot_before_utc` to the owner's column list, so consumers can apply the interval without the DB.
    - Its SHA-256 goes into the window row next to `offsets_sha256`.
 6. **Readings (CO-12):**
@@ -120,3 +120,10 @@ Evidence: CO-19 scan of the decoded exports of the 11 allowlisted trials (`out/c
    - **GTA-05:** redefined to run on any development trial with a .97/.98/.99 session, and skipped until one exists.
    - **Clock-only trials:** s04_t01 and s07_t01 are refused by `trial_window` (`CLOCK_ONLY_TRIALS`).
    - **Pairings:** every gate pairing is same-host, so only the GT-01 clip depends on the time basis.
+9. **Corrected-basis gate rerun, six t00 trials (owner accepted 2026-11-12):**
+   - **No change:** triggers, unmatched and supporting rows, and every disposition of an event present on both bases. All key hops keep their rows (GTA-01..04 pass).
+   - **Accepted window-edge differences:**
+     - The edges are corrected endpoint times while dc01 (offset 0) keeps its own times: s03_t00 start −3.8 s (ep-03), s07_t00 −3.4 s (ep-01), s04_t00 +1.1 s (ep-01).
+     - This adds 5 dc01 `::1` `loopback_or_self` 4624s to `dispositions.csv` (3 in s03_t00, 2 in s07_t00) and changes `removed_by_window` / `near_window` counts (s05_t00: 117 ep-03 PowerShell 4103 enter the window).
+   - **Manifest span:** corrected per host before the clip (owner choice; spec 02 §2.1).
+   - **`host_has_events`:** stays on the raw window (owner choice; spec 08 §3).

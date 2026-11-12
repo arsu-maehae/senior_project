@@ -20,7 +20,7 @@ from typing import Any, Iterable, Iterator, Mapping
 from gate.timeutil import US_PER_MS
 
 from . import params
-from .changes import CLOCK_CHANGES_COLUMNS, ClockChange, before_counted, change_from_row
+from .changes import CLASSIFICATIONS, CLOCK_CHANGES_COLUMNS, FLAG_CLASSES, ClockChange, before_counted, change_from_row
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
@@ -174,11 +174,15 @@ def co17_refusal(offsets: Offsets, window_start_us: int, co17_date=params.CO17_D
 class ClockChanges:
     """The clock changes of one trial (``<trial>.clock_changes.csv``) and the hash of the file bytes.
 
-    Iterable, so it can be passed wherever a sequence of ``ClockChange`` is expected.
+    Iterable, so it can be passed wherever a sequence of ``ClockChange`` is expected. ``classifications``
+    holds the file's ``classification`` cell of each change (same order as ``changes``; empty when built in
+    memory without the file): ``ClockChange`` does not carry it, because it depends on the pair bounds, and
+    the trial flag ``clock_change_in_window`` (CO-19 as amended) is read from what the step decided.
     """
     trial_id: str | None
     file_sha256: str
     changes: tuple[ClockChange, ...]
+    classifications: tuple[str, ...] = ()
 
     def __iter__(self) -> Iterator[ClockChange]:
         return iter(self.changes)
@@ -197,13 +201,31 @@ def parse_clock_changes_text(text: str, file_sha256: str = "") -> ClockChanges:
     trials = {str(r["trial_id"]).strip() for r in rows}
     if len(trials) > 1:
         raise ValueError(f"clock_changes rows name several trials: {sorted(trials)}")
-    return ClockChanges(trials.pop() if trials else None, file_sha256, tuple(change_from_row(r) for r in rows))
+    classes = tuple(str(r["classification"]).strip() for r in rows)
+    unknown = sorted(set(classes) - set(CLASSIFICATIONS))
+    if unknown:
+        raise ValueError(f"unknown clock change classification(s) {unknown}")
+    return ClockChanges(trials.pop() if trials else None, file_sha256, tuple(change_from_row(r) for r in rows),
+                        classes)
 
 
 def load_clock_changes(path: Path) -> ClockChanges:
     """Read ``<trial>.clock_changes.csv``; ``file_sha256`` is the SHA-256 of the exact file bytes."""
     data = Path(path).read_bytes()
     return parse_clock_changes_text(data.decode("utf-8"), hashlib.sha256(data).hexdigest())
+
+
+def trial_clock_change_flag(changes: ClockChanges) -> bool:
+    """Trial flag ``clock_change_in_window`` (spec 08 CO-19 as amended, decision 043 D3): true when any change
+    of the file is classified ``between_pairs``, ``after_last_pair`` or ``no_pairs`` (only counted changes get
+    those classes; ``routine`` and ``expected_before_first_pair`` never flag).
+
+    WHY from the file's classification: the classification needs the host's kept pair bounds, which only the
+    clock offset step has; the consumers (window, gate) must report exactly what that step decided.
+    """
+    if len(changes.classifications) != len(changes.changes):
+        raise ValueError("clock changes without their classification cannot give the trial flag")
+    return any(c in FLAG_CLASSES for c in changes.classifications)
 
 
 def before_counted_change(host: str, recorded_us: int, changes: Iterable[ClockChange]) -> bool:

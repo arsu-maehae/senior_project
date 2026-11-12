@@ -12,13 +12,16 @@ from datetime import date
 from types import MappingProxyType
 from typing import Mapping
 
-from trial_window.params import (CLOCK_CORRECTION_AVAILABLE, PROCESSED_REL, QUARANTINE_DIR, QUARANTINE_PREFIX,
-                                 RAW_TIME_CUTOFF_DATE, TIME_BASIS, WINDOWS_REL)
+from trial_window.params import (CLOCK_CHANGES_SUFFIX, CLOCK_CORRECTION_AVAILABLE, CLOCK_ONLY_TRIALS, OFFSETS_SUFFIX,
+                                 PROCESSED_REL, QUARANTINE_DIR, QUARANTINE_PREFIX, RAW_TIME_CUTOFF_DATE, TIME_BASIS,
+                                 WINDOWS_REL)
 
-TOOL_VERSION = "gate 0.1.0"
+# 0.2.0 (T6b.2, decision 043): clock-corrected times, clock refusals, event_utc_corrected and clock columns.
+TOOL_VERSION = "gate 0.2.0"
 
 # Re-exported so callers import the gate's whole configuration from one module.
 __all__ = ["GateParams", "TOOL_VERSION", "CLOCK_CORRECTION_AVAILABLE", "RAW_TIME_CUTOFF_DATE", "TIME_BASIS",
+           "CLOCK_ONLY_TRIALS", "OFFSETS_SUFFIX", "CLOCK_CHANGES_SUFFIX",
            "QUARANTINE_PREFIX", "QUARANTINE_DIR", "WINDOWS_REL", "PROCESSED_REL", "DB_COLUMNS",
            "TRIGGER_COLUMNS", "UNMATCHED_COLUMNS", "DISPOSITION_COLUMNS", "SUPPORTING_COLUMNS",
            "DISPOSITIONS", "RULES", "SUPPORTING_RULES", "METHODS", "TIERS", "OUTPUT_FILES", "VIEW"]
@@ -38,19 +41,27 @@ DB_COLUMNS: tuple[str, ...] = (
     "subject_account",
 )
 
-# Spec section 3, in the order listed there.
+# Clock columns appended to every output row (spec 3 as amended in T6b.2, decision 043): the trial-level flags
+# copied from the window row and the row-level clock_unreliable (spec 08 CO-09, CO-15).
+CLOCK_COLUMNS: tuple[str, ...] = ("clock_flag", "clock_change_in_window", "clock_unreliable")
+
+# Spec section 3, in the order listed there. T6b.2 (decision 043): event_utc is the ORIGINAL logged time and
+# event_utc_corrected (= event_utc - offset_ms(host), CO-09) takes the place of the removed event_utc_raw.
 TRIGGER_COLUMNS: tuple[str, ...] = (
-    "trigger_id", "rule", "host", "event_utc", "event_utc_raw", "trigger_event_uid", "anchor_logon_uid",
+    "trigger_id", "rule", "host", "event_utc", "event_utc_corrected", "trigger_event_uid", "anchor_logon_uid",
     "target_logon_id", "target_logon_id_hex", "logon_type", "source_ip", "ip_kind", "account_name",
     "domain_short", "authentication_package", "machine_account", "supporting_event_uids", "method",
     "candidate_count", "time_delta_ms", "gate_tier", "near_duplicate", "window_source", "time_basis",
-)
+) + CLOCK_COLUMNS
 # "Same columns as triggers.csv minus rule" (spec 3); trigger_id kept, numbered <trial_id>-u<NNNN>.
 UNMATCHED_COLUMNS: tuple[str, ...] = tuple(c for c in TRIGGER_COLUMNS if c != "rule")
 DISPOSITION_COLUMNS: tuple[str, ...] = (
     "event_uid", "host", "event_id", "event_utc", "disposition", "reason_detail", "anchor_logon_uid",
-)
-SUPPORTING_COLUMNS: tuple[str, ...] = ("rule", "event_uid", "host", "event_utc", "account_name", "session_id")
+    "event_utc_corrected",
+) + CLOCK_COLUMNS
+SUPPORTING_COLUMNS: tuple[str, ...] = (
+    "rule", "event_uid", "host", "event_utc", "account_name", "session_id", "event_utc_corrected",
+) + CLOCK_COLUMNS
 
 # Precedence order, first match wins (spec 3).
 DISPOSITIONS: tuple[str, ...] = (
@@ -93,6 +104,10 @@ class GateParams:
     r1_access_masks: frozenset[int] = frozenset({0x1010, 0x1410, 0x143A, 0x1FFFFF})
     near_window_s: float = 300.0
     sensitivity_s: tuple[float, ...] = (2.0, 10.0)
+    # Clock rule (spec 2.2 and 5 as amended in T6b.2, decision 043), taken from the window step so both refuse
+    # the same trials: corrected times required; raw_time_cutoff_date is now only the CO-17 date.
     clock_correction_available: bool = CLOCK_CORRECTION_AVAILABLE
     raw_time_cutoff_date: date = RAW_TIME_CUTOFF_DATE
     time_basis: str = TIME_BASIS
+    # Decision 034, spec 08 COA-04: measured for the clock offset method only, never gated.
+    clock_only_trials: tuple[str, ...] = CLOCK_ONLY_TRIALS

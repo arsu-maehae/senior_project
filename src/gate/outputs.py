@@ -16,6 +16,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from . import classify
 from .classify import Suppression, ip_kind, ip_text, logon_hex, logon_id
+from .clock import ClockContext, clock_cells, corrected_text
 from .params import DISPOSITIONS
 from .rules import TriggerDraft
 from .timeutil import delta_ms
@@ -39,22 +40,24 @@ def time_delta(d: TriggerDraft) -> int | None:
 
 
 def draft_sort_key(d: TriggerDraft) -> tuple:
-    """(event_utc instant, trigger uid, rule) as the spec says; anchor uid breaks the remaining tie
-    (one R6/R8 row per anchor shares the other three keys)."""
+    """(event_utc_corrected instant, trigger uid, rule) as the spec says (T6b.2: the sort uses the corrected
+    time); anchor uid breaks the remaining tie (one R6/R8 row per anchor shares the other three keys)."""
     return (d.trigger["us"], d.trigger["event_uid"], d.rule, d.anchor["event_uid"] if d.anchor else "")
 
 
 def trigger_row(d: TriggerDraft, trigger_id: str, window_source: str, time_basis: str,
-                near_dup: set[str]) -> Row:
+                near_dup: set[str], clock: ClockContext) -> Row:
     """One triggers.csv row. Account and logon columns come from the anchor (decision 027: the moving
-    account); empty when the row has no anchor. ``source_ip``/``ip_kind`` come from ``ip_event``."""
+    account); empty when the row has no anchor. ``source_ip``/``ip_kind`` come from ``ip_event``.
+    ``event_utc`` is the original logged text, ``event_utc_corrected`` the corrected instant (CO-09);
+    ``clock_unreliable`` looks at the trigger, the anchor and every supporting event (spec 3, T6b.2)."""
     a = d.anchor or {}
     account = a.get("account_name")
     ip_src = (d.ip_event or {}).get("source_ip")
     lid = logon_id(a.get("target_logon_id"))
     return {
         "trigger_id": trigger_id, "rule": d.rule, "host": d.trigger["host"],
-        "event_utc": d.trigger["event_utc"], "event_utc_raw": d.trigger["event_utc"],
+        "event_utc": d.trigger["event_utc"], "event_utc_corrected": corrected_text(d.trigger),
         "trigger_event_uid": d.trigger["event_uid"], "anchor_logon_uid": a.get("event_uid"),
         "target_logon_id": lid, "target_logon_id_hex": logon_hex(lid), "logon_type": a.get("logon_type"),
         "source_ip": ip_text(ip_src), "ip_kind": ip_kind(ip_src), "account_name": account,
@@ -64,6 +67,7 @@ def trigger_row(d: TriggerDraft, trigger_id: str, window_source: str, time_basis
         "method": d.method, "candidate_count": d.candidate_count, "time_delta_ms": time_delta(d),
         "gate_tier": d.tier, "near_duplicate": int(d.trigger["event_uid"] in near_dup),
         "window_source": window_source, "time_basis": time_basis,
+        **clock_cells([d.trigger, d.anchor, *d.supporting], clock),
     }
 
 
@@ -75,20 +79,21 @@ def unmatched_drafts(remote: Sequence[Mapping], drafts: Sequence[TriggerDraft]) 
 
 
 def numbered_rows(drafts: Sequence[TriggerDraft], trial_id: str, letter: str, window_source: str,
-                  time_basis: str, near_dup: set[str], columns: Sequence[str]) -> list[Row]:
+                  time_basis: str, near_dup: set[str], columns: Sequence[str], clock: ClockContext) -> list[Row]:
     """Sort drafts, number them ``<trial_id>-<letter><NNNN>`` (1-based) and keep only ``columns``."""
     out = []
     for i, d in enumerate(sorted(drafts, key=draft_sort_key), start=1):
-        row = trigger_row(d, f"{trial_id}-{letter}{i:04d}", window_source, time_basis, near_dup)
+        row = trigger_row(d, f"{trial_id}-{letter}{i:04d}", window_source, time_basis, near_dup, clock)
         out.append({c: row[c] for c in columns})
     return out
 
 
-def supporting_rows(signals: Iterable[tuple[str, Mapping]]) -> list[Row]:
-    """supporting.csv rows sorted by (instant, uid, rule)."""
+def supporting_rows(signals: Iterable[tuple[str, Mapping]], clock: ClockContext) -> list[Row]:
+    """supporting.csv rows sorted by (corrected instant, uid, rule), with the event's own clock cells."""
     ordered = sorted(signals, key=lambda p: (p[1]["us"], p[1]["event_uid"], p[0]))
     return [{"rule": rule, "event_uid": e["event_uid"], "host": e["host"], "event_utc": e["event_utc"],
-             "account_name": e.get("account_name"), "session_id": e.get("session_id")} for rule, e in ordered]
+             "account_name": e.get("account_name"), "session_id": e.get("session_id"),
+             "event_utc_corrected": corrected_text(e), **clock_cells([e], clock)} for rule, e in ordered]
 
 
 # ---------------------------------------------------------------- dispositions
@@ -147,10 +152,11 @@ def disposition_for(ev: Mapping, suppressed: Mapping[str, Suppression], as_trigg
 def disposition_rows(events: Sequence[Mapping], suppressed: Mapping[str, Suppression],
                      drafts: Sequence[TriggerDraft], unmatched: Sequence[TriggerDraft],
                      signals: Sequence[tuple[str, Mapping]], service_pairs: Mapping[str, str],
-                     r5_reverse: Mapping[str, int]) -> list[Row]:
-    """Exactly one row per in-window trigger-type event (spec 3), sorted by (instant, uid).
+                     r5_reverse: Mapping[str, int], clock: ClockContext) -> list[Row]:
+    """Exactly one row per in-window trigger-type event (spec 3), sorted by (corrected instant, uid).
 
-    ``supporting`` covers both supporting_event_uids and supporting.csv entries (R8_parent).
+    ``supporting`` covers both supporting_event_uids and supporting.csv entries (R8_parent). The clock
+    cells describe the event's own clock and the window edge hosts (spec 3, T6b.2).
     """
     as_trigger, as_support, anchors_of = _roles(drafts)
     for rule, ev in signals:
@@ -162,7 +168,8 @@ def disposition_rows(events: Sequence[Mapping], suppressed: Mapping[str, Suppres
                                                unmatched_uids, service_pairs, r5_reverse)
         out.append({"event_uid": ev["event_uid"], "host": ev["host"], "event_id": ev["event_id"],
                     "event_utc": ev["event_utc"], "disposition": disp, "reason_detail": detail,
-                    "anchor_logon_uid": anchor})
+                    "anchor_logon_uid": anchor, "event_utc_corrected": corrected_text(ev),
+                    **clock_cells([ev], clock)})
     return out
 
 
@@ -261,10 +268,23 @@ def report_md(stats: Mapping) -> str:
              f"- DB: `{stats['db']['path']}` sha256 before `{stats['db']['sha256_before']}`, "
              f"after `{stats['db']['sha256_after']}`",
              f"- Window file: `{stats['window']['file']}` sha256 `{stats['window']['file_sha256']}`",
-             f"- Window: {w['start_utc']} .. {w['end_utc']} (`start <= t < end + 1 ms`), "
+             f"- Window: {w['start_utc']} .. {w['end_utc']} (`start <= t < end + 1 ms` on corrected times), "
              f"source {w['window_source']}, time basis {stats['time_basis']}",
              f"- Events read: {stats['events']['loaded_total']}; in window: {stats['events']['in_window_total']}; "
              f"trigger-type in window: {stats['events']['trigger_type_in_window']}", "",
+             "## Clock (spec 08, decision 043)", "",
+             f"- Offsets: `{stats['clock']['offsets_file']}` sha256 `{stats['clock']['offsets_sha256']}`",
+             f"- Clock changes: `{stats['clock']['clock_changes_file']}` sha256 "
+             f"`{stats['clock']['clock_changes_sha256']}`",
+             f"- clock_flag: {stats['clock']['clock_flag'] or 'none'}; clock_change_in_window: "
+             f"{stats['clock']['clock_change_in_window']}; window edge hosts: start {w.get('start_host') or '-'}, "
+             f"end {w.get('end_host') or '-'}",
+             "- Offsets per host (corrected = event_utc - offset_ms): " + ", ".join(
+                 f"{h} {o['offset_ms'] if o['offset_ms'] is not None else '-'} ms ({o['offset_status']}, "
+                 f"unc {o['offset_unc_ms'] if o['offset_unc_ms'] is not None else '-'} ms)"
+                 for h, o in sorted(stats["clock"]["offsets"].items())),
+             "- Rows with clock_unreliable = 1: " + ", ".join(
+                 f"{k} {v}" for k, v in sorted(stats["clock"]["unreliable_rows"].items())), "",
              "## Rows", "",
              f"- triggers.csv: {stats['triggers']['total']}",
              f"- unmatched_remote.csv: {stats['unmatched_remote']['total']}",
