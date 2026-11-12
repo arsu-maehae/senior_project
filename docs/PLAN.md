@@ -69,7 +69,7 @@ Never tune code or weights on the test set.
 **Must be done before:** gating any trial collected on or after 2026-10-26 (spec 02_gate §2.2), and T7.6 link accuracy on t01.
 
 ## T7. Cross-host linking — depends on: T6 — CRITICAL — spec: docs/specs/03_stitch.md
-- [ ] 7.1 Spec; council on the NTLM linking approach and the time window
+- [ ] 7.1 Spec; council on the NTLM linking approach and the time window. Input notes the spec must handle: docs/specs/03_stitch_input_notes.md (IN-01 several 4624s per hop, IN-02 file copy under an earlier session; F2, F3 of review 02_gate-2026-11-12)
 - [ ] 7.2 Sessions per host (Logon ID); process trees (ProcessGuid)
 - [ ] 7.3 Cross-host links per protocol (Correction I); Kerberos confirmation
 - [ ] 7.4 Every link records method, candidate count, time gap, confidence
