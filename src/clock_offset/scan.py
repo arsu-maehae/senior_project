@@ -62,7 +62,7 @@ PAIRS_FILE = "pairs.csv"
 SCAN_FILES: tuple[str, ...] = (EVENTS_FILE, SCAN_FILE)
 SCAN_METHOD = "jsonl_export_scan_4616_kernelgeneral1"
 # event_uid prefix of an export hit used as a change row (SF-1): ``export:<source_sha256>:<record_index>``.
-EXPORT_UID_PREFIX = "export"
+EXPORT_UID_PREFIX = ch.EXPORT_REF_PREFIX
 # DB channel spelling of the scanned channels (the DB writes ``Security`` / ``System``, params.CLOCK_CHANGE_EVENTS).
 DB_CHANNEL: Mapping[str, str] = {"security": "Security", "system": "System"}
 
@@ -306,8 +306,7 @@ def hit_rows(hits: Iterable[Hit], bounds: PairBounds | None) -> list[dict[str, A
 def export_uid(hit: Hit) -> str:
     """``export:<source_sha256>:<record_index>``: a uid that names the EVTX file and record of the hit (SF-1),
     so a cut or stale status set by an export step stays traceable in stats.json."""
-    idx = "" if hit.record_index is None else str(hit.record_index)
-    return f"{EXPORT_UID_PREFIX}:{hit.source_sha256 or ''}:{idx}"
+    return ch.export_ref(hit.source_sha256, hit.record_index)
 
 
 def hit_change_row(hit: Hit) -> dict[str, Any]:
@@ -392,7 +391,8 @@ def build_clock_outputs(trial: str, events: Sequence[Mapping], window_start_utc:
                         pairs_source: Mapping[str, Any] | None) -> dict[str, Any]:
     """All clock-change outputs of one trial from in-memory inputs (pure; ``events`` carry ``us``).
 
-    Returns ``changes`` (DB + export ClockChange, with the last boot before each), ``changes_rows``
+    Returns ``changes`` (DB + export ClockChange, records of the same change merged into one by
+    ``changes.merge_changes`` (owner 2026-11-12), with the last boot before each), ``changes_rows``
     (clock_changes.csv), ``events_rows`` (clock_events.csv, None without an export scan), ``scan``
     (clock_scan.json, None without an export scan), ``pre_steps`` (D4), ``flag`` (D3: True / False; None
     when the exports were not scanned and the DB alone does not flag, and always None on an incomplete scan,
@@ -403,7 +403,8 @@ def build_clock_outputs(trial: str, events: Sequence[Mapping], window_start_utc:
     win_start, win_end_excl = to_us(window_start_utc), to_us(window_end_utc) + US_PER_MS
     db_list = ch.db_changes(events, shifts, lo, hi)
     ex_list = [hit_change(h) for h in export.hits] if export is not None else []
-    all_changes = ch.sort_changes(ch.with_last_boot(db_list + ex_list, ch.boot_times(events)))
+    # one row / one count per physical change (owner 2026-11-12); db_clock_changes and export_hits stay raw
+    all_changes = ch.sort_changes(ch.with_last_boot(ch.merge_changes(db_list + ex_list), ch.boot_times(events)))
     counts = ch.class_counts(all_changes, bounds)
     flag_known = ch.flags_trial(all_changes, bounds)
     status = scan_status(export)
@@ -438,7 +439,8 @@ def build_clock_outputs(trial: str, events: Sequence[Mapping], window_start_utc:
                     "clock_change_records_without_time": export.records_without_time,
                     "hits": len(export.hits), "db_clock_changes": len(db_list),
                     "min_clock_step_ms": params.MIN_CLOCK_STEP_MS,
-                    "counts_cover": "export hits + DB clock-change rows in the search span",
+                    "counts_cover": "clock changes in the search span (export hits + DB clock-change rows), "
+                                    "records of the same host, channel, event id and instant counted once",
                     "counted_count": summary["counted_count"], **counts,
                     "clock_change_in_window": flag, "db_shift_unresolved": unresolved, "pre_step": steps}
     return {"changes": all_changes, "changes_rows": ch.change_rows(trial, all_changes, bounds),

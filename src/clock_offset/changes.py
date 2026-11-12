@@ -37,6 +37,13 @@ FLAG_CLASSES: frozenset[str] = frozenset({CLASS_BETWEEN, CLASS_AFTER, CLASS_NO_P
 
 SOURCE_DB = "db"
 SOURCE_EXPORT = "export"
+SOURCES: tuple[str, ...] = (SOURCE_DB, SOURCE_EXPORT)
+# Owner 2026-11-12: one change found in several records (DB row and export record, or overlapping exports) is one
+# clock_changes.csv row; ``source``, ``event_uid_or_record`` and ``source_sha256`` then list every record, joined
+# with this separator, part i of each column describing the same record (DB parts first, then export refs sorted).
+SOURCE_SEP = ";"
+# Export record reference ``export:<source_sha256>:<record_index>`` (SF-1): names the EVTX file and the record.
+EXPORT_REF_PREFIX = "export"
 
 # Trial-level CO-19 scan status, written into the offsets file (review SF-4, owner 2026-11-12); consumers refuse
 # anything but ``complete``. Defined here because scan.py (writer) and correct.py (reader) both import this module.
@@ -70,7 +77,12 @@ class ShiftInfo:
 
 @dataclass(frozen=True)
 class ClockChange:
-    """One clock-change record (DB row or export record) with what the cut, the flag and D5 need."""
+    """One clock change (a DB row, an export record, or several records of the same change merged by
+    ``merge_changes``) with what the cut, the flag and D5 need.
+
+    ``source`` / ``ref`` / ``source_sha256``: for one record ``db`` + event_uid or ``export`` + record_index, with
+    the record's sha256; for a merged change the joined lists of ``SOURCE_SEP`` (see ``source_refs``).
+    """
     host: str
     channel: str
     event_id: int
@@ -177,6 +189,132 @@ def with_last_boot(changes: Iterable[ClockChange], boots: Mapping[str, Sequence[
 def sort_changes(changes: Iterable[ClockChange]) -> list[ClockChange]:
     """File order (D5): host, change instant, then source/channel/ref so equal keys sort the same way."""
     return sorted(changes, key=lambda c: (c.host, c.change_us, c.source, c.channel, c.ref))
+
+
+# ---------------------------------------------------------------- one change, several records (owner 2026-11-12)
+
+@dataclass(frozen=True)
+class SourceRef:
+    """One record behind a change: ``db`` + event_uid, or ``export`` + ``export:<sha256>:<record_index>``;
+    ``sha256`` is the record's source_sha256 ("" when the record has none)."""
+    source: str
+    ref: str
+    sha256: str
+
+
+def export_ref(sha256: str | None, record: Any) -> str:
+    """``export:<source_sha256>:<record_index>``, the reference of an export record (SF-1)."""
+    idx = "" if record is None else str(record)
+    return f"{EXPORT_REF_PREFIX}:{sha256 or ''}:{idx}"
+
+
+def change_key(item: ClockChange | Mapping) -> tuple[str, str, int, int]:
+    """(host, channel lower-case, event_id, instant us): the identity of one physical clock change.
+
+    WHY one function for the file and the pair cut: a post-CO-18 DB row and the export record it was imported
+    from (or the same record in two overlapping exports) share all four while their uids differ; the file and
+    the cut must merge exactly the same records, or a change could count once in one and twice in the other.
+    Takes a ``ClockChange`` (``change_us``) or a change row dict (``us``). Channel is compared lower-case so a
+    spelling difference between DB and export cannot split one change; a System 1 and a Security 4616 of the
+    same physical step differ in channel and stay two changes.
+    """
+    if isinstance(item, ClockChange):
+        host, channel, event_id, us = item.host, item.channel, item.event_id, item.change_us
+    else:
+        host, channel, event_id, us = item.get("host"), item.get("channel"), item.get("event_id"), item["us"]
+    return str(host), str(channel).strip().lower(), int(event_id), int(us)
+
+
+def member_rank(is_db: bool, ref: str) -> tuple[int, str]:
+    """Order of the records of one change: DB records first, then export records, each sorted by reference.
+
+    WHY fixed: it decides the order of the joined columns and which record's values are kept
+    (``preferred_index``), so reruns give byte-identical files and the cut picks the same record as the file.
+    """
+    return (0 if is_db else 1, ref)
+
+
+def preferred_index(shifts: Sequence[int | None]) -> int:
+    """Index of the record whose values a merged change keeps, ``shifts`` given in ``member_rank`` order: the
+    first record with a resolved shift, else the first record (owner 2026-11-12: prefer the side with a resolved
+    shift; when several are resolved, the DB record, which ranks first)."""
+    return next((i for i, s in enumerate(shifts) if s is not None), 0)
+
+
+def split_list(text: str | None) -> list[str]:
+    """A ``SOURCE_SEP``-joined cell as its parts (stripped); None or "" -> one empty part."""
+    return [p.strip() for p in str(text or "").split(SOURCE_SEP)]
+
+
+def source_refs(change: ClockChange) -> tuple[SourceRef, ...]:
+    """The records behind a change, single or merged. Raises ValueError on an unknown source kind or when the
+    joined source, ref and sha256 lists have different lengths (never guessed)."""
+    sources = split_list(change.source)
+    unknown = sorted(set(sources) - set(SOURCES))
+    if unknown:
+        raise ValueError(f"unknown clock change source(s) {unknown} in {change.source!r}")
+    if len(sources) == 1:
+        sha = (change.source_sha256 or "").strip()
+        ref = export_ref(sha, change.ref) if sources[0] == SOURCE_EXPORT else change.ref
+        return (SourceRef(sources[0], ref, sha),)
+    refs, shas = split_list(change.ref), split_list(change.source_sha256)
+    if not len(sources) == len(refs) == len(shas):
+        raise ValueError(f"joined source {change.source!r}, ref {change.ref!r} and source_sha256 "
+                         f"{change.source_sha256!r} list different numbers of records")
+    return tuple(SourceRef(s, r, h) for s, r, h in zip(sources, refs, shas))
+
+
+def has_source(change: ClockChange, kind: str) -> bool:
+    """True when one of the change's records is of ``kind`` (``db`` / ``export``): a joined ``db;export``
+    change counts as both."""
+    return kind in split_list(change.source)
+
+
+def joined_columns(parts: Sequence[SourceRef]) -> tuple[str, str, str | None]:
+    """(source, event_uid_or_record, source_sha256) cells for the records of one change.
+
+    One record: today's form (export ref = bare record_index, empty sha256 -> None), so files without merged
+    changes are byte-identical to before. Several: each column joined with ``SOURCE_SEP`` in the given order,
+    export refs written in full (``export:<sha256>:<record_index>``), an empty sha256 kept as an empty part.
+    """
+    if len(parts) == 1:
+        p = parts[0]
+        ref = p.ref.rsplit(":", 1)[1] if p.source == SOURCE_EXPORT else p.ref
+        return p.source, ref, p.sha256 or None
+    return (SOURCE_SEP.join(p.source for p in parts), SOURCE_SEP.join(p.ref for p in parts),
+            SOURCE_SEP.join(p.sha256 for p in parts))
+
+
+def _rank_of(change: ClockChange) -> tuple[int, str]:
+    """``member_rank`` of a change: that of its first record (a merged change starts with its DB part)."""
+    return min(member_rank(r.source == SOURCE_DB, r.ref) for r in source_refs(change))
+
+
+def merge_group(members: Sequence[ClockChange]) -> ClockChange:
+    """One change from the records of one ``change_key`` (owner 2026-11-12).
+
+    previous/new time, shift, counted (and so the classification) come from ONE record, the preferred one
+    (``preferred_index``); the source columns list every distinct record, DB first, then export refs sorted.
+    WHY one record and not a mix: the row must describe one consistent reading of the step.
+    """
+    ordered = sorted(members, key=_rank_of)
+    parts = sorted(dict.fromkeys(r for c in ordered for r in source_refs(c)),
+                   key=lambda r: member_rank(r.source == SOURCE_DB, r.ref))
+    chosen = ordered[preferred_index([c.shift_ms for c in ordered])]
+    if len(parts) == 1:
+        return chosen
+    source, ref, sha = joined_columns(parts)
+    return replace(chosen, source=source, ref=ref, source_sha256=sha)
+
+
+def merge_changes(changes: Iterable[ClockChange]) -> list[ClockChange]:
+    """Changes with every group of the same ``change_key`` merged into one (``merge_group``); groups keep the
+    order of their first record (callers sort with ``sort_changes``). Counts made on the result count each
+    physical change once."""
+    groups: dict[tuple[str, str, int, int], list[ClockChange]] = {}
+    for c in changes:
+        groups.setdefault(change_key(c), []).append(c)
+    return [merge_group(g) for g in groups.values()]
 
 
 # ---------------------------------------------------------------- classification and flag (D3)
@@ -287,15 +425,21 @@ def _opt_int(text: Any) -> int | None:
 
 
 def change_from_row(row: Mapping[str, Any]) -> ClockChange:
-    """ClockChange from a clock_changes.csv row; ``counted`` is taken from the file (what the step decided)."""
+    """ClockChange from a clock_changes.csv row; ``counted`` is taken from the file (what the step decided).
+
+    ``source`` / ``event_uid_or_record`` / ``source_sha256`` may be the joined form of a merged change
+    (``db;export``, owner 2026-11-12); they are checked with ``source_refs`` (known kinds, equal list lengths).
+    """
     prev = row.get("previous_time") or None
     boot = row.get("last_boot_before_utc") or None
-    return ClockChange(host=str(row["host"]), channel=str(row["channel"]), event_id=int(row["event_id"]),
+    change = ClockChange(host=str(row["host"]), channel=str(row["channel"]), event_id=int(row["event_id"]),
                        change_us=to_us(row["change_utc"]), previous_time=prev, new_time=row.get("new_time") or None,
                        previous_us=parse_instant_us(prev), shift_ms=_opt_int(row.get("shift_ms")),
                        counted=_bool(row["counted"]), source=str(row["source"]),
                        ref=str(row["event_uid_or_record"]), source_sha256=row.get("source_sha256") or None,
                        last_boot_before_us=None if boot is None else to_us(boot))
+    source_refs(change)
+    return change
 
 
 # ---------------------------------------------------------------- pre-step events (D4)

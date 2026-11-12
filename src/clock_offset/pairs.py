@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Iterable, Mapping, Sequence
 
 from . import params
-from .changes import ShiftInfo, is_counted_shift
+from .changes import ShiftInfo, change_key, is_counted_shift, member_rank, preferred_index
 from .common import is_event, lab_ip_set, norm_guid, norm_ip, s_to_us
 
 Row = Mapping
@@ -200,50 +200,77 @@ def is_change_event(row: Row, shifts: Mapping[str, ShiftInfo] | None = None,
     return False
 
 
-def change_key(row: Row) -> tuple:
-    """(host, channel, event_id, instant) of a change row: the identity used to deduplicate DB and export rows.
+def change_groups(events: Iterable[Row], host: str, extra_changes: Iterable[Row] = ()) -> list[tuple[Row, ...]]:
+    """The host's clock-change records (DB rows, then export change rows, SF-1) grouped by ``change_key``; each
+    group in ``member_rank`` order (DB uids sorted, then export uids sorted), a uid listed twice kept once.
 
-    WHY these four: a post-CO-18 DB row and the export record it was imported from describe one physical
-    event and share all four, while their event_uids differ (DB uid vs ``export:<sha256>:<record_index>``).
+    WHY the same key and order as the clock_changes.csv merge (``changes.merge_changes``, owner 2026-11-12): a
+    DB row and the export record it came from, or one record in two overlapping exports, are one change, and
+    the cut, the stale status and the file must count it once and read the same record's shift.
     """
-    return (row.get("host"), row.get("channel"), row.get("event_id"), row["us"])
+    ranked = ([(member_rank(True, str(e["event_uid"])), e) for e in events
+               if e.get("host") == host and is_clock_change(e)]
+              + [(member_rank(False, str(x["event_uid"])), x) for x in extra_changes if x.get("host") == host])
+    groups: dict[tuple, dict[str, Row]] = {}
+    for _, r in sorted(ranked, key=lambda t: t[0]):
+        groups.setdefault(change_key(r), {}).setdefault(str(r["event_uid"]), r)
+    return [tuple(g.values()) for g in groups.values()]
+
+
+def group_shift(group: Sequence[Row], shifts: Mapping[str, ShiftInfo] | None) -> ShiftInfo | None:
+    """The ShiftInfo a group of records of one change is judged by: the first record (``member_rank`` order)
+    with a resolved shift, else the first record's entry (``changes.preferred_index``, as the file keeps)."""
+    infos = [(shifts or {}).get(str(r["event_uid"])) for r in group]
+    return infos[preferred_index([None if i is None else i.shift_ms for i in infos])]
 
 
 def host_change_rows(events: Iterable[Row], host: str, extra_changes: Iterable[Row] = ()) -> list[Row]:
-    """The host's DB rows plus its export change rows (SF-1), an export row dropped when a DB row (or an earlier
-    export row) has the same ``change_key``; sorted by (instant, uid).
+    """The host's DB rows with each clock change once: every non-clock-change row (boots and the rest), plus the
+    first record of each ``change_groups`` group (a DB row when the DB holds the change); sorted by (instant, uid).
 
-    WHY DB rows are kept as they are: they come from ``events_dedup`` (already deduplicated), and a DB row
-    carries the uid the rest of the pipeline knows; the export row only adds a change the DB does not hold
-    (every DB ingested before CO-18).
+    WHY the DB row represents the group: it carries the uid the rest of the pipeline knows; an export row only
+    stands for a change the DB does not hold (every DB ingested before CO-18).
     """
-    rows = [e for e in events if e.get("host") == host]
-    seen = {change_key(e) for e in rows if is_clock_change(e)}
-    for x in extra_changes:
-        if x.get("host") != host:
-            continue
-        k = change_key(x)
-        if k not in seen:
-            seen.add(k)
-            rows.append(x)
+    events = list(events)
+    rows = [e for e in events if e.get("host") == host and not is_clock_change(e)]
+    rows += [g[0] for g in change_groups(events, host, extra_changes)]
     return sorted(rows, key=lambda e: (e["us"], str(e["event_uid"])))
+
+
+def change_shifts(events: Iterable[Row], host: str, shifts: Mapping[str, ShiftInfo] | None,
+                  extra_changes: Iterable[Row] = ()) -> dict[str, ShiftInfo]:
+    """``shifts`` with each group representative's entry set to the group's ``group_shift``, so the cut counts a
+    merged change by the same record's shift as the clock_changes.csv row (owner 2026-11-12)."""
+    out = dict(shifts or {})
+    for g in change_groups(events, host, extra_changes):
+        info, uid = group_shift(g, shifts), str(g[0]["event_uid"])
+        if info is None:
+            out.pop(uid, None)
+        else:
+            out[uid] = info
+    return out
 
 
 def change_events(events: Iterable[Row], host: str, shifts: Mapping[str, ShiftInfo] | None = None,
                   extra_changes: Iterable[Row] = ()) -> list[Row]:
-    """The host's counted change events over the whole DB and the export change rows, sorted by (instant, uid).
+    """The host's counted change events over the whole DB and the export change rows, each change once,
+    sorted by (instant, uid).
 
     ``extra_changes`` are the CO-19 export hits as change rows (SF-1); their shifts must be in ``shifts``.
     """
-    return [e for e in host_change_rows(events, host, extra_changes) if is_change_event(e, shifts)]
+    events = list(events)
+    eff = change_shifts(events, host, shifts, extra_changes)
+    return [e for e in host_change_rows(events, host, extra_changes) if is_change_event(e, eff)]
 
 
 def routine_changes(events: Iterable[Row], host: str, shifts: Mapping[str, ShiftInfo] | None,
                     lo_us: int, hi_us: int, extra_changes: Iterable[Row] = ()) -> tuple[str, ...]:
-    """uids of the host's clock changes (DB and export rows) in the search span that do not count
-    (|shift| < 1 s, D1)."""
+    """uids of the host's clock changes (DB and export rows, each change once) in the search span that do not
+    count (|shift| < 1 s, D1)."""
+    events = list(events)
+    eff = change_shifts(events, host, shifts, extra_changes)
     return tuple(str(e["event_uid"]) for e in host_change_rows(events, host, extra_changes)
-                 if is_clock_change(e) and lo_us <= e["us"] <= hi_us and not is_change_event(e, shifts))
+                 if is_clock_change(e) and lo_us <= e["us"] <= hi_us and not is_change_event(e, eff))
 
 
 def change_cut(pairs: Sequence[Pair], changes: Sequence[Row], window_end_excl_us: int

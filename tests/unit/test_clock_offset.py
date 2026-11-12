@@ -3320,3 +3320,205 @@ def test_sf3_real_standalone_scan_equals_the_step_clock_events_and_scan_json(tmp
     for n in step:
         if (real_out / n).exists():
             assert (real_out / n).read_bytes() == step[n], n
+
+
+# ====================================================================================== clock_changes.csv dedupe (owner 2026-11-12)
+# One change found in the DB and in the export (same host, channel, event id, instant) is ONE row of
+# <trial>.clock_changes.csv: source `db;export`, event_uid_or_record and source_sha256 joined with `;`, DB first.
+# Same key as the CO-15 cut; System 1 and Security 4616 stay two rows; counts count deduplicated rows.
+
+CHANGES_REL = "data/processed/s02_t00.clock_changes.csv"
+EXPORT_1 = f"export:{SHA}:1"
+
+
+def _dedupe_case(tmp_path, name: str, t: float = 15, shift: int = 5000, merged: bool = True, reverse: bool = False):
+    """ep-01 `two_groups` plus ONE DB Security 4616 `chg` at t s whose source_relative_path/source_line point to a JSONL line.
+    `merged`: the manifest lists that export, so the scan finds the same change again; otherwise the DB row stands alone."""
+    files = ChangeFiles()
+    rows = two_groups([files.row("chg", "ep-01", "Security", 4616, t, shift)])
+    if reverse:
+        rows = list(reversed(rows))
+    return measure(tmp_path, rows, name=name, files=files, write=True,
+                   manifest=[("ep-01", "security", SHA)] if merged else None)
+
+
+def _changes_rows(repo: Path) -> list[dict]:
+    return read_csv(repo / CHANGES_REL)[1]
+
+
+def _scan_json(repo: Path) -> dict:
+    return json.loads((repo / "out" / "clock_offset" / "s02_t00" / "clock_scan.json").read_text(encoding="utf-8"))
+
+
+def test_dedupe_db_and_export_of_the_same_change_is_one_row_counted_and_cut_once(tmp_path):
+    """Owner 2026-11-12: DB 4616 and the export record of the same change are ONE row, `db;export`, DB part first, sha256
+    aligned; counted once (stats and clock_scan.json); cut once (same n_pairs / drops as the DB row alone); loads back
+    with has_source db and export both true."""
+    repo, res = _dedupe_case(tmp_path, "merged")
+    solo_repo, solo = _dedupe_case(tmp_path, "solo", merged=False)
+    body = _changes_rows(repo)
+    assert len(body) == 1, body
+    row = body[0]
+    assert (row["host"], row["channel"], row["event_id"]) == ("ep-01", "Security", "4616")
+    assert row["source"] == "db;export"
+    assert row["event_uid_or_record"] == f"chg;{EXPORT_1}"
+    assert row["source_sha256"] == f"{SHA};{SHA}"
+    assert row["counted"] == "true" and row["classification"] == "between_pairs"
+    # the solo run is the reference for the row's values
+    solo_row = _changes_rows(solo_repo)[0]
+    assert solo_row["source"] == "db" and solo_row["event_uid_or_record"] == "chg"
+    for k in ("change_utc", "previous_time", "new_time", "shift_ms", "counted", "classification", "last_boot_before_utc"):
+        assert row[k] == solo_row[k], k
+    # counted once
+    for stats in (res["stats"]["s02_t00"]["clock_change_scan"], _scan_json(repo)):
+        assert stats["counted_count"] == 1, stats["counted_count"]
+        assert stats["by_classification"]["between_pairs"] == 1
+        assert sum(stats["by_classification"].values()) == 1
+        assert stats["unexpected_count"] == 1 and stats["routine_count"] == 0
+    # cut once: the earlier two pairs go, the same as with the DB row alone
+    ev1, ev_solo = (r["stats"]["s02_t00"]["evidence"]["per_host"]["ep-01"] for r in (res, solo))
+    assert hrow(res, "ep-01")["n_pairs"] == hrow(solo, "ep-01")["n_pairs"] == 3
+    assert ev1["n_dropped_before_change"] == ev_solo["n_dropped_before_change"] == 2
+    assert ev1["change_cut_event_uid"] == ev_solo["change_cut_event_uid"] == "chg"
+    assert hrow(res, "ep-01")["offset_ms"] == hrow(solo, "ep-01")["offset_ms"] == -9000
+    # reads back
+    loaded = correct.load_clock_changes(repo / CHANGES_REL)
+    (c,) = loaded.changes
+    assert ch.has_source(c, "db") and ch.has_source(c, "export")
+    assert [(r.source, r.ref, r.sha256) for r in ch.source_refs(c)] == [("db", "chg", SHA), ("export", EXPORT_1, SHA)]
+    solo_loaded = correct.load_clock_changes(solo_repo / CHANGES_REL).changes[0]
+    assert ch.has_source(solo_loaded, "db") and not ch.has_source(solo_loaded, "export")
+
+
+def test_dedupe_change_after_the_last_pair_gives_one_stale_uid_and_one_after_last_pair(tmp_path):
+    """Owner 2026-11-12 / CO-15: the same change after the last pair: ONE stale uid (the DB uid), after_last_pair 1, one row."""
+    repo, res = _dedupe_case(tmp_path, "late", t=50)
+    assert hrow(res, "ep-01")["offset_status"] == "stale"
+    assert res["stats"]["s02_t00"]["evidence"]["per_host"]["ep-01"]["stale_event_uids"] == ["chg"]
+    (row,) = _changes_rows(repo)
+    assert row["source"] == "db;export" and row["classification"] == "after_last_pair"
+    for stats in (res["stats"]["s02_t00"]["clock_change_scan"], _scan_json(repo)):
+        assert stats["counted_count"] == 1 and stats["by_classification"]["after_last_pair"] == 1
+        assert sum(stats["by_classification"].values()) == 1 and stats["unexpected_count"] == 1
+
+
+def _two_channel_case(tmp_path, name: str, t: float):
+    files = ChangeFiles()
+    rows = two_groups([files.row("chg-sec", "ep-01", "Security", 4616, t, 5000),
+                       files.row("chg-sys", "ep-01", "System", 1, t, 5000)])
+    return measure(tmp_path, rows, name=name, files=files, write=True,
+                   manifest=[("ep-01", "security", SHA), ("ep-01", "system", SHA)])
+
+
+def test_dedupe_system_1_and_security_4616_of_the_same_step_stay_two_rows(tmp_path):
+    """Owner 2026-11-12: a System 1 and a Security 4616 at the same instant differ in channel: two rows, each merged with its
+    OWN export record; counted twice; the cut (same key) lists both as stale after the last pair."""
+    repo, res = _two_channel_case(tmp_path, "mid", 15)
+    body = _changes_rows(repo)
+    assert [(r["channel"], r["event_id"]) for r in body] == [("Security", "4616"), ("System", "1")]
+    assert {r["change_utc"] for r in body} == {body[0]["change_utc"]}
+    assert [r["source"] for r in body] == ["db;export", "db;export"]
+    assert [r["event_uid_or_record"] for r in body] == [f"chg-sec;{EXPORT_1}", f"chg-sys;{EXPORT_1}"]
+    assert [r["source_sha256"] for r in body] == [f"{SHA};{SHA}"] * 2
+    for stats in (res["stats"]["s02_t00"]["clock_change_scan"], _scan_json(repo)):
+        assert stats["counted_count"] == 2 and stats["by_classification"]["between_pairs"] == 2
+    assert hrow(res, "ep-01")["n_pairs"] == 3
+    late_repo, late = _two_channel_case(tmp_path, "late", 50)
+    assert len(_changes_rows(late_repo)) == 2
+    assert sorted(late["stats"]["s02_t00"]["evidence"]["per_host"]["ep-01"]["stale_event_uids"]) == ["chg-sec", "chg-sys"]
+    assert _scan_json(late_repo)["by_classification"]["after_last_pair"] == 2
+
+
+def test_dedupe_two_export_records_with_the_same_key_are_one_row_sorted_in_any_input_order(tmp_path):
+    """Owner 2026-11-12: two export records of one change: one row, refs sorted, sha256 aligned, and the bytes do not depend
+    on the record order in the file (same file, so one sha256: the scan skips a file with several)."""
+    out = []
+    for name, order in (("fwd", (2, 5)), ("rev", (5, 2))):
+        recs = [mkrec("Security", 4616, 15, SEC, 5000, idx=i) for i in order]
+        repo, res = _sf_case(tmp_path, name, sec=recs, write=True)
+        out.append((repo, res))
+    for repo, res in out:
+        (row,) = _changes_rows(repo)
+        assert row["source"] == "export;export"
+        assert row["event_uid_or_record"] == f"export:{SHA}:2;export:{SHA}:5"
+        assert row["source_sha256"] == f"{SHA};{SHA}"
+        for stats in (res["stats"]["s02_t00"]["clock_change_scan"], _scan_json(repo)):
+            assert stats["counted_count"] == 1 and sum(stats["by_classification"].values()) == 1
+    assert (out[0][0] / CHANGES_REL).read_bytes() == (out[1][0] / CHANGES_REL).read_bytes()
+
+
+def _cc_rec(source: str, ref: str, sha_: str, channel: str = "Security", us: int | None = None) -> ch.ClockChange:
+    t = to_us(at(15)) if us is None else us
+    prev, new = shift_times(15, 5000)
+    return ch.make_change(host="ep-01", channel=channel, event_id=4616, change_us=t, previous_time=prev, new_time=new,
+                          source=source, ref=ref, source_sha256=sha_)
+
+
+def test_dedupe_merge_changes_is_order_independent_with_different_sha256_aligned_to_their_refs():
+    """Unit: one DB record and two export records (different sha256) of the same key, in every input order, merge to one
+    change: DB first, export refs sorted, each sha256 beside its own ref. Channel spelling does not split a change."""
+    s_a, s_b, s_c = "aa" * 32, "bb" * 32, "cc" * 32
+    members = [_cc_rec("export", "3", s_b), _cc_rec("export", "1", s_a, channel="security"), _cc_rec("db", "chg", s_c)]
+    results = {tuple(ch.merge_changes(list(p))) for p in itertools.permutations(members)}
+    assert len(results) == 1
+    (merged,) = next(iter(results))
+    assert merged.source == "db;export;export"
+    assert merged.ref == f"chg;export:{s_a}:1;export:{s_b}:3"
+    assert merged.source_sha256 == f"{s_c};{s_a};{s_b}"
+    assert [(r.source, r.ref, r.sha256) for r in ch.source_refs(merged)] == [
+        ("db", "chg", s_c), ("export", f"export:{s_a}:1", s_a), ("export", f"export:{s_b}:3", s_b)]
+    assert ch.has_source(merged, "db") and ch.has_source(merged, "export")
+    # key = host, channel, event id, instant: another channel, event id or instant stays a separate change
+    other = [_cc_rec("db", "x", s_c, channel="System"), _cc_rec("db", "y", s_c, us=to_us(at(15)) + 1),
+             replace(_cc_rec("db", "z", s_c), event_id=1)]
+    assert len(ch.merge_changes(members + other)) == 4
+    assert ch.change_key(members[1]) == ch.change_key(members[2])
+
+
+def test_dedupe_pairs_change_groups_use_the_same_key_as_the_file(tmp_path):
+    """The CO-15 cut and the file share the key: pairs.change_groups puts a DB row and an export change row of the same
+    host/channel/event/instant in ONE group (DB first), and a System 1 beside a Security 4616 in two groups."""
+    t = to_us(at(15))
+    db_sec = {"event_uid": "chg-sec", "host": "ep-01", "channel": "Security", "event_id": 4616, "us": t}
+    db_sys = {"event_uid": "chg-sys", "host": "ep-01", "channel": "System", "event_id": 1, "us": t}
+    ex_sec = {"event_uid": f"export:{SHA}:1", "host": "ep-01", "channel": "Security", "event_id": 4616, "us": t}
+    groups = pairs.change_groups([db_sec, db_sys], "ep-01", [ex_sec])
+    assert sorted(tuple(r["event_uid"] for r in g) for g in groups) == [
+        ("chg-sec", f"export:{SHA}:1"), ("chg-sys",)]
+
+
+def test_dedupe_changes_csv_is_byte_identical_across_reruns_copies_and_row_order(tmp_path):
+    """Owner 2026-11-12: determinism: a rerun, a copied repo, and a DB with its rows in the opposite order give the same
+    clock_changes.csv bytes (merged `db;export` row included)."""
+    repo, _ = _dedupe_case(tmp_path, "a")
+    first = (repo / CHANGES_REL).read_bytes()
+    assert first.count(b"\n") == 2 and b"db;export" in first
+    run.run(repo, ["s02_t00"], write=True)
+    assert (repo / CHANGES_REL).read_bytes() == first
+    repo2 = tmp_path / "copy"
+    shutil.copytree(repo / "data", repo2 / "data", ignore=shutil.ignore_patterns("*.clock_*.csv"))
+    run.run(repo2, ["s02_t00"], write=True)
+    assert (repo2 / CHANGES_REL).read_bytes() == first
+    repo3, _ = _dedupe_case(tmp_path, "reversed", reverse=True)
+    assert (repo3 / CHANGES_REL).read_bytes() == first
+
+
+@pytest.mark.parametrize("shift,probes", [
+    (5000, {10: True, 14.999: True, 15: False, 15.001: False, 100: False}),
+    (-150_000, {10: True, 15: True, 164.999: True, 165: True, 165.001: False}),   # backward step: overlap up to previous_time
+    (999, {10: False, 15: False, 100: False}),                                    # routine: never marks
+])
+def test_dedupe_clock_unreliable_rule_on_a_merged_row_equals_the_single_source_row(tmp_path, shift, probes):
+    """CO-15 / D5: correct.before_counted_change on a merged `db;export` row gives the answer of the same change held by the DB
+    row alone: the event is marked from the last boot (none here) to the change instant, to previous_time for a backward step,
+    never by a routine change, and only on the change's own host."""
+    repo, _ = _dedupe_case(tmp_path, "m", shift=shift)
+    solo_repo, _ = _dedupe_case(tmp_path, "s", shift=shift, merged=False)
+    merged = list(correct.load_clock_changes(repo / CHANGES_REL).changes)
+    solo = list(correct.load_clock_changes(solo_repo / CHANGES_REL).changes)
+    assert len(merged) == len(solo) == 1 and ch.has_source(merged[0], "export") and not ch.has_source(solo[0], "export")
+    for t, want in probes.items():
+        us = to_us(at(t))
+        assert correct.before_counted_change("ep-01", us, merged) is want, (shift, t)
+        assert correct.before_counted_change("ep-01", us, solo) is want, (shift, t)
+        assert correct.before_counted_change("ep-02", us, merged) is False        # another host is not marked
