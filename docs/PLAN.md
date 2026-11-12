@@ -63,7 +63,7 @@ Never tune code or weights on the test set.
 **Done when:** every movement in the development answer keys produces a trigger.
 
 ## T6b. Clock offset correction — depends on: T4 (alongside T6) — spec: docs/specs/08_clock_offset.md — decision 032
-- [ ] 6b.1 Spec: per-host, per-trial offset vs dc01 from the trial's own endpoint 4624 ↔ dc01 4769 LogonGuid pairs; method, minimum pairs and handling of hosts with too few pairs decided on development data only (t00, valid t01), never on test trials
+- [~] 6b.1 *(draft 2026-11-12, NOT approved; two-step approval: method now, MIN_PAIRS/MAX_LOO_SHIFT_S on the rerun t01s; decision 043 proposed)* Spec: per-host, per-trial offset vs dc01 from the trial's own endpoint 4624 ↔ dc01 4769 LogonGuid pairs; method, minimum pairs and handling of hosts with too few pairs decided on development data only (t00, valid t01), never on test trials
 - [ ] 6b.2 Implement as a separate step: offsets stored per trial next to the DB and reported with every result; original times kept; a host with no usable pairs gets no correction and the trial is flagged
 - [ ] 6b.3 Tests + stage review (includes the decision 032 kill criterion: corrected host pairs within 5 s)
 **Must be done before:** gating any trial collected on or after 2026-10-26 (spec 02_gate §2.2), and T7.6 link accuracy on t01.

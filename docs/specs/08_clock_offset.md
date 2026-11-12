@@ -1,0 +1,312 @@
+# Stage spec: 08_clock_offset
+
+**Owner:** <stage owner> · **Status:** DRAFT, not approved. Two-step approval (owner 2026-11-12): **step 1** = the method (this draft); **step 2** = `MIN_PAIRS` and `MAX_LOO_SHIFT_S` confirmed on the rerun t01 trials (2026-11-23..28) and their clock readings, once ingested · **Last updated:** 2026-11-12
+
+Decisions: [032](../decisions/032-x10-clock-sync-and-offset-correction.md) (offset correction for kept trials, kill criteria), [014](../decisions/014-cross-host-time-tolerance.md) (5 s tolerance; option C "correct each host" — this stage implements it for the trials 032 names, the tolerance is unchanged), [039](../decisions/039-gate-window-input-and-clock.md) (gate and window use corrected times once this exists), [043](../decisions/043-clock-offset-method.md) (method, proposed). Measurements: §10. Attacker review: [08_clock_offset-spec-2026-11-12](../reviews/08_clock_offset-spec-2026-11-12.md).
+
+## 1. Purpose
+For each trial, this step estimates how far each endpoint's clock is from dc01's clock, using the trial's own Kerberos evidence. Each endpoint 4624 that carries a LogonGuid is paired with the dc01 4769 that has the same LogonGuid. The step writes one offset per host next to the trial DB. From 2026-10-26, ep-01 ran 10–27 s behind dc01. The 5 s cross-host joins (decision 014), the trial window clip and the Correction K order check ("the move happened after the dump") would therefore all compare times from clocks that disagree. With the offsets, the gate, the window step and T7 compare **corrected** times. The original times are never changed.
+
+## 2. Input contract
+| Input | What is read | Notes |
+|---|---|---|
+| Trial DB | `data/processed/<trial_id>.sqlite3`, view `events_dedup`, opened read-only | One DB per trial (NF-09). Hash before = hash after. |
+| Search span | the trial's agent-run window computed **in memory on raw times** with `trial_window.window.computed_window` (agent tree, decision 040), widened by `PAIR_PAD_S` on both sides | Not read from `data/trial_windows.csv`: that file is computed on corrected times after this step (§4.1). No clock refusal applies here. S01 uses the operator window (spec 02_gate §2.1). |
+| Manifest | `data/manifest.csv` export span (`lab_common.manifest.read_manifest_span`) | Only for the window clip, as in trial_window. |
+| Parameters | `src/clock_offset/params.py` (§5) | |
+
+Columns used: `event_uid, host, channel, event_id, event_utc, logon_guid, logon_guid_state, logon_type, account_name, source_ip, service_name`.
+- `logon_guid` is stored lower-case, without braces. An all-zero GUID is stored as NULL with `logon_guid_state = 'zero'`, and NULL never pairs (data-checker 2026-11-12, `data/sample/`).
+- `event_utc` is the instant used (decision 010). Instants are compared, never text.
+- The step never opens `ground_truth/` and never reads the answer keys.
+- It reads only `events_dedup`.
+
+Not available in the DB: Security 4616 ("system time was changed") and the System Kernel-General / Time-Service events. The normaliser does not keep them, and none is present in the 11 measured trials (§10.6). **A clock step inside a trial therefore cannot be seen from the DB** (OPEN Q6).
+
+## 3. Output contract
+**`data/processed/<trial_id>.clock_offsets.csv`**: one row per endpoint (ep-01, ep-02, ep-03), plus a dc01 row with offset 0. It sits next to the DB, as decision 032 asks. The file is rebuilt on every run and is byte-identical on the same inputs.
+
+| Column | Type | Meaning |
+|---|---|---|
+| trial_id | text | `<scenario>_<trial>` |
+| host | text | `dc01`, `ep-01`, `ep-02`, `ep-03` |
+| offset_ms | int/empty | estimated host − dc01 clock offset, in ms. Corrected time = `event_utc − offset_ms`. Empty when `offset_status` is `none`. dc01 = 0. |
+| offset_status | text | `reference` (dc01, unverified: there is no absolute time), `ok`, `wide` (estimate unstable, CO-06), `stale` (the host booted after its last pair, inside the window, CO-15), `none` (not corrected, CO-07). Every status except `reference` and `ok` flags the trial (CO-08). |
+| offset_unc_ms | int/empty | uncertainty carried to T7: `loo_shift_ms` (CO-06, ATK-03) |
+| n_pairs | int | number of 1:1 pairs used |
+| n_dropped_far | int | pairs dropped because \|delta\| > `MAX_PAIR_DELTA_S` (CO-02, ATK-02) |
+| n_pairs_lab_ip | int | pairs whose 4624 `source_ip` is a lab host (hop logons), reported for audit (ATK-02) |
+| late_gap_s | int/empty | seconds from the host's last paired 4624 to the last agent event of the run (window end − 300 s). Shows how far the estimate is extrapolated (ATK-01) |
+| min_ms, q1_ms, median_ms, q3_ms, max_ms | int/empty | distribution of the pair deltas (host 4624 − dc01 4769) |
+| loo_shift_ms | int/empty | largest change of the median when any one pair is left out (CO-06) |
+| pair_span_s | int/empty | seconds between the first and the last paired 4624 |
+| host_has_events | bool | the host has any event in the trial window (CO-08) |
+| method | text | `logonguid_4624_4769_mutual_nearest_median` |
+| search_start_utc, search_end_utc | text | the search span used |
+| db_sha256 | text | SHA-256 of the trial DB the offsets were computed from |
+| tool_version | text | code version |
+
+Example row (s06_t01, measured): `s06_t01,ep-01,-18781,ok,5,-18828,-18816,-18781,-15260,-10986,1760,35,true,logonguid_4624_4769_mutual_nearest_median,…`. With `MAX_LOO_SHIFT_S = 2.5`, ep-01's 1.76 s gives `ok`.
+
+**`out/clock_offset/<trial_id>/`**:
+- `pairs.csv`: one row per pair, with `host, event_uid_4624, event_uid_4769, logon_guid, t_4624_utc, t_4769_utc, delta_ms, logon_type, account_name, service_name, method, candidate_count, time_delta_ms`. Here `candidate_count` is the number of dc01 4769s with that GUID in the span, and `time_delta_ms` = `delta_ms`.
+- `stats.json`: counts of GUID-bearing 4624/4769, pairs dropped by the mutual-nearest rule per host, and the independent check of CO-10.
+- `report.md`: a short human-readable summary.
+
+Every row that links events records `method`, `candidate_count`, `time_delta_ms` and the supporting `event_uid`s (CLAUDE.md code rules). The tier concept does not apply to clock pairs: no `gate_tier`/`confidence_tier` here.
+
+## 4. Rules
+| ID | Rule | Source |
+|---|---|---|
+| CO-01 | **Allowed trial.** Refuse quarantined trials (`s05q_*`, `quarantine/`, decision 030) and `s01_t00` (decision 019). Every other trial may be measured. Measuring is not gating, and the result is written before any scoring. | 019, 030 |
+| CO-02 | **Evidence.** Endpoint side: Security 4624 on ep-01/02/03 with a non-NULL `logon_guid`. DC side: Security 4769 on dc01 with a non-NULL `logon_guid`. Both lie in the search span (4769s up to 120 s beyond the span edges, so pairs at the edge keep their partner). No other event pairs. *(ATK-02)* After pairing, a pair with \|delta\| > `MAX_PAIR_DELTA_S` is dropped and counted in `n_dropped_far`. This stops a lone GUID pair minutes apart (ticket cache, GUID reuse) from moving a host by minutes. Hop logons (4624 from a lab IP) are kept, because they measure the same host clock, and counted in `n_pairs_lab_ip`. | 032 (criterion g measure, validator N11); §10.2; §10.7 (largest measured \|delta\| 18.83 s, so 60 s drops no measured pair) |
+| CO-03 | **Pairing: 1:1 mutual nearest.** Within one GUID, a 4624 and a 4769 pair only if each is the other's nearest in time. Every 4624 and every 4769 is used at most once per host. GUIDs reused by several 4624s or 4769s then yield at most the closest pairs, never every combination. | §10.3: rule A is the only tested rule with every independent check ≤ 5 s (B "nearest per 4624" 6.22 s, D "no type 4" 6.52 s, C "unique GUID only" leaves hosts unmeasured) |
+| CO-04 | **Delta** = 4624 instant (host clock) − 4769 instant (dc01 clock). | 032 |
+| CO-05 | **Estimate** = median of a host's deltas, when `n_pairs ≥ MIN_PAIRS`. dc01's offset is 0 by definition (dc01 is the reference; there is no absolute time, decision 014). The minimum and the mean are not used. | §10.1: single deltas scatter ±3–9 s in **both** directions around a stable centre (s07_t00 ep-02, 13 pairs at 60 s intervals, −4.06 … +8.52); dc01 same-clock 1:1 pairs have a median latency of 4–8 ms, so the scatter is endpoint-side ticket timing, not network delay. The median ignores it; the minimum assumes one-sided latency (§10.3, minimum variant) |
+| CO-06 | **Stability.** `loo_shift` = max over pairs of \|median(all) − median(all but that pair)\|. If `loo_shift > MAX_LOO_SHIFT_S`, the status is `wide`. Whether it is applied is OPEN Q4: the draft applies it and flags it; the attacker recommends not applying it when `n_pairs ≤ 3`. The trial is flagged. With 2 pairs, `loo_shift` is half their gap, so a 2-pair host whose pairs differ by more than 5 s is `wide`. | §10.4; spread and IQR are reported but not used, because single-pair scatter makes them large even where the estimate is confirmed (s06_t01 ep-01: spread 7.84 s, independent residual ≤ 0.48 s) |
+| CO-07 | **Too few pairs.** `n_pairs < MIN_PAIRS` gives status `none`: no correction (raw times for that host), `offset_ms` empty, and the trial flagged (decision 032). `n_pairs = 1` is reported with its delta for audit only (OPEN Q3). | 032 Decision 3 |
+| CO-08 | **Flag scope.** The trial flag `clock_flag` lists each host with status `none`, `wide` or `stale` **that has events in the trial window**. A host with no events in the window (e.g. ep-03 in s02_t00, s04_t00, s07_t00, ep-02 in s03_t00, whose logs were not exported) has nothing to correct and is reported, not flagged. | §10.1 (the 0-pair hosts all lack Security logs, validator criterion a) |
+| CO-09 | **Original times are kept.** The DB is never written. Consumers compute `event_utc_corrected = event_utc − offset_ms(host)` with one shared pure function. Every output that uses a time writes both `event_utc` (original) and `event_utc_corrected`. A host with status `none` gives `event_utc_corrected = event_utc`. *(ATK-03)* Every output row that compares times across two hosts carries `clock_unreliable = true` when either host is `none`, `wide` or `stale`. A mixed row (one side corrected, the other not) is therefore marked on the row itself, not only through the trial-level `clock_flag`. | 032 Decision 3; 039 Q4 |
+| CO-10 | **Independent check (per trial, reported).** Cross-host pairs that do not use LogonGuid: a source Sysmon 3 to another lab host on 445/3389/5985/5986, joined to the target 4624 with `IpAddress` = source IP and `IpPort` = the Sysmon 3 source port. *(ATK-07)* The join is made on **raw** times, nearest within ±`CHECK_JOIN_S`, before any correction, and a port with more than one candidate is reported as ambiguous. The correction therefore cannot choose its own check partner. For each pair, report raw and corrected Δ = target − source, and \|raw\| vs \|corrected\| (net effect, ATK-06). These pairs never enter the estimate. The source and target are both endpoints, so the check does not depend on dc01's clock (ATK-09). | §10.5. A connection precedes its logon by milliseconds to about 1 s (s05_t00, s06_t00 raw 1.2–1.8 s while offsets are small), so a corrected \|Δ\| > 5 s means the correction is wrong for that host pair |
+| CO-11 | **Kill criterion (decision 032), applied on development data before step 2.** The correction is not used if (a) any development CO-10 pair has corrected \|Δ\| > 5 s, or (b) any rerun t01 host's computed offset differs from the lab's clock reading for that host by more than `READING_AGREE_S` (CO-12). Then the owner decides which trials are excluded or rerun (032, 039 kill criteria). *(ATK-07)* A **review level** of 2.5 s also applies: any check pair above it is reported to the owner, but it does not kill the correction by itself (032 fixes the kill at 5 s). Measured today: (a) passes, worst corrected \|Δ\| 1.58 s over 6 groups / 18 pairs (raw worst 18.35 s), and no pair is above the 2.5 s review level (§10.5). (a) rests on **one** skewed trial (s06_t01, source ep-01, 2 groups). (b) waits for the reruns. **Limit:** the LogonGuid pairs cannot validate themselves; after correction, the host-pair offsets they measure are 0 by construction. Only CO-10 and CO-12 are independent. | 032 Kill criteria |
+| CO-12 | **Rerun clock readings (owner 2026-11-12).** For the rerun trials of 2026-11-23..28, the lab records each VM's offset against dc01 per trial (`docs/lab/rerun_plan.md`, PROGRESS). Format OPEN Q5. *(ATK-05)* The readings are taken at the **start and the end** of each trial, on the endpoint, against dc01. Each is stored as host − dc01, with the raw tool output kept. The sign convention is checked once at the first rerun session, on a host whose LogonGuid estimate is \|x\| > 2 s. For each rerun t01 host, the computed offset must lie within `READING_AGREE_S` of the interval [start reading, end reading]. When the two readings differ by more than 2.5 s, the host is reported as drifting and the trial is flagged. If a reading is repeated, the last reading before the run counts as the start reading, and the first one after the run as the end reading. This is the only check that covers ep-02/ep-03 and hosts with no WinRM hop. It is used to confirm `MIN_PAIRS` and `MAX_LOO_SHIFT_S` (step 2) and is never used to tune on test trials. | owner addition A2 |
+| CO-13 | **Applies to every host and every trial**, whatever the size of the offset. There is no "only correct above x s" threshold, so nothing more is tuned. Trials before 2026-10-26 are corrected too (ep-03 at +3.5…+4.5 s while ep-01 sits at −2.3 s gives host pairs of 5–6 s, e.g. s03_t01 ep-01→ep-03 raw 5.68 s → corrected 0.82 s). *(ATK-06)* On small offsets the correction can be slightly worse than raw. In s06_t00 ep-01→ep-02, raw 1.22 s became corrected −1.57 s, about 0.35 s worse in absolute terms (raw also contains the ~0–1 s real connect-to-logon delay). The net effect is reported per check pair (§10.5). The spec does not claim the correction is never harmful. A no-op band is OPEN Q10. | §10.5; validator g |
+| CO-14 | **Determinism.** Rows are sorted by host. Ties in the nearest search are broken by `event_uid`. The same DB gives byte-identical files. | code rules |
+| CO-15 | **Reboots (ATK-08).** Only pairs whose 4624 is after the host's last boot/shutdown event (System 41, 1074, 6005, 6006, 6008) before the host's first pair are used. A boot on the host **after** its last pair and before the window end gives status `stale`: the estimate describes a clock from before the restart. It is not applied (treated as `none`) and the trial is flagged. This is the only clock-change signal the DB keeps (Q6). | §10.7: in all 11 trials every host's pairs come after its last boot (e.g. s02_t00 ep-02 boot 05:37:46, pairs from 05:37:58); no host is `stale` |
+| CO-16 | **Extrapolation is reported, not gated (ATK-01).** ep-01's pairs are start-of-trial logons; the attack comes later. `late_gap_s` and `pair_span_s` are reported. A drift or slew after the burst is detectable only by CO-10 (where a WinRM hop exists) and by CO-12's start-and-end readings. Requiring ≥ 2 pair clusters (attacker's proposal) would leave ep-01 uncorrected in every measured trial, the worst outcome for the host with the skew, so it is not adopted. A `late_gap_s` limit is decided in step 2 from the start/end readings (Q11). | §10.7 (late gap 35–97 s on t01, up to 507 s on t00); s06_t01: the check pairs 4 min after the burst agree within 0.48 s with the −18.8 s cluster, not with the later −15.3 / −11.0 pairs, so those pairs are scatter, not a slew toward dc01 |
+
+### 4.1 How the gate and the window step switch from raw to corrected (amendments listed, not made here)
+These changes belong to spec 02_gate and `src/trial_window`. They are applied in T6b.2 after the owner approves this spec.
+1. **Order of steps:** `clock_offset` (this step) → `trial_window` (on corrected times) → gate. The pair search uses a raw-time window only to bound the search, padded by `PAIR_PAD_S` (30 min ≫ 27 s skew). So no step needs its own output first.
+2. **`CLOCK_CORRECTION_AVAILABLE`** (in `src/trial_window/params.py`) becomes true once this step exists. The flag then means "corrected times are required". `TIME_BASIS = "corrected"`.
+3. The **2026-10-26 refusal** (`RAW_TIME_CUTOFF_DATE`, 02_gate §2.2, GT-00, GTT-07) is replaced by:
+   - refuse when `<trial>.clock_offsets.csv` is missing;
+   - refuse when its `db_sha256` differs from the DB;
+   - refuse when the window row's `offsets_sha256` (new column in `trial_windows.csv`) differs from the offsets file;
+   - flagged hosts: per OPEN Q2.
+4. **`trial_window`** computes the agent-tree window on corrected times (each Sysmon 1's host offset applied) and writes `time_basis = corrected` and `offsets_sha256`.
+5. **Gate:**
+   - GT-01 clips on `event_utc_corrected`;
+   - every cross-host pairing uses corrected times (R5 type 3 ↔ 3389, WinRM 91 ↔ anchor);
+   - same-host pairings are unaffected, because one offset per host cancels;
+   - outputs add `event_utc_corrected` next to `event_utc`;
+   - `stats.json` adds `clock_flag` and the offsets used.
+6. **GTA-06** (computed window start = the key's `run_interval` start) compares raw times. The keys are in raw time, and the corrected start moves by the agent host's offset (t00 ep-01: −1.14 … +3.37 s, §10.1). Proposal: GTA-06 compares the raw-basis window, computed for the test only (OPEN Q7).
+7. **T7/T9:** decision 014's 5 s tolerance and the Correction K order check use corrected times. The offsets, `clock_flag` and `clock_unreliable` are reported with every result (032). *(ATK-03, proposal for T7, owner decides)* `order_within_tolerance` is set when \|move − dump\| < 5 s + `offset_unc`(source) + `offset_unc`(target). This widens only the flag, not the tolerance; up to 5 s + 2 × 2.5 s. Whether that extra uncertainty also changes the identity value is a T9 decision (OPEN Q12).
+8. *(ATK-11)* **New 02_gate test:** on the development trials, no key-hop event is removed by the clip on the corrected basis, and the `near_window` counts are reported before and after correction.
+
+## 5. Parameters
+| Name | Value | Why | Sensitivity test? |
+|---|---|---|---|
+| `PAIR_PAD_S` | 1800 s | same as validator N11. Pairs cluster at trial start (ep-01 pair span 2–35 s on most trials, §10.1), so the pad only has to cover the run; 30 min ≫ the largest skew (27 s). Earlier snapshot days in the DB are days away and stay out (data-checker) | yes: ±10 min vs ±30 min vs whole DB (§10.1 whole-DB column: same pairs on all 11 trials) |
+| `DC_EDGE_S` | 120 s | 4769 partner of an edge pair just outside the span | no |
+| `MIN_PAIRS` | **2 (provisional, step 2)** | 2 is the smallest sample with a median and a stability value. With 3, s07_t01 ep-01 (2 pairs, −12.26 s; validator −12.26 s) would stay uncorrected, a raw error of ≥ 12 s. 1 pair has no stability value (OPEN Q3) | yes: 2 vs 3 on the rerun t01s with clock readings |
+| `MAX_LOO_SHIFT_S` | **2.5 s (provisional, step 2)** | half of the 5 s tolerance (decision 014), set from the tolerance, not fitted to the data. In development + clock-only data only s06_t01 ep-03 exceeds it (2.97 s; its independent residual is −0.48 s) | yes, on the reruns |
+| `READING_AGREE_S` | 2.5 s (proposal) | same reasoning: half the tolerance | after reruns |
+| `CHECK_PORTS` | 445, 3389, 5985, 5986 | ports with a target 4624 carrying `IpPort` | no |
+| `MAX_PAIR_DELTA_S` | 60 s | ATK-02: a bound above the largest real skew (27 s, decision 032) and the largest measured \|delta\| (18.83 s), well below the reuse outliers (360–400 s, §10.4) | report `n_dropped_far` |
+| `CHECK_JOIN_S` | 60 s, raw time | ATK-07: wider than any raw offset (27 s), and joined before correction | no |
+| `CHECK_REVIEW_S` | 2.5 s | ATK-07: review level for CO-10; the kill stays 5 s (032) | no |
+
+**Parameter freeze (ATK-10).** `params.py` is committed, and its hash is recorded in decision 043 before the step-2 rerun check. Step 2 may change only `MIN_PAIRS`, `MAX_LOO_SHIFT_S` and `READING_AGREE_S`, and only from the rerun t01 trials and their readings. Facts about test trials (s02_t03/t04 with no dc01 Security; the s06_t04 −25 s example in 032) come from the validator report, which covers all trials. They were used here only to name edge cases. **No parameter is derived from them.**
+
+## 6. Edge cases (from attacker review)
+Full review: [08_clock_offset-spec-2026-11-12](../reviews/08_clock_offset-spec-2026-11-12.md), ATK-01..12.
+
+| Case | Where it occurs (scenario/trial) | Expected behaviour | Test ID |
+|---|---|---|---|
+| ep-01's pairs all come from one burst at trial start (type 4 svc_sql/admin_it/svc_backup + type 3 `endpoint-01$`), not from the attack | every measured trial (span 2–35 s; s02_t00 708 s) | estimate as normal; `pair_span_s` reported. A drift after the burst is caught only by CO-10/CO-12 (s06_t01: burst 06:18:28, check pairs 06:22:12–56, residual ≤ 0.48 s) | COA-02 |
+| GUID shared by several 4624s or 4769s | s06_t01 ep-03 (5 4624s per GUID), dc01 self-pairs up to 360 s | 1:1 mutual nearest (CO-03). Never all combinations | COT-03 |
+| host with no Security log exported | s02_t00/s04_t00/s07_t00 ep-03, s03_t00 ep-02 | `none`, `host_has_events = false`, not flagged (CO-08) | COT-08 |
+| host with 1 pair | s07_t01 ep-03 | `none` with the single delta in `pairs.csv` (CO-07, OPEN Q3) | COT-07 |
+| test trial with no dc01 Security log | s02_t03, s02_t04 (validator a) | every endpoint `none`, trial flagged; handling per OPEN Q2 | COT-09 |
+| ATK-01: clock steps or slews between the start-of-trial burst and the attack | hypothetical. s06_t01 shows no slew (check pairs 4 min later agree within 0.48 s) | reported via `late_gap_s` (CO-16); caught only by CO-10 / CO-12 start-end readings; a limit is set in step 2 (Q11) | COT-13 (synthetic 12 s step after the burst: status stays `ok`, `late_gap_s` reported; documents the limit) |
+| ATK-02: lone GUID pair minutes apart (ticket cache, reuse) | hypothetical. Reuse outliers up to 400 s seen in dc01 self-pairs (s03_t00) | dropped by `MAX_PAIR_DELTA_S`, counted in `n_dropped_far` (CO-02) | COT-14 (a 600 s pair is dropped; 2 pairs 300 s apart lose one, so `none`) |
+| ATK-02: 2–3 pairs, one far | s07_t01 ep-01 (2 pairs, 3.5 s apart, `loo_shift` 1.75) | `ok` at 2.5 s; a gap > 5 s gives `wide`, applied or not per Q4 | COT-05, COT-06 |
+| ATK-03: dump/move order inside the combined error | not in current data (t00 gaps ≥ 38 s, decision 014) | T7 flag widened by both hosts' `offset_unc` (§4.1 item 7) | test in 03_stitch |
+| ATK-03: cross-host row with one host corrected and one `none`/`wide`/`stale` | hypothetical (every measured host with events has ≥ 2 pairs) | `clock_unreliable = true` on the row (CO-09) | COT-12 |
+| ATK-05: reading taken on dc01 against the endpoint, so the sign flips | rerun procedure | stored as host − dc01; sign checked once (CO-12) | COA-05 |
+| ATK-06: correction slightly worse than raw on a small offset | s06_t00 ep-01→ep-02 (raw 1.22 → corrected −1.57 s) | reported per check pair; no claim of no harm; no-op band per Q10 | COA-02 |
+| ATK-07: check partner chosen after correction | (design) | raw-time join ±60 s, ambiguity reported (CO-10) | COT-15 |
+| ATK-08: host reboots mid-trial after its pairs | none in the 11 trials (§10.7) | `stale`, not applied, flagged (CO-15) | COT-16 |
+| ATK-09: dc01 itself steps | S04 t00 had `dc01_skew_possible` (decision 014) | endpoint-to-endpoint comparisons cancel; dc01 marked `reference` (unverified); CO-10 uses endpoint pairs only | – |
+| ATK-12: host with Sysmon but no Security events in the window | hypothetical | `none`, `host_has_events = true`, so flagged (its Sysmon events cannot be corrected) | COT-08 |
+| ATK-12: retried 4769 with the same GUID a few ms apart | possible in any trial | 1:1 mutual nearest keeps one | COT-03 |
+
+## 7. Acceptance tests
+Unit (synthetic, COT): COT-01 refusals (CO-01). COT-02 NULL / zero GUID never pairs. COT-03 1:1 mutual nearest with reused GUIDs. COT-04 delta sign (host behind dc01 → negative offset → corrected time later). COT-05 median and `loo_shift`, including n = 2. COT-06 `wide` status. COT-07 `MIN_PAIRS` boundary. COT-08 flag scope (host without events). COT-09 no dc01 4769 at all. COT-10 determinism (byte-identical). COT-11 the DB hash is unchanged and nothing under `ground_truth/` is opened. COT-12 the corrected-time function: `none` → unchanged, plus flag; a mixed-host row gets `clock_unreliable`. COT-13 synthetic step after the burst (documents the limit). COT-14 `MAX_PAIR_DELTA_S`. COT-15 the CO-10 join runs on raw time and reports ambiguity. COT-16 a reboot after the last pair gives `stale`. COT-17 the parameter file hash matches the hash recorded in 043 (freeze).
+
+Real data (COA, development trials only):
+- COA-01: for the 9 development trials, offsets equal the §10.1 values within 1 ms (regression).
+- COA-02: CO-10 on development data; every corrected \|Δ\| ≤ 5 s (the kill criterion, CO-11a); today 18/18.
+- COA-03: s06_t01: ep-01 offset ∈ [−19.5, −18.0] s and `ok`; the ep-01→ep-02/ep-03 WinRM pairs go from raw 16.7/18.3 s to corrected ≤ 1 s.
+- COA-04: the s04_t01/s07_t01 clock-only rows are produced and labelled `clock-only`; they are never passed to the gate (decision 034).
+- COA-05 (after the reruns, step 2): CO-12 agreement for every rerun t01 host.
+- COA-06: the four hosts with no exported logs are `none` and not flagged.
+- The gate amendments (§4.1) get their own tests in 02_gate (GTT-07 replaced; GTA-05 enabled).
+
+## 8. OPEN questions
+| # | Question | Options | Needs council? |
+|---|---|---|---|
+| Q1 | **The skew-period evidence is thin.** Development has one trial on or after 2026-10-26 (s06_t01); with the clock-only s04_t01/s07_t01 (owner A1), three. Only s06_t01 has independent check pairs for ep-01 (7 WinRM pairs). | (a) approve the method now; confirm the parameters on the reruns (step 2, owner plan) **(recommended)**; (b) wait for the reruns before step 1 | no (owner already chose two-step) |
+| Q2 | A trial with a flagged host (`none` or `wide`) that has events in the window: what does the gate do? | (a) gate runs; that host stays raw and `clock_flag` is carried into every output row, T7 and T9 results **(recommended for `wide`)**; (b) refuse the trial when a host with events is `none` and the trial is on or after 2026-10-26 **(recommended for `none`, since raw may be up to 27 s wrong)**; (c) refuse every flagged trial | owner |
+| Q3 | 1 pair: apply or not? | (a) not applied, `none` (current draft, conservative per 032 "no usable pairs"); (b) applied as `wide` (a single delta can be 4–8 s off, §10.1, but raw ep-01 can be 27 s off) | owner |
+| Q4 | Is `wide` applied? | (a) applied and flagged (draft); (b) treated as `none`; (c) not applied when `n_pairs ≤ 3`, else applied (attacker, ATK-02) | owner |
+| Q5 | Format of the rerun clock readings (A2) | `docs/lab/clock_readings.csv`: `trial_id, host, reading_utc, offset_vs_dc01_ms, tool (w32tm /stripchart /computer:dc01 /samples:3 /dataonly), when (start/end)`; at least one reading per VM per trial, taken before the run | owner (lab procedure) |
+| Q6 | Clock steps inside a trial cannot be seen: 4616 and System time-change events are not kept by the normaliser | (a) extend the normaliser (spec 01 fix) to keep Security 4616 and System Kernel-General 1, then split the estimate at a step; (b) accept, and rely on CO-10/CO-12 | owner |
+| Q7 | GTA-06 compares a computed window with the key's raw `run_interval` | (a) GTA-06 runs on a raw-basis window computed for the test only **(recommended)**; (b) correct the key times (keys are approved files and are not edited) | no |
+| Q8 | **(owner A3)** Force a time sync on each VM after every revert in the reruns (`w32tm /resync /force`, then a reading < 1 s; handoff §17, line 1257), removing the skew at source | (a) yes: the correction is then needed mainly for the kept S06 ×10 trials (t02–t08, t11, t12) and the S02/S03 ep-03 cases. The rerun readings still test the estimator, but only near 0 s. *(ATK-04)* Under (a), step 2 cannot confirm `MIN_PAIRS = 2` or `MAX_LOO_SHIFT_S` on skewed clocks like those of the S06 ×10 trials (ep-01 −10 to −27 s). (b) no: the reruns keep their natural skew and test the estimator over the real range. (c) sync all reruns except one unsynced development t01 per scenario, with readings, so step 2 sees both | owner (lab) |
+| Q9 | Decision 014 says "measured offsets are reported per trial, not applied". Decision 032 replaces this for kept trials | record in 043 that 014's last sentence is amended; tolerance unchanged | no |
+| Q10 | *(ATK-06)* No-op band: leave a host uncorrected when \|offset\| is below some value? | (a) no band: every host corrected (draft, CO-13; 5 of 6 check groups improve, 1 worsens by 0.35 s); (b) a band, e.g. 1.5 s, which would itself be a tuned parameter | owner |
+| Q11 | *(ATK-01)* A limit on `late_gap_s` (status `stale` beyond it) | (a) decide in step 2 from the start/end readings (draft); (b) no limit, report only | step 2 |
+| Q12 | *(ATK-03)* Does offset uncertainty change the identity value, or only the `order_within_tolerance` flag? | (a) flag only (§4.1 item 7, draft); (b) a hop within 5 s + uncertainty counts as 0 for identity | T7/T9 spec, possibly council (touches Correction K) |
+
+## 9. Out of scope
+- Changing decision 014's tolerance (stays 5 s, 032).
+- Drift within a trial (one offset per host per trial; no step or slope model, see Q6).
+- An absolute time reference (dc01 is the reference).
+- Correcting dc01.
+- Editing DB times.
+- Choosing which trials to rerun (owner).
+- Gating or scoring the clock-only trials s04_t01/s07_t01.
+- Looking at t02–t10 to choose anything.
+
+## 10. Measurements (development + clock-only, read-only, 2026-11-12)
+Script: a scratch script with a hard allowlist of the 9 development trials (s02–s07 t00; s02_t01, s03_t01, s06_t01) and the 2 clock-only trials (s04_t01, s07_t01, owner A1). It refused `s02_t02` when tried. DBs were opened `mode=ro` and their SHA-256 was unchanged after the run.
+
+Which t01 trials qualify: s02_t01 (validator all PASS), s03_t01 and s06_t01 (no FAIL; g WARN only), per `docs/research/x10_design_validation.md` §2 and decision 034.
+- Not development: s04_t01 (b, c, d FAIL) and s07_t01 (c FAIL). They are used here for clock only (A1).
+- S05 t01: quarantine (030); the v2 rerun is not ingested.
+- S01 t01: not collected.
+
+Offset = host − dc01, in seconds. Negative means the host is behind. Window = the agent-tree window ±30 min (raw).
+
+### 10.1 Per trial and host (rule A: 1:1 mutual nearest, median)
+| trial | role | date | host | pairs | min | median | max | IQR | spread | LOO shift | types (count) |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| s02_t00 | dev | 09-24 | ep-01 | 6 | +0.08 | +1.68 | +3.98 | 1.84 | 3.90 | 0.13 | T3 2, T4 3, T7 1 |
+| | | | ep-02 | 3 | −0.26 | +0.25 | +0.34 | 0.30 | 0.60 | 0.25 | T3 2, T7 1 |
+| | | | ep-03 | 0 | | | | | | | (no logs) |
+| s03_t00 | dev | 09-24 | ep-01 | 6 | +2.46 | +2.61 | +3.71 | 0.44 | 1.25 | 0.01 | |
+| | | | ep-02 | 0 | | | | | | | (no logs) |
+| | | | ep-03 | 4 | +3.74 | +3.80 | +5.03 | 0.36 | 1.29 | 0.02 | |
+| s04_t00 | dev | 09-24 | ep-01 | 6 | −1.38 | −1.14 | +5.74 | 1.69 | 7.12 | 0.16 | |
+| | | | ep-02 | 3 | −2.51 | −1.66 | +0.38 | 1.44 | 2.89 | 1.02 | |
+| | | | ep-03 | 0 | | | | | | | (no logs) |
+| s05_t00 | dev | 10-12 | ep-01 | 4 | +0.79 | +0.80 | +1.35 | 0.15 | 0.56 | 0.01 | |
+| | | | ep-02 | 23 | +0.64 | +2.68 | +5.96 | 0.02 | 5.32 | 0.00 | T4 20 |
+| | | | ep-03 | 5 | +3.49 | +4.53 | +7.01 | 0.44 | 3.52 | 0.20 | |
+| s06_t00 | dev | 10-12 | ep-01 | 6 | −1.36 | −0.68 | +3.25 | 1.54 | 4.61 | 0.64 | |
+| | | | ep-02 | 12 | +0.20 | +2.10 | +3.18 | 0.28 | 2.98 | 0.00 | |
+| | | | ep-03 | 5 | +1.76 | +3.80 | +4.78 | 2.07 | 3.01 | 0.81 | |
+| s07_t00 | dev | 10-12 | ep-01 | 6 | +3.28 | +3.37 | +7.05 | 1.29 | 3.77 | 0.06 | |
+| | | | ep-02 | 13 | −4.06 | +0.07 | +8.52 | 8.56 | 12.58 | 1.12 | T4 12 (60 s task) |
+| | | | ep-03 | 0 | | | | | | | (no logs) |
+| s02_t01 | dev | 10-15 | ep-01 | 2 | +3.42 | +3.76 | +4.10 | 0.34 | 0.67 | 0.34 | |
+| | | | ep-02 | 10 | −2.77 | +0.74 | +3.11 | 0.63 | 5.88 | 0.01 | |
+| | | | ep-03 | 2 | +2.99 | +3.55 | +4.10 | 0.56 | 1.11 | 0.56 | |
+| s03_t01 | dev | 10-15 | ep-01 | 5 | −2.32 | −2.25 | +0.71 | 2.30 | 3.03 | 1.14 | |
+| | | | ep-02 | 10 | +1.46 | +1.88 | +1.89 | 0.01 | 0.43 | 0.00 | |
+| | | | ep-03 | 3 | +3.84 | +3.91 | +3.95 | 0.06 | 0.11 | 0.04 | |
+| **s06_t01** | **dev** | **10-27** | **ep-01** | **5** | **−18.83** | **−18.78** | **−10.99** | 3.56 | 7.84 | 1.76 | T4 3, T3 2 |
+| | | | ep-02 | 8 | −2.98 | −2.24 | +2.99 | 4.00 | 5.97 | 0.51 | |
+| | | | ep-03 | 3 | −0.28 | +0.04 | +5.99 | 3.13 | 6.27 | **2.97** | |
+| s04_t01 | clock-only | 10-26 | ep-01 | 5 | −14.83 | −14.66 | −13.96 | 0.10 | 0.87 | 0.03 | T4 3, T3 2 |
+| | | | ep-02 | 5 | −1.92 | −0.56 | +3.83 | 1.53 | 5.74 | 0.51 | |
+| | | | ep-03 | 2 | +3.15 | +3.20 | +3.26 | 0.06 | 0.11 | 0.06 | |
+| s07_t01 | clock-only | 10-27 | ep-01 | 2 | −14.01 | −12.26 | −10.51 | 1.75 | 3.50 | 1.75 | T3 2 |
+| | | | ep-02 | 6 | −2.44 | −0.41 | +0.46 | 1.02 | 2.90 | 0.15 | |
+| | | | ep-03 | 1 | −0.05 | −0.05 | −0.05 | | | | |
+
+Same pairs and medians over the whole DB as within ±30 min, on all 11 trials (no pair comes from an earlier snapshot day). Before 2026-10-26, every endpoint is within −2.3 … +4.5 s of dc01.
+
+### 10.2 ep-01 from 2026-10-26 onward (each pair)
+| trial | 4624 (ep-01) | type | account | dc01 4769 | service | delta |
+|---|---|---|---|---|---|---|
+| s04_t01 | 04:09:04.785 | 4 | svc_backup | 04:09:19.510 | ENDPOINT-01$ | −14.726 |
+| s04_t01 | 04:09:04.791 | 4 | svc_sql | 04:09:19.618 | ENDPOINT-01$ | −14.827 |
+| s04_t01 | 04:09:04.811 | 4 | admin_it | 04:09:19.470 | ENDPOINT-01$ | −14.660 |
+| s04_t01 | 04:09:09.773 | 3 | endpoint-01$ (::1) | 04:09:23.731 | ENDPOINT-01$ | −13.957 |
+| s04_t01 | 04:09:25.724 | 3 | endpoint-01$ | 04:09:40.353 | ENDPOINT-01$ | −14.629 |
+| s06_t01 | 06:18:28.759 | 4 | svc_sql | 06:18:47.540 | ENDPOINT-01$ | −18.781 |
+| s06_t01 | 06:18:29.125 | 4 | admin_it | 06:18:47.953 | ENDPOINT-01$ | −18.828 |
+| s06_t01 | 06:18:29.227 | 4 | svc_backup | 06:18:48.043 | ENDPOINT-01$ | −18.816 |
+| s06_t01 | 06:18:35.648 | 3 | endpoint-01$ (::1) | 06:18:50.908 | ENDPOINT-01$ | −15.260 |
+| s06_t01 | 06:19:03.809 | 3 | endpoint-01$ | 06:19:14.795 | ENDPOINT-01$ | −10.986 |
+| s07_t01 | 08:39:23.593 | 3 | endpoint-01$ (::1) | 08:39:34.100 | ENDPOINT-01$ | −10.507 |
+| s07_t01 | 08:39:31.147 | 3 | endpoint-01$ | 08:39:45.156 | ENDPOINT-01$ | −14.009 |
+
+Summary:
+- ep-01 is −14.7 s (10-26 04:09), −18.8 s (10-27 06:18) and −12.3 s (10-27 08:39, 2 pairs; −14.0 s by the nearest-per-4624 rule) behind dc01.
+- It changes between trials (snapshot revert), so the correction must be per trial. A single correction for the day would be wrong.
+- Every ep-01 pair is a start-of-trial logon on ep-01 itself; none is an attack hop.
+- Event uids are in `out/clock_offset/<trial>/pairs.csv` once implemented, and in the scratch output now.
+
+### 10.3 Pairing rule comparison (n pairs / median, s)
+The independent check is the worst corrected \|Δ\| of the CO-10 pairs under each rule:
+
+| check pair | raw | A mutual 1:1 | B nearest per 4624 | C unique GUID only | D A without type 4 |
+|---|---|---|---|---|---|
+| s03_t00 ep-01→ep-03:5985 (2) | +2.77 | +1.58 | +1.33 | +0.35 | +2.14 |
+| s05_t00 ep-02→ep-03:5985 (3) | +1.84 | −0.04 | −1.08 | +0.16 | +0.29 |
+| s06_t00 ep-01→ep-02:5985 (3) | +1.22 | −1.57 | −1.44 | −2.23 | −0.66 |
+| s03_t01 ep-01→ep-03:5985 (3) | +5.68 | −0.82 | −1.48 | −0.83 | +2.14 |
+| s06_t01 ep-01→ep-02:5985 (3) | +16.75 | +0.20 | +1.03 | −1.52 | **+6.52** |
+| s06_t01 ep-01→ep-03:5985 (4) | +18.35 | −0.48 | **−6.22** | n/a (ep-03 unmeasured) | **+5.18** |
+
+- B fails because ep-03 GUIDs are reused (s06_t01 ep-03: B median +6.10, A median +0.04).
+- D fails because ep-01's good pairs are type 4.
+- C leaves 9 hosts with 0–1 pairs.
+- Minimum instead of median (rule A): worst corrected \|Δ\| 1.49 s, which also passes here. It is rejected because the scatter is two-sided (CO-05).
+
+### 10.4 dc01 same-clock 1:1 pairs (latency)
+Median latency is +4 to +8 ms in all 11 trials. p95 is ≤ 0.1 s. A few outliers reach 400 s (s03_t00) through GUID reuse, which the 1:1 rule mostly removes. Many-to-many pairing (data-checker) gives medians of 2–76 s. So the endpoint scatter of ±3–9 s is not network or KDC latency.
+
+### 10.5 Independent check (CO-10) — kill criterion (a)
+| | groups | pairs | worst raw \|Δ\| | worst corrected \|Δ\| (rule A) |
+|---|---|---|---|---|
+| all development | 6 | 18 | 18.35 s | 1.58 s |
+| of which on or after 10-26 (s06_t01) | 2 | 7 | 18.35 s | 0.48 s |
+| clock-only s04_t01, s07_t01 | 0 | 0 | – | – (no WinRM hop from a lab host; S07 is SMB, and Sysmon logs no endpoint→endpoint 445) |
+
+Net effect per check group (ATK-06), \|raw\| → \|corrected\| (s):
+- s03_t00: 2.77 → 1.58
+- s05_t00: 1.84 → 0.04
+- s06_t00: 1.22 → **1.57 (worse)**
+- s03_t01: 5.68 → 0.82
+- s06_t01: 16.75 → 0.20, and 18.35 → 0.48
+
+So 5 of 6 groups improve. The raw values also hold the real connect-to-logon delay of about 0–1 s, so a small negative corrected value (target logon before the connection) is estimator error. Every check pair is joined on raw time (CO-10).
+
+- Raw is > 5 s in 3 of 6 groups (s03_t01 5.68 s, s06_t01 16.75 and 18.35 s). Corrected is ≤ 1.58 s in all 6.
+- Check pairs come 4 min after ep-01's pairs in s06_t01 (06:22:12–06:22:56 vs 06:18:28), so the offset held for at least that long.
+- Coverage limit: WinRM hops only. ep-02 → ep-03 occurs once (s05_t00). ep-01 / ep-02 / ep-03 as a target with SMB are not covered, which is why CO-12 is needed.
+
+### 10.7 Checks added after the attacker review
+| trial | largest \|pair delta\| (s) | ep-01 last pair | last agent event | ep-01 late gap (s) | pairs from a lab-IP 4624 | endpoint boots in [first pair, window end] |
+|---|---|---|---|---|---|---|
+| s02_t00 | 3.98 | 05:35:51 | 05:42:47 | 416 | 0 | ep-02 6005 05:37:46 (ep-02 pairs from 05:37:58, after it) |
+| s03_t00 | 5.03 | 09:37:27 | 09:41:33 | 246 | 1 | ep-01 6005 09:37:10 (before ep-01 pairs) |
+| s04_t00 | 5.74 | 10:55:16 | 10:55:07 | −9 | 0 | ep-01 6005 10:54:43 (before) |
+| s05_t00 | 7.01 | 07:04:18 | 07:12:45 | 507 | 1 | none |
+| s06_t00 | 4.78 | 08:59:22 | 09:02:25 | 183 | 2 | none |
+| s07_t00 | 8.52 | 09:10:58 | 09:16:58 | 360 | 0 | none |
+| s02_t01 | 4.10 | 05:33:29 | 05:32:40 | −50 | 0 | none |
+| s03_t01 | 3.95 | 08:26:38 | 08:28:15 | 97 | 1 | ep-03 6005 08:26:37 (before ep-03 pairs) |
+| s06_t01 | 18.83 | 06:19:03 | 06:19:38 | 35 | 2 | none |
+| s04_t01 | 14.83 | 04:09:25 | 04:08:01 | −85 | 0 | ep-01 6005 04:08:56, ep-03 6005 04:08:59 (before) |
+| s07_t01 | 14.01 | 08:39:31 | 08:40:38 | 68 | 0 | none |
+
+Reading of the table:
+- The boots are the reverts at trial start; the pairs follow them. CO-15 changes no value in §10.1.
+- `MAX_PAIR_DELTA_S = 60` drops no measured pair.
+- A negative late gap means ep-01's pairs continue after the last agent event.
+
+### 10.6 Data-checker cross-check (independent SQL, 2026-11-12)
+- **Columns:** present and populated. GUIDs are lower-case without braces; all-zero GUIDs are NULL with `logon_guid_state = 'zero'`.
+- **s06_t01 ep-01:** the same pair deltas (min −18.828, max −10.986). With "nearest 4769 per 4624" (6 pairs) the median is −18.463 s; with rule A (5 pairs) it is −18.781 s.
+- **s04_t01 ep-01:** −14.693 s (nearest) vs −14.66 s (A).
+- **s07_t01 ep-01:** −14.009 s (nearest, 3 pairs) vs −12.26 s (A, 2 pairs). The 2-pair case is where the rules differ most (1.75 s).
+- **GUID reuse:** 62 GUIDs with several 4624s in s06_t01 (mostly ep-03) and 29 with several 4769s. This confirms the need for CO-03.
+- **Earlier snapshot days:** events from 09-17 … 10-12 are in the 10-26/27 DBs; none of them contributes an endpoint pair.
+- **Time-change events:** not kept by the normaliser. The channels present are Security {4624, 4625, 4634, 4647, 4648, 4672, 4688, 4697, 4768, 4769, 4776, 5140, 5145, 1102} and System {41, 104, 1074, 6005, 6006, 6008, 7045} (s06_t01).
