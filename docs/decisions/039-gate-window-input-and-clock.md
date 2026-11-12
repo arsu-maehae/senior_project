@@ -1,6 +1,6 @@
 # 039 — Gate window from neutral trial metadata; corrected times; t00 only until clocks are corrected
 
-**Date:** 2026-11-11 · **Status:** accepted (owner answers Q2, Q3, Q4 on spec 02_gate, 2026-11-11); item 1 amended by 040 · **Task:** T6 (6.4), T7 (7.7) · **Amends:** PLAN 6.4 (window source) and 7.7 (identity look-back) · **Relates to:** 026, 032, 036
+**Date:** 2026-11-11 · **Status:** accepted (owner answers Q2, Q3, Q4 on spec 02_gate, 2026-11-11); item 1 amended by 040; item 3 (raw-time refusal from 2026-10-26) amended by [043](043-clock-offset-method.md) (2026-11-12: corrected times; refusal per spec 08 CO-17) · **Task:** T6 (6.4), T7 (7.7) · **Amends:** PLAN 6.4 (window source) and 7.7 (identity look-back) · **Relates to:** 026, 032, 036
 
 ## Context
 PLAN 6.4 said the gate clips each trial to its answer key's `agent.run_interval`. The attacker review (ATK-12) noted that this feeds ground-truth files into the system under test, and test keys (t02–t10) are not approved yet. The clip also drops source-host logons opened before the window that identity (Correction K) needs (ATK-09). And from 2026-10-26 ep-01 ran 10–27 s behind dc01 (decision 032), so a raw-time clip and the 5 s pairings can be wrong on those trials.

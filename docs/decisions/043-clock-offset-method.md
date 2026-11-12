@@ -1,6 +1,6 @@
 # 043 — Clock offset method: 1:1 LogonGuid pairs, median per host and trial; s04_t01/s07_t01 as clock-only evidence; two-step approval
 
-**Date:** 2026-11-12 · **Status:** PROPOSED, awaiting the owner. Step 1 (method) is open now; step 2 (`MIN_PAIRS`, `MAX_LOO_SHIFT_S`) waits for the rerun t01s · **Task:** T6b.1 · **Spec:** [08_clock_offset](../specs/08_clock_offset.md) · **Relates to:** 014 (amends its last sentence for kept trials), 019, 032, 034, 039
+**Date:** 2026-11-12 · **Status:** **accepted for step 1 (method), owner 2026-11-12.** Step 2 is open: `MIN_PAIRS`, `MAX_LOO_SHIFT_S`, `READING_AGREE_S` and the `late_gap_s` limit are confirmed on the rerun t01s · **Task:** T6b.1 · **Spec:** [08_clock_offset](../specs/08_clock_offset.md) · **Relates to:** 014 (amends its last sentence for kept trials), 019, 032, 034, 039
 
 ## Context
 - **The skew:** from 2026-10-26, ep-01 ran 10–27 s behind dc01 (032). Before that date, endpoints sit within −2.3 … +4.5 s of dc01. Host pairs still reach 5–6 s, e.g. s03_t01 ep-01→ep-03, where the WinRM connection precedes the target logon by a raw 5.68 s.
@@ -21,7 +21,7 @@
 | A with minimum instead of median | assumes latency ≥ 0 | scatter is two-sided (s07_t00 ep-02 −4.06 … +8.52) | checks ≤ 1.49 s (passes, rejected on the model) |
 | No correction (014 option B as is) | nothing new | raw ep-01 pairs up to 18.35 s apart | 3 of 6 checks > 5 s raw |
 
-## Decision (proposed)
+## Decision (accepted for step 1, owner 2026-11-12)
 1. **Method:**
    - pair endpoint 4624 ↔ dc01 4769 by LogonGuid, 1:1 mutual nearest, in the raw agent window ± 30 min;
    - offset = median delta per host and trial; dc01 = 0;
@@ -41,7 +41,20 @@
 4. **Two-step approval (owner A2):** the method is approved now. `MIN_PAIRS` and `MAX_LOO_SHIFT_S` are confirmed on the rerun t01 trials of 2026-11-23..28, against a per-trial clock reading of each VM vs dc01. Computed vs read must agree within 2.5 s (CO-12). Test trials (t02–t10) are never used.
 5. **Decision 014 amended:** its sentence "measured offsets are reported per trial, not applied" no longer holds for trials with this correction. The 5 s tolerance and the `order_within_tolerance` flag stay.
 
+## Owner answers (step 1, 2026-11-12; spec 08 §8)
+- **Q2:** a trial on or after 2026-10-26 with an uncorrected host (`none` or `stale`) that has events in the window is refused. `wide` hosts run, with the flag carried into every result (CO-17).
+- **Q3:** a host with 1 pair is not corrected; `MIN_PAIRS = 2` is provisional.
+- **Q4:** an unstable host is corrected with status `wide`, never left raw.
+- **Q6:** Security 4616 and System 1 are kept for new ingests only (spec 01 amendment in T6b.2), with no re-ingest. A read-only scan of the existing trials' decoded exports flags any trial with a clock change in its window (CO-18, CO-19).
+- **Q8 (c):** each rerun scenario's t01 (development) is not synced, with readings before the run and after collection. t02–t10 are synced after a reading, and both readings are recorded. Step 2 uses only the t01 start/end readings (CO-12).
+- **Q5:** readings are `w32tm /stripchart` text, `<HOST>_clock.txt`, one per VM per trial in the trial folder.
+- **Q10:** every host is corrected; no minimum offset.
+- **Q12:** no change to the identity value now. `offset_unc` and `clock_unreliable` are carried to T7, and the T7 spec council decides.
+- **Q1, Q7, Q9:** recommendations accepted.
+
 ## Consequences
+- Amends decision 039 item 3: the 2026-10-26 raw-time refusal is replaced by the offsets-file checks and CO-17.
+- Amends decision 014: its last sentence ("reported, not applied") no longer holds for corrected trials.
 - The gate and `trial_window` switch to `TIME_BASIS = corrected` (spec 08 §4.1; amendments to 02_gate in T6b.2). The 2026-10-26 refusal is replaced by "offsets file present and matching".
 - Results carry the offsets and `clock_flag`.
 - **Limits to state in the report:**
