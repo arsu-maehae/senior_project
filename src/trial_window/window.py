@@ -23,8 +23,8 @@ from answer_key.agent_tree import TRIAL_GAP_S, agent_roots, run_start_ts
 from answer_key.timeutil import fmt_utc, parse_utc
 from clock_offset import changes as _co_changes
 from clock_offset import params as _co_params
-from clock_offset.correct import (ClockChanges, Offsets, co17_refusal, corrected_us, load_clock_changes, load_offsets,
-                                  trial_clock_change_flag)
+from clock_offset.correct import (ClockChanges, Offsets, clock_files_refusal, co17_refusal, corrected_us,
+                                  load_clock_changes, load_offsets, trial_clock_change_flag)
 from gate.timeutil import fmt_us, to_us
 
 from . import params
@@ -348,18 +348,25 @@ def id_refusal(trial_id: str, *, excluded_trials: Collection[str] = params.EXCLU
 
 
 def clock_refusal(clock: ClockFiles, start_utc: str | None = None, db_sha256: str | None = None,
-                  co17_date: date = params.RAW_TIME_CUTOFF_DATE) -> str | None:
+                  co17_date: date = params.RAW_TIME_CUTOFF_DATE, trial_id: str | None = None) -> str | None:
     """Clock-file refusals of spec 2 / 2.2 (T6b.2, decision 043; spec 08 section 4.1 item 3), else None.
 
-    In order: offsets file missing; clock-changes file missing; offsets ``db_sha256`` differs from the DB
-    (only when ``db_sha256`` is given, i.e. once the DB is hashed); CO-17 on the window start (only when
-    ``start_utc`` is given). WHY: corrected times are only meaningful with the offsets computed from this
-    very DB, and on or after 2026-10-26 an uncorrected host may be up to 27 s wrong (decision 032).
+    In order: offsets file missing; clock-changes file missing; the two files do not belong to ``trial_id``
+    or to each other, the scan was incomplete or an ok/wide row has no offset (``clock_files_refusal``, only
+    when ``trial_id`` is given; review SF-3, SF-4); offsets ``db_sha256`` differs from the DB (only when
+    ``db_sha256`` is given, i.e. once the DB is hashed); CO-17 on the window start (only when ``start_utc`` is
+    given). WHY: corrected times are only meaningful with the offsets computed from this very DB, bound to
+    the clock changes of a complete scan, and on or after 2026-10-26 an uncorrected host may be up to 27 s
+    wrong (decision 032).
     """
     if clock.offsets is None:
         return f"clock offsets file missing: {clock.offsets_path.name} (spec 08 section 3; run clock_offset first)"
     if clock.changes is None:
         return f"clock changes file missing: {clock.changes_path.name} (spec 08 section 3; run clock_offset first)"
+    if trial_id is not None:
+        reason = clock_files_refusal(trial_id, clock.offsets, clock.changes)
+        if reason:
+            return reason
     if db_sha256 is not None and clock.offsets.db_sha256.strip().lower() != db_sha256.strip().lower():
         return (f"offsets db_sha256 {clock.offsets.db_sha256} differs from the trial DB SHA-256 {db_sha256} "
                 f"(offsets computed from another DB version)")
@@ -378,13 +385,14 @@ def refusal(trial_id: str, start_utc: str | None = None, *,
 
     WHY one function for the window step and the gate: both must refuse exactly the same trials. The id
     checks always run; the clock-file checks run only when ``clock`` is given (None = not checked yet, e.g.
-    before the DB is opened, or a raw-basis window for GTA-06). The t00-only and 2026-10-26 refusals of
-    decision 039 are removed (T6b.2): the date now only enters through CO-17.
+    before the DB is opened, or a raw-basis window for GTA-06), and include the binding of the two files to
+    this trial and to each other (``clock_files_refusal``, review SF-3/SF-4). The t00-only and 2026-10-26
+    refusals of decision 039 are removed (T6b.2): the date now only enters through CO-17.
     """
     reason = id_refusal(trial_id, excluded_trials=excluded_trials, clock_only_trials=clock_only_trials)
     if reason or clock is None:
         return reason
-    return clock_refusal(clock, start_utc, db_sha256, co17_date)
+    return clock_refusal(clock, start_utc, db_sha256, co17_date, trial_id=trial_id)
 
 
 def offsets_path(repo: Path, trial_id: str) -> Path:

@@ -1,9 +1,10 @@
-"""CLI: ``python -m clock_offset [--trials T ...] [--repo PATH] [--no-scan]`` (cwd=src).
+"""CLI: ``python -m clock_offset [--trials T ...] [--repo PATH]`` (cwd=src).
 
 Writes ``data/processed/<trial>.clock_offsets.csv``, ``data/processed/<trial>.clock_changes.csv`` and
 ``out/clock_offset/<trial>/`` (spec 08 section 3; owner D5, D6). Reads the trial DBs (read-only, hash
 before = after), ``data/manifest.csv`` and, for the CO-19 scan, the decoded JSONL exports (read-only).
-``--no-scan`` skips the export scan (clock_changes.csv then holds the DB changes only).
+The export scan always runs: there is no ``--no-scan`` (review SF-3), because a scan-less
+clock_changes.csv would look complete to the window step and the gate.
 A missing DB for an allowed trial is a hard error (exit 2, nothing written); refused trials
 (CO-01) are reported as REFUSED.
 """
@@ -44,20 +45,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="clock_offset", description=__doc__)
     ap.add_argument("--trials", nargs="+", default=list(params.DEFAULT_TRIALS))
     ap.add_argument("--repo", type=Path, default=REPO)
-    ap.add_argument("--no-scan", action="store_true",
-                    help="skip the CO-19 export scan (clock_changes.csv then holds DB changes only)")
     a = ap.parse_args(argv)
     try:
-        result = run(a.repo.resolve(), a.trials, scan=not a.no_scan)
+        result = run(a.repo.resolve(), a.trials)
     except ClockOffsetError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     for line in report_lines(result):
         print(line)
     print(f"wrote {len(result['rows'])} offsets file(s); refused {len(result['refused'])}")
-    if a.no_scan:
-        print("warning: --no-scan: the CO-19 export scan was not run; clock_changes.csv holds DB changes only "
-              "and must be rebuilt by a full run before any consumer uses it")
+    incomplete = sorted(t for t, st in result["stats"].items() if st["clock_scan"] != "complete")
+    if incomplete:
+        print("warning: clock-change scan incomplete (clock_scan = incomplete; trial_window and the gate refuse "
+              "these trials): " + ", ".join(incomplete))
     return 0
 
 

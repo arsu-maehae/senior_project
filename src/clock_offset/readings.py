@@ -23,6 +23,13 @@ the local wall-clock times printed by w32tm into UTC. Without that line the call
 with neither, or with an unknown name and no ``tz``, the file is ``invalid``.
 
 Sign and time zone are confirmed at the first rerun session (spec 08 CO-12).
+
+Procedure (owner 2026-11-12, decision 043 addendum, review SF-2): the reruns are NOT synced. Every trial
+gets one reading before the scenario and one after log collection on EP-01/02/03, each followed by the
+``tzutil /g`` line, so a trial's file holds a ``start`` and an ``end`` session. The post-sync support
+(``sync_utc`` / ``post_sync`` in ``assign_readings``) stays in the code but is unused: no rerun passes a sync
+time. WHY no sync: a resync would land after ep-01's only pairs (its boot logons, 4-35 s after the boot),
+so the D2 cut would leave ep-01 stale or without pairs and CO-17 would refuse every rerun trial.
 """
 from __future__ import annotations
 
@@ -542,8 +549,9 @@ def assign_readings(readings: Sequence[Session], run_start_utc: datetime, run_en
     """Assign sessions to start / end / post-sync by time (CO-12).
 
     start = last usable session strictly before the run start, and strictly before the sync when one
-    is given. WHY the sync bound: on t02-t10 the order is reading, sync, reading, run, so "last before
-    the run" would be the post-sync reading, which no longer shows the skew the start reading is for.
+    is given (unused since owner 2026-11-12: the reruns are not synced). WHY the sync bound: with a sync the
+    order would be reading, sync, reading, run, so "last before the run" would be the post-sync reading,
+    which no longer shows the skew the start reading is for.
     end = first usable session strictly after the run end (a reading after collection is after it).
     post_sync = first usable session strictly after the sync. Ties in time keep file order.
     """

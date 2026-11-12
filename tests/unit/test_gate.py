@@ -262,7 +262,9 @@ def make_case(tmp_path: Path, rows: list[dict] | None, trial: str = TRIAL, *, st
               offsets: dict | None = None, changes: list | None = None, clock_flag: str = "",
               clock_change_in_window: str = "false", start_host: str = "", end_host: str = "",
               no_offsets_file: bool = False, no_changes_file: bool = False, offsets_db_sha: str | None = None,
-              row_offsets_sha: str | None = None, row_changes_sha: str | None = None) -> Case:
+              row_offsets_sha: str | None = None, row_changes_sha: str | None = None,
+              clock_scan: str = "complete", offsets_trial: str | None = None,
+              recorded_changes_sha: str | None = None, swap_changes: list | None = None) -> Case:
     """A temp repo with one synthetic trial: DB, valid clock files (ZERO offsets by default, every host `ok`) and a
     window row on the corrected basis with matching SHA-256 values. Keyword arguments break one thing at a time."""
     repo = tmp_path / name
@@ -277,10 +279,14 @@ def make_case(tmp_path: Path, rows: list[dict] | None, trial: str = TRIAL, *, st
         write_db(db, rows if rows else [noise()])
     db_sha = sha256_of(db) if db.exists() else "0" * 64
     o_sha = c_sha = "0" * 64
-    if not no_offsets_file:
-        o_sha = cf.write_offsets(cf.offsets_path(repo, trial), trial, offsets_db_sha or db_sha, offsets)
     if not no_changes_file:
         c_sha = cf.write_changes(cf.changes_path(repo, trial), changes)
+    if not no_offsets_file:               # SF-3: the offsets rows carry the SHA-256 of the changes file beside them
+        o_sha = cf.write_offsets(cf.offsets_path(repo, trial), offsets_trial or trial, offsets_db_sha or db_sha,
+                                 offsets, changes_sha=c_sha if recorded_changes_sha is None else recorded_changes_sha,
+                                 clock_scan=clock_scan)
+    if swap_changes is not None and not no_changes_file:   # a changes file from another run replaces the written one
+        c_sha = cf.write_changes(cf.changes_path(repo, trial), swap_changes)
     if not no_windows_file:
         row = None if omit_row else {
             "trial_id": trial, "start_utc": start, "end_utc": end, "window_source": window_source,
@@ -1227,6 +1233,19 @@ REFUSALS = {
     "row_clock_changes_sha256_empty": dict(row_changes_sha=""),
     "clock_only_s04_t01": dict(trial="s04_t01"),
     "clock_only_s07_t01": dict(trial="s07_t01"),
+    # review SF-3 (spec 08 section 3 / spec 02 section 2): the offsets file must be bound to the changes file and the trial
+    "sf3_changes_file_not_the_one_the_offsets_hash_names": dict(
+        swap_changes=[cf.change(TRIAL, "ep-02", "2026-09-24T10:30:00.000000Z", shift_ms=8480, counted=True)]),
+    "sf3_offsets_record_another_changes_hash": dict(recorded_changes_sha="4" * 64),
+    "sf3_offsets_record_empty_changes_hash": dict(recorded_changes_sha=""),
+    "sf3_changes_row_names_another_trial": dict(
+        changes=[cf.change("s03_t00", "ep-02", "2026-09-24T10:30:00.000000Z", shift_ms=8480, counted=True)]),
+    "sf3_offsets_rows_name_another_trial": dict(offsets_trial="s03_t00"),
+    "sf3_ok_row_without_offset_ms": dict(offsets=cf.offsets_spec(ep_01=(None, "ok", True))),
+    "sf3_wide_row_without_offset_ms": dict(offsets=cf.offsets_spec(ep_02=(None, "wide", True))),
+    # review SF-4: an incomplete CO-19 export scan
+    "sf4_clock_scan_incomplete": dict(clock_scan="incomplete"),
+    "sf4_clock_scan_not_a_known_value": dict(clock_scan="partial"),
     # CO-17: window start on/after 2026-10-26 with a none / stale host that has events
     "co17_none_host_on_cutoff_date": dict(start="2026-10-26T00:00:00.000Z", end="2026-10-26T01:00:00.000Z",
                                           offsets=cf.offsets_spec(ep_01=(None, "none", True))),
@@ -1293,6 +1312,14 @@ def test_gtt07_refusal_reasons_name_the_cause(tmp_path):
         "row_clock_changes_sha256_mismatch": ("clock_changes_sha256",), "time_basis_raw": ("time_basis",),
         "db_sha256_mismatch": ("db_sha256",), "co17_none_host_on_cutoff_date": ("CO-17", "ep-01"),
         "co17_stale_host_after_cutoff_date": ("CO-17", "ep-02"),
+        "sf3_changes_file_not_the_one_the_offsets_hash_names": ("clock_changes_sha256",),
+        "sf3_offsets_record_another_changes_hash": ("clock_changes_sha256",),
+        "sf3_offsets_record_empty_changes_hash": ("clock_changes_sha256",),
+        "sf3_changes_row_names_another_trial": ("clock changes file is for trial", "s03_t00"),
+        "sf3_offsets_rows_name_another_trial": ("clock offsets file is for trial", "s03_t00"),
+        "sf3_ok_row_without_offset_ms": ("offset_ms", "ep-01"),
+        "sf3_wide_row_without_offset_ms": ("offset_ms", "ep-02"),
+        "sf4_clock_scan_incomplete": ("incomplete", "clock_scan.json", TRIAL),
     }
     for i, (name, words) in enumerate(sorted(expect.items())):
         c = _refusal_case(tmp_path / f"c{i}", REFUSALS[name])

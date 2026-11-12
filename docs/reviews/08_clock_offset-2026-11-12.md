@@ -112,3 +112,18 @@ Ranked by likely damage. "Before test gating" means it should be fixed before an
 
 ## Verdict
 No blocking item, so T6b.2 and T6b.3 are done. Step 2 (PLAN 6b.4) stays open. SF-1..SF-4 should be fixed before any t02–t10 trial is gated, and SF-2 before the rerun t02–t10 trials are gated (it depends on when the resync is run). SF-6, SF-7 and the ATK-20/30 notes are inputs to step 2 and the T7 council. SF-9 and SF-10 are documentation.
+
+## Resolution of SF-1..SF-4 (2026-11-12, owner decisions in decision 043 items 11–12)
+| # | Resolution |
+|---|---|
+| SF-1 | **Fixed.** Clock changes found by the CO-19 export scan count like DB rows for the CO-15 cut and for `stale` (deduplicated on host, channel, event id and instant). The owner set the flag and classification to be measured against the host's **original** pairs (before the cut): a counted step between them is `between_pairs` and flags the trial, while the cut still drops the earlier pairs. Spec 08 CO-15 and CO-19 amended. |
+| SF-2 | **Resolved by procedure, no code.** Lab-order check: on all 11 allowlisted trials, ep-01's offset pairs are its boot logons 4–35 s after the boot, so the planned resync would land after them and refuse every rerun trial. Owner: no rerun trial is synced; each trial gets a reading before the scenario and one after collection on EP-01/02/03, each followed by `tzutil /g`. The D2 cut is unchanged. Spec 08 CO-12 and Q8, decisions 043 (item 11) and 032, and `docs/lab/rerun_plan.md` amended (commit bab68d8). |
+| SF-3 | **Fixed.** `--no-scan` is removed, and `run(write=True, scan=False)` raises. The offsets file carries `clock_changes_sha256` and `clock_scan`. trial_window and the gate refuse when an offsets or changes row names another trial, when the changes file does not match its hash, or when an `ok`/`wide` row has no `offset_ms`. The `params.py` hash is re-recorded in 043 (`0068779d…`); no parameter value changed. |
+| SF-4 | **Fixed.** A skipped manifest-listed export, or a clock-change record without a time, gives `clock_scan = incomplete` and a null flag, and the trial is refused (owner). A host or channel with no file in the manifest is not a skip. |
+
+**Effect on the development data:**
+- On the 11 allowlisted trials, every offset value, `pairs.csv`, `clock_changes.csv` and `clock_events.csv` is identical to before.
+- Every scan is `complete`.
+- On the six t00 trials the four gate CSVs are byte-identical; only `offsets_sha256` changed in `data/trial_windows.csv`.
+
+SF-5..SF-10 stay open (step 2, T7 council, docs).

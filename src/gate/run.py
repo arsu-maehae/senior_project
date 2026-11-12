@@ -60,7 +60,8 @@ def check_allowed(trial_id: str, db_path: Path, windows_csv: Path, repo: Path | 
                   offsets_csv: Path, changes_csv: Path) -> tuple[dict[str, str], int, int, ClockFiles]:
     """GT-00 before any event is read (spec 2, 2.2 as amended in T6b.2, decision 043), in this order: trial
     id; quarantine; decision-019 exclusion and clock-only trial; window row and edges; window time_basis
-    (must be the gate's, ``corrected``); offsets and clock-changes files present; the row's
+    (must be the gate's, ``corrected``); offsets and clock-changes files present, for this trial, bound to
+    each other and from a complete scan (``clock_files_refusal``, review SF-3/SF-4); the row's
     ``offsets_sha256`` / ``clock_changes_sha256`` equal the files' hashes; CO-17 on the window start.
 
     The window ``db_sha256`` and the offsets ``db_sha256`` checks run in ``load_events``, once the DB is

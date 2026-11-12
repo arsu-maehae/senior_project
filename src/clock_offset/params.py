@@ -108,7 +108,7 @@ OFFSETS_COLUMNS: tuple[str, ...] = (
     "trial_id", "host", "offset_ms", "offset_status", "offset_unc_ms", "n_pairs", "n_dropped_far",
     "n_pairs_lab_ip", "late_gap_s", "min_ms", "q1_ms", "median_ms", "q3_ms", "max_ms", "loo_shift_ms",
     "pair_span_s", "host_has_events", "method", "search_start_utc", "search_end_utc", "db_sha256",
-    "tool_version",
+    "tool_version", "clock_changes_sha256", "clock_scan",
 )
 PAIRS_COLUMNS: tuple[str, ...] = (
     "host", "event_uid_4624", "event_uid_4769", "logon_guid", "t_4624_utc", "t_4769_utc", "delta_ms",

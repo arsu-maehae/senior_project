@@ -86,7 +86,9 @@ def check_clock(trial_id: str, start_us: int | None, params: GateParams, clock: 
     ``refusal``, so the window step and the gate refuse exactly the same trials.
 
     Always: quarantined id, decision-019 exclusion, clock-only trial. With ``clock``: a missing offsets or
-    clock-changes file, and (with ``start_us``) CO-17 on the window start. WHY the start is reformatted to
+    clock-changes file; files for another trial, not bound to each other (``clock_changes_sha256``), from an
+    incomplete scan or with an ok/wide row without an offset (``clock_files_refusal``, review SF-3/SF-4);
+    and (with ``start_us``) CO-17 on the window start. WHY the start is reformatted to
     ``...Z``: the gate has already parsed the instant itself; one text form keeps ``refusal`` simple.
     """
     start_text = fmt_us(start_us) if start_us is not None else None

@@ -20,7 +20,8 @@ from typing import Any, Iterable, Iterator, Mapping
 from gate.timeutil import US_PER_MS
 
 from . import params
-from .changes import CLASSIFICATIONS, CLOCK_CHANGES_COLUMNS, FLAG_CLASSES, ClockChange, before_counted, change_from_row
+from .changes import (CLASSIFICATIONS, CLOCK_CHANGES_COLUMNS, FLAG_CLASSES, SCAN_COMPLETE, SCAN_INCOMPLETE,
+                      ClockChange, before_counted, change_from_row)
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
@@ -46,11 +47,16 @@ class Offsets:
 
     ``db_sha256`` is the DB the offsets were computed from; ``file_sha256`` is the hash of the
     offsets file bytes ("" when built in memory), which trial_window records as ``offsets_sha256``.
+    ``clock_changes_sha256`` is the SHA-256 of the clock_changes.csv written in the same run and
+    ``clock_scan`` is ``complete`` | ``incomplete`` (review SF-3, SF-4); both are trial-level columns
+    ("" when the rows do not carry them, e.g. hand-built rows).
     """
     trial_id: str
     db_sha256: str
     file_sha256: str
     hosts: Mapping[str, HostOffset]
+    clock_changes_sha256: str = ""
+    clock_scan: str = ""
 
     @property
     def clock_flag(self) -> list[str]:
@@ -90,10 +96,11 @@ def offsets_from_rows(rows: Iterable[Mapping[str, Any]], file_sha256: str = "") 
 
     WHY one builder for both: the CO-10 check uses the offsets just computed, the consumers use the
     file, and both must go through the same parsing so they cannot disagree. All rows must share one
-    trial id and one db_sha256, and a status must be one of the spec values.
+    trial id, one db_sha256, one clock_changes_sha256 and one clock_scan, and a status must be one of the
+    spec values.
     """
     hosts: dict[str, HostOffset] = {}
-    trials, shas = set(), set()
+    trials, shas, bindings = set(), set(), set()
     for r in rows:
         status = str(r["offset_status"]).strip()
         if status not in params.STATUSES:
@@ -105,10 +112,15 @@ def offsets_from_rows(rows: Iterable[Mapping[str, Any]], file_sha256: str = "") 
                                  _bool_cell(r["host_has_events"]))
         trials.add(str(r["trial_id"]).strip())
         shas.add(str(r["db_sha256"]).strip())
+        bindings.add((str(r.get("clock_changes_sha256") or "").strip(), str(r.get("clock_scan") or "").strip()))
     if len(trials) != 1 or len(shas) != 1:
         raise ValueError(f"offsets rows must name one trial and one DB hash (trials {sorted(trials)}, "
                          f"hashes {sorted(shas)})")
-    return Offsets(trials.pop(), shas.pop(), file_sha256, MappingProxyType(hosts))
+    if len(bindings) != 1:
+        raise ValueError(f"offsets rows must carry one clock_changes_sha256 and one clock_scan "
+                         f"(found {sorted(bindings)})")
+    changes_sha, scan = bindings.pop()
+    return Offsets(trials.pop(), shas.pop(), file_sha256, MappingProxyType(hosts), changes_sha, scan)
 
 
 def parse_offsets_text(text: str, file_sha256: str = "") -> Offsets:
@@ -213,6 +225,35 @@ def load_clock_changes(path: Path) -> ClockChanges:
     """Read ``<trial>.clock_changes.csv``; ``file_sha256`` is the SHA-256 of the exact file bytes."""
     data = Path(path).read_bytes()
     return parse_clock_changes_text(data.decode("utf-8"), hashlib.sha256(data).hexdigest())
+
+
+def clock_files_refusal(trial: str, offsets: Offsets, changes: ClockChanges) -> str | None:
+    """Reason text if the two clock files do not belong together or to ``trial``, else None (review SF-3, SF-4;
+    decision 043).
+
+    In order: the offsets name another trial; the clock changes name another trial; the offsets'
+    ``clock_changes_sha256`` is not the SHA-256 of the changes file; the export scan was incomplete; a row
+    with status ok or wide has no ``offset_ms``. WHY: corrected times and the ``clock_unreliable`` marking
+    are only right with the changes file written in the same run as the offsets, from a complete scan; an
+    applied status without an offset would silently leave that host uncorrected. Pure: both hashes come from
+    ``load_offsets`` / ``load_clock_changes``.
+    """
+    want = trial.strip().lower()
+    if offsets.trial_id.strip().lower() != want:
+        return f"clock offsets file is for trial {offsets.trial_id!r}, not {trial!r}"
+    if changes.trial_id is not None and changes.trial_id.strip().lower() != want:
+        return f"clock changes file is for trial {changes.trial_id!r}, not {trial!r}"
+    if offsets.clock_changes_sha256.strip().lower() != changes.file_sha256.strip().lower():
+        return (f"offsets clock_changes_sha256 {offsets.clock_changes_sha256!r} differs from the SHA-256 of the "
+                f"clock changes file {changes.file_sha256!r} (files not written by the same clock_offset run)")
+    if offsets.clock_scan != SCAN_COMPLETE:
+        detail = "" if offsets.clock_scan == SCAN_INCOMPLETE else f" (clock_scan {offsets.clock_scan!r})"
+        return f"clock-change scan incomplete{detail}, see out/clock_offset/{trial}/clock_scan.json"
+    malformed = sorted(h for h, o in offsets.hosts.items()
+                       if o.status in (params.STATUS_OK, params.STATUS_WIDE) and o.offset_ms is None)
+    if malformed:
+        return f"malformed clock offsets file: status ok/wide without offset_ms for {', '.join(malformed)}"
+    return None
 
 
 def trial_clock_change_flag(changes: ClockChanges) -> bool:

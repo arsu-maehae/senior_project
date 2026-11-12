@@ -36,7 +36,9 @@ class HostPairs:
     """Everything the pairing decided for one endpoint, so each count in stats.json is traceable.
 
     ``kept`` are the pairs the estimate uses; ``dropped_far`` (CO-02) and ``dropped_before_change``
-    (CO-15/CO-18, owner D2) keep the pairs that were removed, with their uids. ``cut_event_uid`` is the
+    (CO-15/CO-18, owner D2) keep the pairs that were removed, with their uids. ``kept`` plus
+    ``dropped_before_change`` are the host's ORIGINAL pairs (mutual nearest after the far drop, before the
+    change cut), against which clock changes are classified (owner 2026-11-12). ``cut_event_uid`` is the
     counted change that set the cut; ``stale_event_uids`` are counted changes after the last kept pair.
     ``expected_change_uids``: counted clock changes before the first kept pair (planned resync, revert
     catch-up); ``routine_change_uids``: clock changes below ``MIN_CLOCK_STEP_MS`` (listed only, D1).
@@ -52,6 +54,15 @@ class HostPairs:
     stale_event_uids: tuple[str, ...] = field(default=())
     expected_change_uids: tuple[str, ...] = field(default=())
     routine_change_uids: tuple[str, ...] = field(default=())
+
+    @property
+    def original(self) -> tuple[Pair, ...]:
+        """The pairs before the change cut (mutual nearest after the far drop), in pairs.csv order.
+
+        WHY: the owner (2026-11-12) classifies a clock change against these, so a step that the cut used
+        to drop earlier pairs is still reported as ``between_pairs`` instead of disappearing as expected.
+        """
+        return tuple(sort_pairs(self.kept + self.dropped_before_change))
 
     @property
     def stale(self) -> bool:
@@ -189,26 +200,58 @@ def is_change_event(row: Row, shifts: Mapping[str, ShiftInfo] | None = None,
     return False
 
 
-def change_events(events: Iterable[Row], host: str, shifts: Mapping[str, ShiftInfo] | None = None) -> list[Row]:
-    """The host's counted change events over the whole DB, sorted by (instant, uid)."""
-    return sorted((e for e in events if e.get("host") == host and is_change_event(e, shifts)),
-                  key=lambda e: (e["us"], str(e["event_uid"])))
+def change_key(row: Row) -> tuple:
+    """(host, channel, event_id, instant) of a change row: the identity used to deduplicate DB and export rows.
+
+    WHY these four: a post-CO-18 DB row and the export record it was imported from describe one physical
+    event and share all four, while their event_uids differ (DB uid vs ``export:<sha256>:<record_index>``).
+    """
+    return (row.get("host"), row.get("channel"), row.get("event_id"), row["us"])
+
+
+def host_change_rows(events: Iterable[Row], host: str, extra_changes: Iterable[Row] = ()) -> list[Row]:
+    """The host's DB rows plus its export change rows (SF-1), an export row dropped when a DB row (or an earlier
+    export row) has the same ``change_key``; sorted by (instant, uid).
+
+    WHY DB rows are kept as they are: they come from ``events_dedup`` (already deduplicated), and a DB row
+    carries the uid the rest of the pipeline knows; the export row only adds a change the DB does not hold
+    (every DB ingested before CO-18).
+    """
+    rows = [e for e in events if e.get("host") == host]
+    seen = {change_key(e) for e in rows if is_clock_change(e)}
+    for x in extra_changes:
+        if x.get("host") != host:
+            continue
+        k = change_key(x)
+        if k not in seen:
+            seen.add(k)
+            rows.append(x)
+    return sorted(rows, key=lambda e: (e["us"], str(e["event_uid"])))
+
+
+def change_events(events: Iterable[Row], host: str, shifts: Mapping[str, ShiftInfo] | None = None,
+                  extra_changes: Iterable[Row] = ()) -> list[Row]:
+    """The host's counted change events over the whole DB and the export change rows, sorted by (instant, uid).
+
+    ``extra_changes`` are the CO-19 export hits as change rows (SF-1); their shifts must be in ``shifts``.
+    """
+    return [e for e in host_change_rows(events, host, extra_changes) if is_change_event(e, shifts)]
 
 
 def routine_changes(events: Iterable[Row], host: str, shifts: Mapping[str, ShiftInfo] | None,
-                    lo_us: int, hi_us: int) -> tuple[str, ...]:
-    """uids of the host's clock changes in the search span that do not count (|shift| < 1 s, D1)."""
-    return tuple(str(e["event_uid"]) for e in sorted(events, key=lambda e: (e["us"], str(e["event_uid"])))
-                 if e.get("host") == host and is_clock_change(e) and lo_us <= e["us"] <= hi_us
-                 and not is_change_event(e, shifts))
+                    lo_us: int, hi_us: int, extra_changes: Iterable[Row] = ()) -> tuple[str, ...]:
+    """uids of the host's clock changes (DB and export rows) in the search span that do not count
+    (|shift| < 1 s, D1)."""
+    return tuple(str(e["event_uid"]) for e in host_change_rows(events, host, extra_changes)
+                 if is_clock_change(e) and lo_us <= e["us"] <= hi_us and not is_change_event(e, shifts))
 
 
 def change_cut(pairs: Sequence[Pair], changes: Sequence[Row], window_end_excl_us: int
                ) -> tuple[list[Pair], list[Pair], str | None, tuple[str, ...]]:
     """(kept, dropped, cut uid, stale uids) for one host (CO-15, CO-18; owner D2).
 
-    ``changes`` are the host's counted changes, sorted. The cut is the last counted change at or before the
-    host's last pair; every pair at or before it is dropped, so only pairs after the last change that
+    ``changes`` are the host's counted changes (DB and export rows, SF-1), sorted. The cut is the last
+    counted change at or before the host's last pair; every pair at or before it is dropped, so only pairs after the last change that
     precedes the last pair are used. A counted change after the last kept pair and before the window end
     makes the host stale. WHY: a restart or a clock step can change the clock, so pairs from before it
     describe another clock; one after the last pair means the estimate is out of date. A change at the very
@@ -232,15 +275,17 @@ def change_cut(pairs: Sequence[Pair], changes: Sequence[Row], window_end_excl_us
     return kept, dropped, cut_uid, stale
 
 
-def expected_changes(kept: Sequence[Pair], changes: Sequence[Row], lo_us: int) -> tuple[str, ...]:
-    """uids of counted clock changes in the search span before the host's first kept pair (amended CO-18).
+def expected_changes(original: Sequence[Pair], changes: Sequence[Row], lo_us: int) -> tuple[str, ...]:
+    """uids of counted clock changes in the search span before the host's first ORIGINAL pair (amended CO-18;
+    owner 2026-11-12: original = after the far drop, before the change cut).
 
-    These are the planned ``w32tm /resync`` of a synced rerun or a snapshot revert catching up; the cut
-    already handles them, so they are reported as expected, never as stale. With no kept pair: none.
+    These are a snapshot revert catching up (or a planned resync; the reruns are not synced, owner
+    2026-11-12); nothing was measured before them, so they are reported as expected, never as stale. With
+    no original pair: none. Same rule as ``changes.classify`` with ``original_bounds``.
     """
-    if not kept:
+    if not original:
         return ()
-    first_us = min(p.e4624["us"] for p in kept)
+    first_us = min(p.e4624["us"] for p in original)
     return tuple(str(c["event_uid"]) for c in changes if is_clock_change(c) and lo_us <= c["us"] < first_us)
 
 
@@ -252,31 +297,61 @@ def is_lab_ip_logon(pair: Pair, lab_ips: frozenset[str] | None = None) -> bool:
     return norm_ip(pair.e4624.get("source_ip")) in ips
 
 
+def merged_shifts(shifts: Mapping[str, ShiftInfo] | None,
+                  extra_shifts: Mapping[str, ShiftInfo] | None) -> dict[str, ShiftInfo]:
+    """DB shifts and export shifts in one map keyed by event_uid (export uids start with ``export:``, so the
+    two key sets cannot collide)."""
+    return {**(shifts or {}), **(extra_shifts or {})}
+
+
 def pair_host(host: str, events: Sequence[Row], tickets: Sequence[Row], lo_us: int, hi_us: int,
               window_end_excl_us: int, max_delta_us: int,
-              shifts: Mapping[str, ShiftInfo] | None = None) -> HostPairs:
-    """All pairing steps for one endpoint: evidence, mutual nearest, far drop, change cut (D2)."""
+              shifts: Mapping[str, ShiftInfo] | None = None,
+              extra_changes: Sequence[Row] = (),
+              extra_shifts: Mapping[str, ShiftInfo] | None = None) -> HostPairs:
+    """All pairing steps for one endpoint: evidence, mutual nearest, far drop, change cut (D2).
+
+    ``extra_changes`` / ``extra_shifts``: the CO-19 export hits as change rows and their shifts (SF-1), so a
+    step logged only in the exports cuts the pairs, gives ``stale`` and is listed as expected or routine
+    exactly like a DB row. ``change_cut`` itself is unchanged.
+    """
+    all_shifts = merged_shifts(shifts, extra_shifts)
     logons = endpoint_logons(events, lo_us, hi_us, endpoints=(host,))
     guids = set(by_guid(tickets))
     with_cand = sum(1 for a in logons if norm_guid(a.get("logon_guid")) in guids)
     mutual = make_pairs(host, logons, tickets)
     near, far = split_far(mutual, max_delta_us)
-    changes = change_events(events, host, shifts)
+    changes = change_events(events, host, all_shifts, extra_changes)
     kept, before, cut, stale = change_cut(near, changes, window_end_excl_us)
-    expected = expected_changes(kept, changes, lo_us)
-    routine = routine_changes(events, host, shifts, lo_us, hi_us)
+    expected = expected_changes(near, changes, lo_us)
+    routine = routine_changes(events, host, all_shifts, lo_us, hi_us, extra_changes)
     return HostPairs(host, len(logons), with_cand, tuple(mutual), tuple(far), tuple(before), tuple(kept),
                      cut, stale, expected, routine)
+
+
+def original_bounds(host_pairs: Mapping[str, HostPairs]) -> dict[str, tuple[int, int]]:
+    """host -> (first, last) 4624 instant of its ORIGINAL pairs (before the change cut); hosts without any
+    original pair are absent (``no_pairs``). The classification bounds of owner 2026-11-12."""
+    out: dict[str, tuple[int, int]] = {}
+    for h, hp in host_pairs.items():
+        times = [p.e4624["us"] for p in hp.original]
+        if times:
+            out[h] = (min(times), max(times))
+    return out
 
 
 def pair_trial(events: Sequence[Row], lo_us: int, hi_us: int, window_end_excl_us: int,
                endpoints: Sequence[str] = params.ENDPOINTS,
                edge_s: float = params.DC_EDGE_S,
                max_delta_s: float = params.MAX_PAIR_DELTA_S,
-               shifts: Mapping[str, ShiftInfo] | None = None) -> tuple[dict[str, HostPairs], list[Row]]:
+               shifts: Mapping[str, ShiftInfo] | None = None,
+               extra_changes: Sequence[Row] = (),
+               extra_shifts: Mapping[str, ShiftInfo] | None = None) -> tuple[dict[str, HostPairs], list[Row]]:
     """(host -> HostPairs, dc01 tickets used) for every endpoint of one trial; ``shifts`` resolves the DB
-    clock-change rows (D2; missing -> unknown shift -> counts)."""
+    clock-change rows (D2; missing -> unknown shift -> counts); ``extra_changes`` / ``extra_shifts`` are the
+    CO-19 export change rows and their shifts (SF-1, see ``pair_host``)."""
     tickets = dc_tickets(events, lo_us, hi_us, s_to_us(edge_s))
     max_us = s_to_us(max_delta_s)
-    return ({h: pair_host(h, events, tickets, lo_us, hi_us, window_end_excl_us, max_us, shifts)
+    return ({h: pair_host(h, events, tickets, lo_us, hi_us, window_end_excl_us, max_us, shifts,
+                          extra_changes, extra_shifts)
              for h in endpoints}, tickets)

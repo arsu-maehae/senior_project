@@ -37,7 +37,11 @@ from clock_offset import changes as ch  # noqa: E402
 from clock_offset import common, correct, estimate, pairs, readings, run  # noqa: E402
 from clock_offset import scan as co_scan  # noqa: E402
 from answer_key import db as ak_db  # noqa: E402
+from gate.inputs import GateError  # noqa: E402
+from gate.run import run_gate  # noqa: E402
 from gate.timeutil import fmt_us, to_us  # noqa: E402
+from trial_window import __main__ as tw_main  # noqa: E402
+from trial_window import window as tw_window  # noqa: E402
 
 SRC_CO = REPO / "src" / "clock_offset"
 PROCESSED = REPO / "data" / "processed"
@@ -46,7 +50,7 @@ PROCESSED = REPO / "data" / "processed"
 OFFSETS_HEADER = ["trial_id", "host", "offset_ms", "offset_status", "offset_unc_ms", "n_pairs", "n_dropped_far",
                   "n_pairs_lab_ip", "late_gap_s", "min_ms", "q1_ms", "median_ms", "q3_ms", "max_ms",
                   "loo_shift_ms", "pair_span_s", "host_has_events", "method", "search_start_utc",
-                  "search_end_utc", "db_sha256", "tool_version"]
+                  "search_end_utc", "db_sha256", "tool_version", "clock_changes_sha256", "clock_scan"]
 PAIRS_HEADER = ["host", "event_uid_4624", "event_uid_4769", "logon_guid", "t_4624_utc", "t_4769_utc", "delta_ms",
                 "logon_type", "account_name", "service_name", "method", "candidate_count", "time_delta_ms"]
 METHOD = "logonguid_4624_4769_mutual_nearest_median"
@@ -1260,18 +1264,53 @@ def test_cot18_clock_change_before_later_pairs_drops_earlier_pairs(tmp_path, cha
     assert "ep-01" not in flag(res)
 
 
-def test_cot18_clock_change_listed_as_expected_not_stale(tmp_path):
-    """COT-18 (amended): a 4616 before the host's first used pair is listed as an expected change (the planned
-    w32tm /resync), not as stale. The uid is found under a stats key naming 'expected'."""
+def test_cot18_change_between_pair_groups_is_between_pairs_flags_and_is_not_expected(tmp_path):
+    """COT-18 / CO-19 as amended (owner 2026-11-12, review SF-1): a 4616 between the two pair groups drops the earlier
+    pairs (offset from group 2 only) but, judged against the host's ORIGINAL pairs (4624s at 5 s .. 31 s), it is
+    `between_pairs` and sets `clock_change_in_window`; it is not listed as expected and not as stale."""
     rows = agent_rows()
     rows += host_pairs("ep-01", [-5000, -5000], start=10, step=5, tag="g1")
     rows += host_pairs("ep-01", [-9000, -9000, -9000], start=30, step=5, prefix=1, tag="g2")
     rows.append(ev("resync-4616", "ep-01", "Security", 4616, 15))
     _, res = measure(tmp_path, rows)
     paths = key_paths_with(res["stats"]["s02_t00"], "resync-4616")
+    assert not any("expected" in p for p in paths), paths
+    assert not any("stale" in p for p in paths), paths
+    r = hrow(res, "ep-01")
+    assert r["offset_status"] == "ok" and r["n_pairs"] == 3 and r["offset_ms"] == -9000    # the earlier pairs are dropped
+    (row,) = [c for c in change_rows_of(res) if c["event_uid_or_record"] == "resync-4616"]
+    assert row["classification"] == "between_pairs" and row["counted"] is True
+    assert res["stats"]["s02_t00"]["clock_change_in_window"] is True
+
+
+def test_cot18_change_before_the_first_original_pair_is_expected_and_does_not_flag(tmp_path):
+    """COT-18 / CO-15 / CO-19: a counted 4616 before the host's very first original pair (first 4624 at 5 s) is listed as
+    expected (a snapshot-revert catch-up, or a planned resync), not as stale; it drops no pair and does not set the flag."""
+    rows = agent_rows()
+    rows += host_pairs("ep-01", [-5000, -5000], start=10, step=5, tag="g1")
+    rows += host_pairs("ep-01", [-9000, -9000, -9000], start=30, step=5, prefix=1, tag="g2")
+    rows.append(ev("resync-4616", "ep-01", "Security", 4616, 2))
+    _, res = measure(tmp_path, rows)
+    paths = key_paths_with(res["stats"]["s02_t00"], "resync-4616")
     assert any("expected" in p for p in paths), paths
     assert not any("stale" in p for p in paths), paths
-    assert hrow(res, "ep-01")["offset_status"] == "ok"
+    assert hrow(res, "ep-01")["offset_status"] == "ok" and hrow(res, "ep-01")["n_pairs"] == 5
+    (row,) = [c for c in change_rows_of(res) if c["event_uid_or_record"] == "resync-4616"]
+    assert row["classification"] == "expected_before_first_pair"
+    assert res["stats"]["s02_t00"]["clock_change_in_window"] is False
+
+
+@pytest.mark.parametrize("t,cls", [(4.999, "expected_before_first_pair"), (5.0, "between_pairs"),
+                                   (30.999, "between_pairs"), (31.001, "after_last_pair")])
+def test_cot18_original_pair_bounds_boundaries(tmp_path, t, cls):
+    """CO-19 (owner 2026-11-12): 'first pair' and 'last pair' are the original pairs' 4624 instants (5.0 s and 31.0 s).
+    Only a change strictly before the very first one is expected; at it or after it (up to the last) is between_pairs;
+    after the last is after_last_pair, whatever the cut then does to the pairs."""
+    files = ChangeFiles()
+    _, res = measure(tmp_path, two_groups([files.row("chg", "ep-01", "Security", 4616, t, 5000)]), files=files)
+    (row,) = [c for c in change_rows_of(res) if c["event_uid_or_record"] == "chg"]
+    assert row["classification"] == cls
+    assert res["stats"]["s02_t00"]["clock_change_in_window"] is (cls != "expected_before_first_pair")
 
 
 def test_cot18_system_1_and_sysmon_1_are_different_events(tmp_path):
@@ -1397,6 +1436,9 @@ def test_contract_offsets_csv_header_rows_types(tmp_path):
         assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z", r["search_start_utc"])
         assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z", r["search_end_utc"])
         assert (r["offset_ms"] == "") == (r["offset_status"] in ("none", "stale"))
+        # review SF-3 / SF-4: the two trial-level binding columns, repeated on every row
+        assert r["clock_changes_sha256"] == sha(repo / "data/processed/s02_t00.clock_changes.csv")
+        assert r["clock_scan"] == "complete"
     ep1, ep2, ep3 = body[1], body[2], body[3]
     assert ep1["offset_status"] == "ok" and ep1["n_pairs"] == "4"
     assert ep3["offset_status"] == "none" and ep3["offset_ms"] == "" and ep3["n_pairs"] == "0"
@@ -1722,7 +1764,7 @@ def test_coa_written_files_match_in_memory_result_on_real_trial(real, tmp_path):
     shutil.copy(_db(trial), repo / "data" / "processed" / f"{trial}.sqlite3")
     if (REPO / "data" / "manifest.csv").exists():
         shutil.copy(REPO / "data" / "manifest.csv", repo / "data" / "manifest.csv")
-    res = run.run(repo, [trial], write=True, scan=False)
+    res = run.run(repo, [trial], write=True, scan=True)       # SF-3: a write needs the scan (no JSONL exports in the copy)
     header, body = read_csv(repo / "data" / "processed" / f"{trial}.clock_offsets.csv")
     assert header == OFFSETS_HEADER and len(body) == 4
     for csv_row, mem in zip(body, real["res"]["rows"][trial]):
@@ -1730,6 +1772,11 @@ def test_coa_written_files_match_in_memory_result_on_real_trial(real, tmp_path):
         assert csv_row["offset_ms"] == ("" if mem["offset_ms"] is None else str(mem["offset_ms"]))
         assert csv_row["n_pairs"] == str(mem["n_pairs"])
     assert res["stats"][trial]["clock_flag"] == real["res"]["stats"][trial]["clock_flag"]
+    # SF-3 / SF-4: the copy has no exports although data/manifest.csv lists them, so the scan is incomplete and the
+    # offsets file says so; the changes hash names the changes file written in the same run.
+    chg_sha = sha(repo / "data" / "processed" / f"{trial}.clock_changes.csv")
+    assert {r["clock_scan"] for r in body} == {"incomplete"} and {r["clock_changes_sha256"] for r in body} == {chg_sha}
+    assert res["stats"][trial]["clock_scan"] == "incomplete" and res["stats"][trial]["clock_change_in_window"] is None
 
 
 # ====================================================================================== D1/D2: counted changes
@@ -1782,7 +1829,8 @@ def test_d1_routine_change_below_1s_changes_nothing(tmp_path, shift):
                                            (1001, True), (8480, True), (-8480, True)])
 def test_d1_boundary_999_vs_1000_ms(tmp_path, shift, counted):
     """D1 / D2: |shift| = 999 ms does not count, 1000 ms does (>= MIN_CLOCK_STEP_MS, both directions). A counted
-    change between the pair groups drops the earlier two pairs; an uncounted one drops none."""
+    change between the pair groups drops the earlier two pairs and is `between_pairs` (original-pairs rule); an uncounted
+    one drops none and is `routine`."""
     files = ChangeFiles()
     rows = two_groups([files.row("chg", "ep-01", "System", 1, 15, shift)])
     _, res = measure(tmp_path, rows, files=files)
@@ -1791,7 +1839,10 @@ def test_d1_boundary_999_vs_1000_ms(tmp_path, shift, counted):
     assert row["counted"] is counted
     if counted:
         assert r["n_pairs"] == 3 and r["offset_ms"] == -9000 and r["offset_status"] == "ok"
-        assert row["classification"] == "expected_before_first_pair"          # the first kept pair follows it
+        # owner 2026-11-12 (review SF-1, CO-19): the classification uses the ORIGINAL pairs (4624s at 5 s .. 31 s), so a
+        # counted change at 15 s is between them: `between_pairs` and it flags, although the cut drops the earlier two.
+        assert row["classification"] == "between_pairs"
+        assert res["stats"]["s02_t00"]["clock_change_in_window"] is True
     else:
         assert r["n_pairs"] == 5 and row["classification"] == "routine"
 
@@ -1958,16 +2009,19 @@ def test_d3_flag_without_export_scan_is_none_unless_db_flags(tmp_path):
     assert res2["stats"]["s02_t00"]["clock_change_in_window"] is True
 
 
-def test_d3_scan_false_writes_changes_csv_but_no_scan_files(tmp_path):
-    """D6/D5: scan=False still writes clock_changes.csv (DB changes only) but no clock_events.csv / clock_scan.json."""
+def test_d3_scan_false_with_write_raises_and_writes_nothing(tmp_path):
+    """SF-3 (replaces the D6 reading): the files in data/processed are written only by a run with the export scan, so
+    run(write=True, scan=False) raises ClockOffsetError and writes nothing: no offsets, no clock_changes, no out/ folder."""
     files = ChangeFiles()
     rows = two_groups([files.row("chg", "ep-01", "Security", 4616, 15, 8000)])
-    repo, _ = measure(tmp_path, rows, files=files, write=True, scan=False)
-    out = repo / "out" / "clock_offset" / "s02_t00"
-    assert (repo / "data/processed/s02_t00.clock_changes.csv").exists()
-    assert not (out / "clock_events.csv").exists() and not (out / "clock_scan.json").exists()
-    _, body = read_csv(repo / "data/processed/s02_t00.clock_changes.csv")
-    assert [r["event_uid_or_record"] for r in body] == ["chg"] and body[0]["source"] == "db"
+    repo = make_repo(tmp_path, rows, files=files)
+    before = _snapshot(repo)
+    with pytest.raises(run.ClockOffsetError):
+        run.run(repo, ["s02_t00"], write=True, scan=False)
+    assert _snapshot(repo) == before
+    assert _no_output(repo, "s02_t00")
+    assert not (repo / "data/processed/s02_t00.clock_changes.csv").exists()
+    assert not (repo / "out").exists()
 
 
 # ====================================================================================== D4 pre-step counts
@@ -2368,6 +2422,396 @@ def test_cot19_scan_refuses_like_the_step(tmp_path):
     assert not (repo / "out").exists()
 
 
+# ====================================================================================== review SF-1: export hits cut and stale
+
+OTHER_SHA = "cd" * 32
+
+
+def _sf_case(tmp_path, name: str, sec=(), sysr=(), db_extra=(), files=None, trial: str = "s02_t00", write: bool = False):
+    """ep-01 with the two pair groups of `two_groups` (4624s at 5, 10 | 21, 26, 31 s) and clock-change records only in
+    the exports (`sec`: Security records, `sysr`: System records), listed in the manifest with the records' sha256."""
+    exports, manifest = {}, []
+    if sec:
+        exports[("ep-01", "security")] = list(sec)
+        manifest.append(("ep-01", "security", SHA))
+    if sysr:
+        exports[("ep-01", "system")] = list(sysr)
+        manifest.append(("ep-01", "system", SHA))
+    return measure(tmp_path, two_groups(list(db_extra)), trial=trial, name=name, files=files, exports=exports or None,
+                   manifest=manifest or None, write=write)
+
+
+@pytest.mark.parametrize("channel,event_id,provider", [("Security", 4616, SEC), ("System", 1, KG)])
+def test_sf1_counted_export_hit_between_pair_groups_drops_the_earlier_pairs(tmp_path, channel, event_id, provider):
+    """SF-1 / CO-15: a counted clock change found only in the exports, between ep-01's two pair groups, cuts like a DB row:
+    the earlier two pairs are dropped (offset from group 2, -9000 ms), the status is ok, the change is `between_pairs` and
+    the trial flag is true (original-pairs rule), and ep-01 is not in clock_flag (it is corrected)."""
+    rec = mkrec(channel, event_id, 15, provider, 5000, idx=7)
+    kw = {"sec": [rec]} if channel == "Security" else {"sysr": [rec]}
+    _, res = _sf_case(tmp_path, "a", **kw)
+    r = hrow(res, "ep-01")
+    assert r["n_pairs"] == 3 and r["offset_ms"] == -9000 and r["offset_status"] == "ok"
+    ev1 = res["stats"]["s02_t00"]["evidence"]["per_host"]["ep-01"]
+    assert ev1["n_dropped_before_change"] == 2 and ev1["change_cut_event_uid"]
+    (row,) = change_rows_of(res)
+    assert row["source"] == "export" and row["classification"] == "between_pairs" and row["counted"] is True
+    assert res["stats"]["s02_t00"]["clock_change_in_window"] is True
+    assert "ep-01" not in flag(res)
+
+
+def test_sf1_export_hit_between_pairs_only_changes_the_estimate_when_it_cuts(tmp_path):
+    """SF-1: without the export hit ep-01 uses all 5 pairs; with it, 3 (the median happens to be -9000 ms in both, so the pair
+    count is the observable). The hit is the only difference between the two runs."""
+    _, plain = _sf_case(tmp_path, "plain")
+    _, hit = _sf_case(tmp_path, "hit", sec=[mkrec("Security", 4616, 15, SEC, 5000)])
+    assert hrow(plain, "ep-01")["n_pairs"] == 5 and hrow(hit, "ep-01")["n_pairs"] == 3
+
+
+def test_sf1_counted_export_hit_after_the_last_pair_is_stale(tmp_path, monkeypatch):
+    """SF-1 / CO-15 / CO-17: a counted export hit after ep-01's last pair (31 s), inside the window, makes ep-01 `stale`
+    (offset empty, flagged, listed in the stale uids) and the change is `after_last_pair`. In a trial on or after
+    2026-10-26 the CO-17 preview refuses it; the same trial before that date is not refused."""
+    _, res = _sf_case(tmp_path, "a", sec=[mkrec("Security", 4616, 50, SEC, 5000)])
+    r = hrow(res, "ep-01")
+    assert r["offset_status"] == "stale" and r["offset_ms"] is None and "ep-01" in flag(res)
+    assert len(res["stats"]["s02_t00"]["evidence"]["per_host"]["ep-01"]["stale_event_uids"]) == 1
+    assert [c["classification"] for c in change_rows_of(res)] == ["after_last_pair"]
+    assert res["stats"]["s02_t00"]["clock_change_in_window"] is True
+    assert res["stats"]["s02_t00"]["co17_refusal_preview"] is None            # 2026-09-24: before the date
+    # the same trial on 2026-10-27: CO-17 refuses it
+    monkeypatch.setattr(sys.modules[__name__], "BASE", datetime(2026, 10, 27, 6, 0, 0, tzinfo=timezone.utc))
+    _, late = _sf_case(tmp_path, "late", sec=[mkrec("Security", 4616, 50, SEC, 5000)])
+    reason = late["stats"]["s02_t00"]["co17_refusal_preview"]
+    assert reason and "CO-17" in reason and "ep-01" in reason and "stale" in reason
+    offsets = correct.offsets_from_rows(late["rows"]["s02_t00"])
+    assert correct.co17_refusal(offsets, to_us(at(-60))) == reason
+
+
+@pytest.mark.parametrize("shift", [999, -999, 2, 0])
+def test_sf1_routine_export_hit_changes_nothing(tmp_path, shift):
+    """SF-1 / CO-15: an export hit with |shift| < 1 s is routine: no pair dropped, no stale, no flag, listed as routine."""
+    for t, name in ((15, "between"), (50, "after")):
+        _, res = _sf_case(tmp_path, name, sec=[mkrec("Security", 4616, t, SEC, shift)])
+        r = hrow(res, "ep-01")
+        assert r["n_pairs"] == 5 and r["offset_status"] == "ok", (t, r["n_pairs"], r["offset_status"])
+        assert [(c["classification"], c["counted"]) for c in change_rows_of(res)] == [("routine", False)]
+        assert res["stats"]["s02_t00"]["clock_change_in_window"] is False
+        assert "ep-01" not in flag(res)
+
+
+def test_sf1_unknown_shift_export_hit_counts(tmp_path):
+    """SF-1 / CO-15: an export hit whose previous/new time cannot be read counts (owner D1, conservative): between the
+    groups it cuts the earlier pairs, after the last pair it makes the host stale."""
+    unknown = mkrec("Security", 4616, 15, SEC, prev=at(1))                      # PreviousTime only: no shift
+    _, mid = _sf_case(tmp_path, "mid", sec=[unknown])
+    assert hrow(mid, "ep-01")["n_pairs"] == 3 and hrow(mid, "ep-01")["offset_ms"] == -9000
+    (row,) = change_rows_of(mid)
+    assert row["counted"] is True and row["shift_ms"] is None and row["classification"] == "between_pairs"
+    late = mkrec("Security", 4616, 50, SEC, prev=at(1))
+    _, after = _sf_case(tmp_path, "after", sec=[late])
+    assert hrow(after, "ep-01")["offset_status"] == "stale"
+
+
+def test_sf1_export_hit_before_the_first_pair_is_expected_and_cuts_nothing(tmp_path):
+    """SF-1 / CO-19: a counted export hit before ep-01's very first original pair (5.0 s) is `expected`: no flag, all 5
+    pairs kept."""
+    _, res = _sf_case(tmp_path, "a", sec=[mkrec("Security", 4616, 2, SEC, 8480)])
+    assert hrow(res, "ep-01")["n_pairs"] == 5 and hrow(res, "ep-01")["offset_status"] == "ok"
+    assert [c["classification"] for c in change_rows_of(res)] == ["expected_before_first_pair"]
+    assert res["stats"]["s02_t00"]["clock_change_in_window"] is False
+
+
+def test_sf1_hit_of_a_skipped_file_does_not_cut(tmp_path):
+    """SF-1 / CO-19: a hit in an export whose sha256 is not the manifest's is not used (the file is skipped), so it cannot cut
+    or make a host stale; the scan is then incomplete (SF-4)."""
+    rec = mkrec("Security", 4616, 15, SEC, 5000, sha=OTHER_SHA)
+    exports = {("ep-01", "security"): [rec]}
+    _, res = measure(tmp_path, two_groups([]), exports=exports, manifest=[("ep-01", "security", SHA)])
+    assert hrow(res, "ep-01")["n_pairs"] == 5 and change_rows_of(res) == []
+    assert res["stats"]["s02_t00"]["clock_scan"] == "incomplete"
+
+
+def test_sf1_db_row_and_export_record_of_the_same_change_count_once_for_cut_and_stale(tmp_path):
+    """SF-1 / CO-15: a post-CO-18 DB row and the export record it came from (same host, channel, event id, instant) are
+    one change: the cut drops the earlier pairs once (3 left, not fewer), and a stale host lists ONE stale uid."""
+    for t, name in ((15, "mid"), (50, "late")):
+        files = ChangeFiles()
+        rows = two_groups([files.row("chg", "ep-01", "Security", 4616, t, 5000)])
+        # the export is the very JSONL file the DB row points to, listed in the manifest
+        _, res = measure(tmp_path, rows, name=name, files=files, manifest=[("ep-01", "security", SHA)])
+        ev1 = res["stats"]["s02_t00"]["evidence"]["per_host"]["ep-01"]
+        if t == 15:
+            assert hrow(res, "ep-01")["n_pairs"] == 3 and ev1["n_dropped_before_change"] == 2
+            assert ev1["stale_event_uids"] == []
+        else:
+            assert hrow(res, "ep-01")["offset_status"] == "stale"
+            assert len(ev1["stale_event_uids"]) == 1, ev1["stale_event_uids"]
+        assert res["stats"]["s02_t00"]["clock_scan"] == "complete"
+
+
+def test_sf1_db_row_and_export_record_not_the_same_instant_are_two_changes(tmp_path):
+    """SF-1: dedup is on host, channel, event id AND instant: a DB row at 12 s and an export record at 15 s are two
+    changes, and the later one is the cut (the earlier two pairs go; a stale uid is not listed)."""
+    files = ChangeFiles()
+    rows = two_groups([files.row("chg", "ep-01", "Security", 4616, 12, 5000)])
+    files.lines[("ep-01", "security")].append(mkrec("Security", 4616, 15, SEC, 5000, idx=2))
+    _, res = measure(tmp_path, rows, files=files, manifest=[("ep-01", "security", SHA)])
+    assert hrow(res, "ep-01")["n_pairs"] == 3
+    classes = sorted(c["classification"] for c in change_rows_of(res))
+    assert classes.count("between_pairs") == len(classes) >= 2
+
+
+# ====================================================================================== review SF-3: scan required, binding columns
+
+def test_sf3_cli_rejects_no_scan_and_writes_nothing(tmp_path):
+    """SF-3: the former `--no-scan` option is removed: the CLI exits with status 2 (unrecognised argument) and writes nothing."""
+    repo = make_repo(tmp_path, _rich_rows())
+    before = _snapshot(repo)
+    with pytest.raises(SystemExit) as ei:
+        co_main.main(["--trials", "s02_t00", "--repo", str(repo), "--no-scan"])
+    assert ei.value.code == 2
+    assert _snapshot(repo) == before and not (repo / "out").exists()
+
+
+def test_sf3_run_scan_false_without_write_is_still_available_but_says_incomplete(tmp_path):
+    """SF-3 / SF-4: scan=False stays usable in memory (write=False) for tests; it reports `clock_scan = incomplete`
+    and no clock_change_in_window, so a scan-less result can never look complete."""
+    _, res = measure(tmp_path, _rich_rows(), scan=False)
+    assert res["stats"]["s02_t00"]["clock_scan"] == "incomplete"
+    assert res["stats"]["s02_t00"]["clock_change_in_window"] is None
+    assert {r["clock_scan"] for r in res["rows"]["s02_t00"]} == {"incomplete"}
+
+
+def test_sf3_offsets_file_carries_the_hash_of_the_changes_file_and_the_scan_state(tmp_path):
+    """SF-3 / SF-4: every row of the written offsets file has clock_changes_sha256 = SHA-256 of the clock_changes.csv bytes
+    written in the same run, and clock_scan; the columns are the last two of the header, in that order. The hash follows the
+    changes file's content (an export hit makes it different from a header-only file)."""
+    plain_repo, _ = _sf_case(tmp_path, "plain", write=True)
+    hit_repo, _ = _sf_case(tmp_path, "hit", sec=[mkrec("Security", 4616, 15, SEC, 5000)], write=True)
+    shas = {}
+    for name, repo in (("plain", plain_repo), ("hit", hit_repo)):
+        header, body = read_csv(repo / "data/processed/s02_t00.clock_offsets.csv")
+        assert header[-2:] == ["clock_changes_sha256", "clock_scan"]
+        want = hashlib.sha256((repo / "data/processed/s02_t00.clock_changes.csv").read_bytes()).hexdigest()
+        assert len(body) == 4 and {r["clock_changes_sha256"] for r in body} == {want}
+        assert {r["clock_scan"] for r in body} == {"complete"}
+        shas[name] = want
+    assert shas["plain"] != shas["hit"]
+
+
+def test_sf3_binding_columns_are_deterministic_on_rerun(tmp_path):
+    """SF-3 / CO-14: the same inputs give byte-identical offsets and changes files, binding columns included."""
+    repo, _ = _sf_case(tmp_path, "a", sec=[mkrec("Security", 4616, 15, SEC, 5000)], write=True)
+    names = ("data/processed/s02_t00.clock_offsets.csv", "data/processed/s02_t00.clock_changes.csv")
+    first = {n: (repo / n).read_bytes() for n in names}
+    run.run(repo, ["s02_t00"], write=True)
+    assert {n: (repo / n).read_bytes() for n in names} == first
+
+
+def _gate_windows_csv(repo: Path, trial: str) -> Path:
+    """A one-row trial_windows.csv built from the clock files now on disk (their hashes recorded in the row), so a gate
+    refusal can only come from the clock-file checks, not from a hash mismatch in the window row."""
+    clock = tw_window.load_clock_files(run.offsets_path(repo, trial), run.changes_path(repo, trial))
+    edges = tw_window.WindowResult(edge(-60), edge(400), None, None, edge(-60), edge(400), False, False)
+    row = tw_window.window_row(trial, edges, "computed_agent_run", "synthetic", sha(run.db_path(repo, trial)),
+                               "corrected", tw_window.clock_columns(clock))
+    out = repo / "data" / "trial_windows.csv"
+    tw_window.write_csv([row], out)
+    return out
+
+
+def _both_refuse(repo: Path, trial: str, tmp_path: Path, *words: str) -> None:
+    """trial_window gives no row and a SKIPPED reason; the gate raises GateError and creates nothing under out/gate."""
+    res = tw_main.run(repo, [trial], tmp_path / "no_operator.csv", tmp_path / "w.csv")
+    assert res["rows"] == [] and trial in res["skipped"], res
+    windows = _gate_windows_csv(repo, trial)
+    gate_out = repo / "out" / "gate"
+    with pytest.raises(GateError) as ei:
+        run_gate(trial, run.db_path(repo, trial), windows, gate_out, repo=repo)
+    assert not gate_out.exists()
+    for w in words:
+        assert w in res["skipped"][trial], (w, res["skipped"][trial])
+        assert w in str(ei.value), (w, str(ei.value))
+
+
+def _rewrite_csv(path: Path, fn) -> None:
+    header, body = read_csv(path)
+    for r in body:
+        fn(r)
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=header, lineterminator="\n")
+        w.writeheader()
+        w.writerows(body)
+
+
+def test_sf3_chain_changes_file_copied_from_another_trial_is_refused_by_window_and_gate(tmp_path):
+    """SF-3: a clock_changes.csv copied over from another trial's run (its rows name that trial, its hash is not the one
+    the offsets file records) makes trial_window and the gate refuse, with nothing written."""
+    repo, _ = _sf_case(tmp_path, "a", sec=[mkrec("Security", 4616, 15, SEC, 5000)], write=True)
+    other, _ = _sf_case(tmp_path, "b", sec=[mkrec("Security", 4616, 50, SEC, 5000)], trial="s03_t00", write=True)
+    shutil.copyfile(other / "data/processed/s03_t00.clock_changes.csv", repo / "data/processed/s02_t00.clock_changes.csv")
+    _both_refuse(repo, "s02_t00", tmp_path, "s03_t00")
+
+
+def test_sf3_chain_edited_changes_file_hash_mismatch_is_refused(tmp_path):
+    """SF-3: a clock_changes.csv of the right trial whose bytes differ from the run that wrote the offsets file (here: its
+    classification edited) is a hash mismatch: refused by window and gate."""
+    repo, _ = _sf_case(tmp_path, "a", sec=[mkrec("Security", 4616, 15, SEC, 5000)], write=True)
+    _rewrite_csv(repo / "data/processed/s02_t00.clock_changes.csv",
+                 lambda r: r.update(classification="routine", counted="false"))
+    _both_refuse(repo, "s02_t00", tmp_path, "clock_changes_sha256")
+
+
+def test_sf3_chain_offsets_rows_naming_another_trial_are_refused(tmp_path):
+    """SF-3: an offsets file whose rows name another trial is refused by window and gate."""
+    repo, _ = _sf_case(tmp_path, "a", write=True)
+    _rewrite_csv(repo / "data/processed/s02_t00.clock_offsets.csv", lambda r: r.update(trial_id="s03_t00"))
+    _both_refuse(repo, "s02_t00", tmp_path, "s03_t00")
+
+
+@pytest.mark.parametrize("status", ["ok", "wide"])
+def test_sf3_chain_ok_or_wide_row_without_offset_ms_is_refused(tmp_path, status):
+    """SF-3: a row with status ok/wide but an empty offset_ms is refused by window and gate (a silent uncorrected host)."""
+    rows = agent_rows() + host_pairs("ep-01", [-5000, -5100, -4900]) + host_pairs("ep-02", [100, 200], prefix=1)
+    repo, res = measure(tmp_path, rows, write=True)
+    assert hrow(res, "ep-02")["offset_status"] == "ok"
+
+    def blank(r: dict) -> None:
+        if r["host"] == "ep-02":
+            r["offset_status"], r["offset_ms"] = status, ""
+
+    _rewrite_csv(repo / "data/processed/s02_t00.clock_offsets.csv", blank)
+    _both_refuse(repo, "s02_t00", tmp_path, "offset_ms", "ep-02")
+
+
+# ====================================================================================== review SF-4: incomplete scan
+
+SEC_OK = lambda: [mkrec("Security", 4616, 2, SEC, 5000, idx=1)]       # noqa: E731  an `expected` hit, so the flag is False
+
+
+def _sf4_setup(kind: str, tmp_path: Path):
+    """(repo, listed host/channel that must appear among the skipped files or None) for one kind of hole."""
+    manifest = [("ep-01", "security", SHA), ("ep-01", "system", SHA)]
+    sys_rec = lambda **kw: mkrec("System", 1, 12, KG, 5000, **kw)    # noqa: E731
+    exports = {("ep-01", "security"): SEC_OK()}
+    if kind == "system_export_missing":
+        pass
+    elif kind == "system_sha_not_in_manifest":
+        exports[("ep-01", "system")] = [sys_rec(sha=OTHER_SHA)]
+    elif kind == "system_mixed_sha":
+        exports[("ep-01", "system")] = [sys_rec(sha=SHA), sys_rec(sha=OTHER_SHA, idx=2)]
+    elif kind == "system_no_records":
+        exports[("ep-01", "system")] = []
+    elif kind == "system_record_without_sha":
+        rec = sys_rec()
+        del rec["source"]["sha256"]
+        exports[("ep-01", "system")] = [rec]
+    else:
+        raise AssertionError(kind)
+    repo = make_repo(tmp_path, two_groups([]), name=kind, exports=exports, manifest=manifest)
+    return repo, ("ep-01", "system")
+
+
+HOLES = ["system_export_missing", "system_sha_not_in_manifest", "system_mixed_sha", "system_no_records",
+         "system_record_without_sha"]
+
+
+@pytest.mark.parametrize("kind", HOLES)
+def test_sf4_manifest_listed_export_skipped_makes_the_scan_incomplete_and_refuses(tmp_path, kind):
+    """SF-4 / CO-19: a security/system export the manifest lists that is missing, empty, has a sha256 the manifest does not
+    list, mixed sha256 values or a record without sha256, makes the scan `incomplete`: offsets rows say so,
+    clock_change_in_window is null, clock_scan.json lists the skipped file (listed in the manifest), and trial_window and
+    the gate refuse with the clock_scan.json reason, writing nothing."""
+    repo, (host, stem) = _sf4_setup(kind, tmp_path)
+    res = run.run(repo, ["s02_t00"], write=True)
+    st = res["stats"]["s02_t00"]
+    assert st["clock_scan"] == "incomplete" and st["clock_change_in_window"] is None
+    assert {r["clock_scan"] for r in res["rows"]["s02_t00"]} == {"incomplete"}
+    _, body = read_csv(repo / "data/processed/s02_t00.clock_offsets.csv")
+    assert {r["clock_scan"] for r in body} == {"incomplete"}
+    doc = json.loads((repo / "out/clock_offset/s02_t00/clock_scan.json").read_text(encoding="utf-8"))
+    assert doc["clock_scan"] == "incomplete" and doc["clock_change_in_window"] is None
+    skipped = [f for f in doc["files_skipped"] if f["path"].endswith(f"{host}/{stem}.jsonl")]
+    assert len(skipped) == 1 and skipped[0]["reason"] and skipped[0]["manifest_listed"] is True
+    assert doc["manifest_files_skipped"] == 1
+    # the owner decides on the trial: the files exist, the consumers refuse with the pointer to clock_scan.json
+    _both_refuse(repo, "s02_t00", tmp_path, "incomplete", "clock_scan.json", "s02_t00")
+
+
+def test_sf4_a_known_change_does_not_make_an_incomplete_scan_look_known(tmp_path):
+    """SF-4: with a hole, even a counted between-pairs hit in a readable file leaves clock_change_in_window null (unknown),
+    not true and not false."""
+    exports = {("ep-01", "security"): [mkrec("Security", 4616, 15, SEC, 5000)],
+               ("ep-01", "system"): [mkrec("System", 1, 12, KG, 5000, sha=OTHER_SHA)]}
+    _, res = measure(tmp_path, two_groups([]), exports=exports,
+                     manifest=[("ep-01", "security", SHA), ("ep-01", "system", SHA)])
+    assert res["stats"]["s02_t00"]["clock_scan"] == "incomplete"
+    assert res["stats"]["s02_t00"]["clock_change_in_window"] is None
+    assert [c["classification"] for c in change_rows_of(res)] == ["between_pairs"]       # the readable hit is still listed
+
+
+@pytest.mark.parametrize("kind", ["garbage", "missing", "blank"])
+@pytest.mark.parametrize("channel", ["Security", "System"])
+def test_sf4_clock_change_record_with_no_parseable_time_makes_the_scan_incomplete(tmp_path, kind, channel):
+    """SF-4 / CO-19: a Security 4616 / Kernel-General System 1 record whose time cannot be parsed cannot be placed in the span,
+    so the scan is incomplete (counted in clock_change_records_without_time), clock_change_in_window is null, and the
+    consumers refuse. No file is skipped by the manifest check."""
+    event_id, provider, stem = (4616, SEC, "security") if channel == "Security" else (1, KG, "system")
+    rec = mkrec(channel, event_id, 12, provider, 5000)
+    if kind == "garbage":
+        rec["system"]["timestamp_raw"] = "not a time"
+    elif kind == "missing":
+        del rec["system"]["timestamp_raw"]
+    else:
+        rec["system"]["timestamp_raw"] = "   "
+    repo = make_repo(tmp_path, two_groups([]), exports={("ep-01", stem): [rec]}, manifest=[("ep-01", stem, SHA)])
+    res = run.run(repo, ["s02_t00"], write=True)
+    st = res["stats"]["s02_t00"]
+    assert st["clock_scan"] == "incomplete" and st["clock_change_in_window"] is None
+    doc = json.loads((repo / "out/clock_offset/s02_t00/clock_scan.json").read_text(encoding="utf-8"))
+    assert doc["clock_scan"] == "incomplete" and doc["clock_change_records_without_time"] == 1
+    assert doc["files_skipped"] == [] and doc["manifest_files_skipped"] == 0
+    _both_refuse(repo, "s02_t00", tmp_path, "incomplete", "clock_scan.json")
+
+
+def test_sf4_other_events_without_a_time_do_not_make_the_scan_incomplete(tmp_path):
+    """SF-4: only clock-change records need a parseable time: a 4624 or a System 6005 with a broken timestamp is not a
+    clock-change record, so the scan stays complete."""
+    junk = [mkrec("Security", 4624, 12, SEC), mkrec("System", 6005, 13, "EventLog"),
+            mkrec("System", 1, 14, "Microsoft-Windows-Power-Troubleshooter", 5000)]
+    for r in junk:
+        r["system"]["timestamp_raw"] = "not a time"
+    repo = make_repo(tmp_path, two_groups([]), exports={("ep-01", "security"): junk[:1], ("ep-01", "system"): junk[1:]},
+                     manifest=[("ep-01", "security", SHA), ("ep-01", "system", SHA)])
+    res = run.run(repo, ["s02_t00"], write=True)
+    assert res["stats"]["s02_t00"]["clock_scan"] == "complete"
+    assert res["stats"]["s02_t00"]["clock_change_in_window"] is False
+    assert tw_window.clock_refusal(tw_window.load_clock_files(run.offsets_path(repo, "s02_t00"),
+                                                              run.changes_path(repo, "s02_t00")),
+                                   None, sha(run.db_path(repo, "s02_t00")), trial_id="s02_t00") is None
+
+
+def test_sf4_host_or_channel_with_no_file_in_the_manifest_is_not_incomplete(tmp_path):
+    """SF-4: a host/channel the manifest does not list is not a skipped file: an export on disk that the manifest does not
+    know (ep-02 security), a manifest without dc01 or ep-03, and a manifest that lists nothing for the trial all leave the
+    scan `complete`. The unknown export is still reported as skipped (manifest_listed false), as before."""
+    exports = {("ep-01", "security"): SEC_OK(), ("ep-02", "security"): [mkrec("Security", 4616, 15, SEC, 5000)]}
+    repo = make_repo(tmp_path, two_groups([]), name="a", exports=exports, manifest=[("ep-01", "security", SHA)])
+    res = run.run(repo, ["s02_t00"], write=True)
+    assert res["stats"]["s02_t00"]["clock_scan"] == "complete"
+    assert res["stats"]["s02_t00"]["clock_change_in_window"] is False
+    assert change_rows_of(res) and all(c["host"] == "ep-01" for c in change_rows_of(res))      # the ep-02 hit is unused
+    doc = json.loads((repo / "out/clock_offset/s02_t00/clock_scan.json").read_text(encoding="utf-8"))
+    unknown = [f for f in doc["files_skipped"] if f["path"].endswith("ep-02/security.jsonl")]
+    assert len(unknown) == 1 and unknown[0]["manifest_listed"] is False and doc["manifest_files_skipped"] == 0
+    clock = tw_window.load_clock_files(run.offsets_path(repo, "s02_t00"), run.changes_path(repo, "s02_t00"))
+    assert tw_window.clock_refusal(clock, None, sha(run.db_path(repo, "s02_t00")), trial_id="s02_t00") is None
+    # a manifest with no row for the trial at all
+    repo2 = make_repo(tmp_path, two_groups([]), name="b", exports={("ep-01", "security"): SEC_OK()}, manifest=[])
+    res2 = run.run(repo2, ["s02_t00"], write=False)
+    assert res2["stats"]["s02_t00"]["clock_scan"] == "complete"
+
+
 # ====================================================================================== COT-21 readings (CO-12)
 
 LOCAL_DATE = "23/11/2026"
@@ -2760,3 +3204,119 @@ def test_coa08_the_check_is_not_vacuous():
     assert clock_changes[0].shift_ms == 8480 and clock_changes[0].counted
     assert correct.before_counted_change("ep-02", to_us("2026-09-24T05:37:50.000000Z"), clock_changes) is True
     assert correct.before_counted_change("ep-02", to_us("2026-09-24T05:37:58.000000Z"), clock_changes) is False
+
+
+# ====================================================================================== real data: review SF-3 / SF-4
+
+def _read_offsets_file(trial: str) -> tuple[list[str], list[dict]]:
+    p = PROCESSED / f"{trial}.clock_offsets.csv"
+    if not p.exists():
+        pytest.skip(f"{p} missing")
+    return read_csv(p)
+
+
+@pytest.mark.slow
+def test_sf4_real_clock_scan_is_complete_on_all_11_trials(real_scan):
+    """SF-4: on the 11 allowlisted trials every manifest-listed security/system export is read and every clock-change record
+    has a parseable time: clock_scan = complete in the fresh in-memory run (stats and rows), in the written offsets files
+    under data/processed (read only), and in out/clock_offset/<trial>/clock_scan.json (read only)."""
+    for t in ALLOWLIST:
+        st = real_scan["res"]["stats"][t]
+        assert st["clock_scan"] == "complete" and st["clock_change_in_window"] is False, t
+        assert {r["clock_scan"] for r in real_scan["res"]["rows"][t]} == {"complete"}, t
+        header, body = _read_offsets_file(t)
+        assert header[-2:] == ["clock_changes_sha256", "clock_scan"], t
+        assert len(body) == 4 and {r["clock_scan"] for r in body} == {"complete"}, t
+        doc_path = REPO / "out" / "clock_offset" / t / "clock_scan.json"
+        if doc_path.exists():
+            doc = json.loads(doc_path.read_text(encoding="utf-8"))
+            assert doc["clock_scan"] == "complete" and doc["manifest_files_skipped"] == 0, t
+            assert doc["clock_change_records_without_time"] == 0 and doc["clock_change_in_window"] is False, t
+            assert not [f for f in doc["files_skipped"] if f.get("manifest_listed")], t
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("trial", ALLOWLIST)
+def test_sf3_real_offsets_file_hash_names_the_changes_file_and_equals_a_fresh_run(real_scan, trial):
+    """SF-3: in data/processed (read only) the offsets file's clock_changes_sha256 equals the SHA-256 of the
+    <trial>.clock_changes.csv beside it, on every row; the files equal what a fresh in-memory run (with the scan) writes, byte
+    for byte, so they are in the new format and from this code."""
+    header, body = _read_offsets_file(trial)
+    changes_file = PROCESSED / f"{trial}.clock_changes.csv"
+    assert changes_file.exists(), changes_file
+    on_disk = sha(changes_file)
+    assert {r["clock_changes_sha256"] for r in body} == {on_disk}
+    fresh_changes = co_scan.changes_text(real_scan["res"]["clock"][trial])
+    assert hashlib.sha256(fresh_changes.encode("utf-8")).hexdigest() == on_disk
+    assert changes_file.read_bytes() == fresh_changes.encode("utf-8")
+    from clock_offset import outputs, params
+    fresh_offsets = outputs.csv_text(real_scan["res"]["rows"][trial], params.OFFSETS_COLUMNS)
+    assert (PROCESSED / f"{trial}.clock_offsets.csv").read_bytes() == fresh_offsets.encode("utf-8")
+    assert {r["db_sha256"] for r in body} == {sha(PROCESSED / f"{trial}.sqlite3")}
+
+
+@pytest.mark.slow
+def test_sf3_real_window_and_gate_outputs_name_the_current_clock_files():
+    """SF-3: data/trial_windows.csv (read only) records, for every development trial it holds, the SHA-256 of that trial's
+    offsets and clock-changes files now on disk, with time_basis corrected; out/gate/<trial>/stats.json (read only) names
+    the same two hashes. A trial the window file does not hold is not checked here."""
+    p = REPO / "data" / "trial_windows.csv"
+    if not p.exists():
+        pytest.skip("data/trial_windows.csv missing")
+    _, rows = read_csv(p)
+    seen = 0
+    for r in rows:
+        t = r["trial_id"]
+        if t not in DEVELOPMENT or not (PROCESSED / f"{t}.clock_offsets.csv").exists():
+            continue
+        seen += 1
+        assert r["time_basis"] == "corrected", t
+        assert r["offsets_sha256"] == sha(PROCESSED / f"{t}.clock_offsets.csv"), t
+        assert r["clock_changes_sha256"] == sha(PROCESSED / f"{t}.clock_changes.csv"), t
+        gate_stats = REPO / "out" / "gate" / t / "stats.json"
+        if gate_stats.exists():
+            clk = json.loads(gate_stats.read_text(encoding="utf-8"))["clock"]
+            assert clk["offsets_sha256"] == r["offsets_sha256"] and clk["clock_changes_sha256"] == r["clock_changes_sha256"], t
+    assert seen >= 1
+
+
+@pytest.mark.slow
+def test_sf3_real_standalone_scan_equals_the_step_clock_events_and_scan_json(tmp_path, capsys):
+    """CO-19 / SF-3: on s02_t00 (allowlist), in a tmp repo (DB, manifest and the security/system exports copied; the real
+    data/processed, data/trial_windows.csv and out/ are never written), `python -m clock_offset` writes the offsets, the
+    changes, clock_events.csv and clock_scan.json; then `python -m clock_offset.scan` rewrites clock_events.csv and
+    clock_scan.json with exactly the same bytes. The tmp offsets and changes files equal the ones in data/processed, and
+    the offsets file's clock_changes_sha256 is the hash of the changes file."""
+    trial = "s02_t00"
+    _db(trial)
+    repo = tmp_path / "repo"
+    (repo / "data" / "processed").mkdir(parents=True)
+    shutil.copy(PROCESSED / f"{trial}.sqlite3", repo / "data" / "processed" / f"{trial}.sqlite3")
+    shutil.copy(REPO / "data" / "manifest.csv", repo / "data" / "manifest.csv")
+    src = PROCESSED / "jsonl" / trial / "per_file"
+    for host_dir in sorted(p for p in src.iterdir() if p.is_dir()):
+        for stem in ("security", "system"):
+            f = host_dir / f"{stem}.jsonl"
+            if f.is_file():
+                dst = repo / "data" / "processed" / "jsonl" / trial / "per_file" / host_dir.name / f.name
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(f, dst)
+    assert co_main.main(["--trials", trial, "--repo", str(repo)]) == 0
+    capsys.readouterr()
+    out = repo / "out" / "clock_offset" / trial
+    step = {n: (out / n).read_bytes() for n in ("clock_events.csv", "clock_scan.json")}
+    for n in step:
+        (out / n).unlink()
+    assert co_scan.main(["--trials", trial, "--repo", str(repo)]) == 0
+    capsys.readouterr()
+    assert {n: (out / n).read_bytes() for n in step} == step
+    # the same files as the real run, and the binding
+    for suffix in (".clock_offsets.csv", ".clock_changes.csv"):
+        assert (repo / "data" / "processed" / f"{trial}{suffix}").read_bytes() == (PROCESSED / f"{trial}{suffix}").read_bytes()
+    _, body = read_csv(repo / "data" / "processed" / f"{trial}.clock_offsets.csv")
+    assert {r["clock_changes_sha256"] for r in body} == {sha(repo / "data" / "processed" / f"{trial}.clock_changes.csv")}
+    assert {r["clock_scan"] for r in body} == {"complete"}
+    real_out = REPO / "out" / "clock_offset" / trial
+    for n in step:
+        if (real_out / n).exists():
+            assert (real_out / n).read_bytes() == step[n], n

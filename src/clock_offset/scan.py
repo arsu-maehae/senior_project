@@ -33,8 +33,9 @@ from trial_window.window import computed_window
 
 from . import changes as ch
 from . import outputs, params
+from . import pairs as pairs_mod
 from . import run as co_run  # module import, attributes used at call time, so run.py may import this module
-from .changes import ClockChange, ShiftInfo, parse_instant_us
+from .changes import SCAN_COMPLETE, SCAN_INCOMPLETE, ClockChange, ShiftInfo, parse_instant_us
 from .common import s_to_us
 
 # ---------------------------------------------------------------- constants (params.py is frozen)
@@ -60,6 +61,10 @@ SCAN_FILE = "clock_scan.json"
 PAIRS_FILE = "pairs.csv"
 SCAN_FILES: tuple[str, ...] = (EVENTS_FILE, SCAN_FILE)
 SCAN_METHOD = "jsonl_export_scan_4616_kernelgeneral1"
+# event_uid prefix of an export hit used as a change row (SF-1): ``export:<source_sha256>:<record_index>``.
+EXPORT_UID_PREFIX = "export"
+# DB channel spelling of the scanned channels (the DB writes ``Security`` / ``System``, params.CLOCK_CHANGE_EVENTS).
+DB_CHANNEL: Mapping[str, str] = {"security": "Security", "system": "System"}
 
 EVENTS_COLUMNS: tuple[str, ...] = (
     "host", "channel", "event_id", "provider", "timestamp_raw", "previous_time", "new_time", "shift_ms",
@@ -102,7 +107,12 @@ class FileScan:
 
 @dataclass(frozen=True)
 class ExportScan:
-    """Everything read from one trial's exports: the usable hits and the per-file accounting."""
+    """Everything read from one trial's exports: the usable hits and the per-file accounting.
+
+    Each ``files_skipped`` entry carries ``manifest_listed``: True when data/manifest.csv lists that
+    trial/host/channel, so the skip leaves a hole in the evidence (SF-4); an export the manifest does not
+    know is reported but leaves no hole.
+    """
     hits: tuple[Hit, ...]
     files_read: tuple[dict, ...]
     files_skipped: tuple[dict, ...]
@@ -293,6 +303,59 @@ def hit_rows(hits: Iterable[Hit], bounds: PairBounds | None) -> list[dict[str, A
     return [hit_row(h, bounds) for h in sort_hits(hits)]
 
 
+def export_uid(hit: Hit) -> str:
+    """``export:<source_sha256>:<record_index>``: a uid that names the EVTX file and record of the hit (SF-1),
+    so a cut or stale status set by an export step stays traceable in stats.json."""
+    idx = "" if hit.record_index is None else str(hit.record_index)
+    return f"{EXPORT_UID_PREFIX}:{hit.source_sha256 or ''}:{idx}"
+
+
+def hit_change_row(hit: Hit) -> dict[str, Any]:
+    """The hit as a pair-cut change row ``{host, channel, event_id, us, event_uid}`` (SF-1).
+
+    WHY ``us`` = the record's own logged time: DB rows are placed by ``event_utc``, which is the same
+    recorded instant, so DB and export changes are ordered against the pairs on one basis. The channel is
+    written as the DB writes it so ``pairs.is_clock_change`` treats both alike.
+    """
+    chan = DB_CHANNEL.get(hit.channel.strip().lower(), hit.channel)
+    return {"host": hit.host, "channel": chan, "event_id": int(hit.event_id), "us": hit.us,
+            "event_uid": export_uid(hit)}
+
+
+def hit_shift(hit: Hit) -> ShiftInfo:
+    """ShiftInfo of a hit from its logged previous/new time, as ``shift_from_record`` resolves a DB row (D2):
+    an unreadable time gives an unknown shift (which counts, D1) with the reason."""
+    return ShiftInfo(hit.previous_time, hit.new_time, hit.shift_ms,
+                     None if hit.shift_ms is not None else "previous/new time not readable")
+
+
+def export_change_inputs(export: ExportScan | None) -> tuple[list[dict[str, Any]], dict[str, ShiftInfo]]:
+    """(change rows, uid -> ShiftInfo) of every export hit, for ``pairs.pair_trial`` (SF-1); empty without a
+    scan. Hits of skipped files are not in ``export.hits``, so they never feed the cut."""
+    if export is None:
+        return [], {}
+    hits = sort_hits(export.hits)
+    return [hit_change_row(h) for h in hits], {export_uid(h): hit_shift(h) for h in hits}
+
+
+def manifest_holes(export: ExportScan) -> list[dict]:
+    """Skipped files that data/manifest.csv lists for the trial (SF-4): their clock changes are unknown."""
+    return [f for f in export.files_skipped if f.get("manifest_listed")]
+
+
+def scan_status(export: ExportScan | None) -> str:
+    """``complete`` | ``incomplete`` (SF-4, owner 2026-11-12).
+
+    Incomplete when the scan was not run, a manifest-listed security/system export was skipped (missing,
+    no records, a record without or with another sha256, mixed sha256), or a clock-change record has no
+    parseable time. WHY any record without a time and not only in-span ones: without a time the record
+    cannot be placed, so it may lie in the span. A host/channel the manifest does not list is no hole.
+    """
+    if export is None or manifest_holes(export) or export.records_without_time > 0:
+        return SCAN_INCOMPLETE
+    return SCAN_COMPLETE
+
+
 def pairs_source_of(trial: str, text: str) -> dict[str, str]:
     """Provenance of the pair bounds: the repo-relative pairs.csv path and the SHA-256 of its text.
 
@@ -303,7 +366,8 @@ def pairs_source_of(trial: str, text: str) -> dict[str, str]:
 
 
 def bounds_from_pairs_text(text: str) -> dict[str, tuple[int, int]]:
-    """host -> (first, last) kept-pair 4624 instant from pairs.csv text."""
+    """host -> (first, last) kept-pair 4624 instant from pairs.csv text (not the classification bounds since
+    owner 2026-11-12: those are the original pairs, ``pairs.original_bounds``)."""
     return ch.pair_bounds(csv.DictReader(io.StringIO(text, newline="")))
 
 
@@ -331,7 +395,8 @@ def build_clock_outputs(trial: str, events: Sequence[Mapping], window_start_utc:
     Returns ``changes`` (DB + export ClockChange, with the last boot before each), ``changes_rows``
     (clock_changes.csv), ``events_rows`` (clock_events.csv, None without an export scan), ``scan``
     (clock_scan.json, None without an export scan), ``pre_steps`` (D4), ``flag`` (D3: True / False; None
-    when the exports were not scanned and the DB alone does not flag) and ``summary`` (for stats.json).
+    when the exports were not scanned and the DB alone does not flag, and always None on an incomplete scan,
+    SF-4), ``clock_scan`` (``complete`` | ``incomplete``, SF-4) and ``summary`` (for stats.json).
     """
     span = span_from_window(window_start_utc, window_end_utc, db)
     lo, hi = span["lo_us"], span["hi_us"]
@@ -341,11 +406,16 @@ def build_clock_outputs(trial: str, events: Sequence[Mapping], window_start_utc:
     all_changes = ch.sort_changes(ch.with_last_boot(db_list + ex_list, ch.boot_times(events)))
     counts = ch.class_counts(all_changes, bounds)
     flag_known = ch.flags_trial(all_changes, bounds)
-    flag: bool | None = flag_known if (export is not None or flag_known) else None
+    status = scan_status(export)
+    flag: bool | None
+    if export is not None:
+        flag = flag_known if status == SCAN_COMPLETE else None   # SF-4: unknown, never "no change"
+    else:
+        flag = flag_known if flag_known else None
     steps = ch.pre_steps(events, all_changes, win_start, win_end_excl)
     unresolved = sorted(({"event_uid": uid, "reason": info.reason} for uid, info in (shifts or {}).items()
                          if info.shift_ms is None), key=lambda d: d["event_uid"])
-    summary = {"export_scan_run": export is not None, "clock_change_in_window": flag,
+    summary = {"export_scan_run": export is not None, "clock_change_in_window": flag, "clock_scan": status,
                "min_clock_step_ms": params.MIN_CLOCK_STEP_MS, "db_clock_changes": len(db_list),
                "export_hits": None if export is None else len(export.hits),
                "counted_count": sum(1 for c in all_changes if c.counted), **counts,
@@ -360,8 +430,11 @@ def build_clock_outputs(trial: str, events: Sequence[Mapping], window_start_utc:
         scan_doc = {"trial_id": trial, "method": SCAN_METHOD, "tool_version": params.TOOL_VERSION,
                     "search_span": {k: span[k] for k in ("start_utc", "end_utc", "window_start_utc", "window_end_utc")},
                     "db": span["db"], "pairs_source": dict(pairs_source) if pairs_source else None,
+                    "classification_bounds": "original pairs: mutual nearest after the far drop, before the "
+                                             "change cut (owner 2026-11-12)",
                     "files_read": list(export.files_read), "files_skipped": list(export.files_skipped),
                     "coverage_complete": not export.files_skipped,
+                    "clock_scan": status, "manifest_files_skipped": len(manifest_holes(export)),
                     "clock_change_records_without_time": export.records_without_time,
                     "hits": len(export.hits), "db_clock_changes": len(db_list),
                     "min_clock_step_ms": params.MIN_CLOCK_STEP_MS,
@@ -369,7 +442,8 @@ def build_clock_outputs(trial: str, events: Sequence[Mapping], window_start_utc:
                     "counted_count": summary["counted_count"], **counts,
                     "clock_change_in_window": flag, "db_shift_unresolved": unresolved, "pre_step": steps}
     return {"changes": all_changes, "changes_rows": ch.change_rows(trial, all_changes, bounds),
-            "events_rows": events_rows, "scan": scan_doc, "pre_steps": steps, "flag": flag, "summary": summary}
+            "events_rows": events_rows, "scan": scan_doc, "pre_steps": steps, "flag": flag, "clock_scan": status,
+            "summary": summary}
 
 
 def clock_texts(clock: Mapping[str, Any]) -> dict[str, str]:
@@ -499,7 +573,8 @@ def files_to_scan(repo: Path, trial: str, shas: Mapping[tuple[str, str], set[str
 
 
 def collect_export(repo: Path, trial: str, lo_us: int, hi_us: int) -> ExportScan:
-    """Read the trial's security/system exports and keep the hits of files that pass the sha256 check."""
+    """Read the trial's security/system exports and keep the hits of files that pass the sha256 check; every
+    skipped file says whether the manifest lists it (SF-4)."""
     shas = manifest_shas(repo, trial)
     read: list[dict] = []
     skipped: list[dict] = []
@@ -508,13 +583,15 @@ def collect_export(repo: Path, trial: str, lo_us: int, hi_us: int) -> ExportScan
     for host, c in files_to_scan(repo, trial, shas):
         path = jsonl_path(repo, trial, host, c)
         shown = co_run.display_path(path, repo)
+        listed = (host, c) in shas
         if not path.is_file():
-            skipped.append({"path": shown, "reason": "export not found (data/manifest.csv lists this host/channel)"})
+            skipped.append({"path": shown, "reason": "export not found (data/manifest.csv lists this host/channel)",
+                            "manifest_listed": listed})
             continue
         fs = scan_records(iter_jsonl(path), host, lo_us, hi_us)
         reason = file_skip_reason(fs, shas.get((host, c), set()))
         if reason:
-            skipped.append({"path": shown, "reason": reason})
+            skipped.append({"path": shown, "reason": reason, "manifest_listed": listed})
             continue
         (sha,) = fs.sha256_values
         read.append({"path": shown, "source_sha256": sha, "records": fs.n_records, "hits": len(fs.hits),
@@ -525,21 +602,13 @@ def collect_export(repo: Path, trial: str, lo_us: int, hi_us: int) -> ExportScan
     return ExportScan(tuple(sort_hits(hits)), tuple(read), tuple(skipped), unplaced)
 
 
-def pairs_input(repo: Path, trial: str) -> tuple[dict[str, tuple[int, int]] | None, dict[str, str] | None]:
-    """(bounds, provenance) from out/clock_offset/<trial>/pairs.csv when it exists, else (None, None)."""
-    path = co_run.out_dir(repo, trial) / PAIRS_FILE
-    if not path.is_file():
-        return None, None
-    with open(path, encoding="utf-8", newline="") as fh:
-        text = fh.read()
-    return bounds_from_pairs_text(text), pairs_source_of(trial, text)
-
-
 # ---------------------------------------------------------------- standalone orchestration
 
 def scan_one(repo: Path, trial: str) -> dict[str, Any] | None:
     """Standalone scan of one allowed trial (DB read-only for the window and the DB rows); None without an
-    agent root. Classification uses the pairs.csv that run.py wrote (``no_pairs`` when absent)."""
+    agent root. The pairs are recomputed through ``run.trial_pairs`` (the step's own path), so the
+    classification uses the same original-pair bounds as the step and the provenance names the same pairs.csv
+    text the step writes (owner 2026-11-12)."""
     path = co_run.db_path(repo, trial)
     events, sha_before, sha_after = co_run.load_trial(path)
     if sha_after != sha_before:
@@ -550,7 +619,10 @@ def scan_one(repo: Path, trial: str) -> dict[str, Any] | None:
     span = span_from_window(win.start_utc, win.end_utc, None)
     export = collect_export(repo, trial, span["lo_us"], span["hi_us"])
     shifts = resolve_db_shifts(repo, trial, events)
-    bounds, source = pairs_input(repo, trial)
+    host_pairs = co_run.trial_pairs(events, win, shifts, export)[0]
+    pair_rows = [outputs.pair_row(p) for h in sorted(host_pairs) for p in host_pairs[h].kept]
+    bounds = pairs_mod.original_bounds(host_pairs)
+    source = pairs_source_of(trial, outputs.csv_text(pair_rows, params.PAIRS_COLUMNS))
     return build_clock_outputs(trial, events, win.start_utc, win.end_utc,
                                {"path": co_run.display_path(path, repo), "sha256": sha_before},
                                export, shifts, bounds, source)
@@ -592,7 +664,7 @@ def summary_line(trial: str, s: Mapping[str, Any]) -> str:
             f"db_changes={s['db_clock_changes']} counted={s['counted_count']} routine={by['routine']} "
             f"expected={s['expected_count']} unexpected={s['unexpected_count']} "
             f"steps_in_window={s['counted_steps_in_window']} files_read={s['files_read']} "
-            f"files_skipped={s['files_skipped']}")
+            f"files_skipped={s['files_skipped']} clock_scan={s.get('clock_scan')}")
 
 
 def report_lines(result: Mapping[str, Any]) -> list[str]:

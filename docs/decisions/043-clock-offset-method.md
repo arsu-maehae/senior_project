@@ -67,7 +67,9 @@
 ## Parameter freeze (spec 08 §5, ATK-10, COT-17; T6b.2, 2026-11-12)
 `src/clock_offset/params.py` SHA-256, computed over its bytes with CRLF normalised to LF (so git's line-ending conversion on Windows cannot change it):
 
-`params_sha256: 9dcd662b18863d062741e904482d45df005c73c2ba679f7718dfd68a70df82e3`
+`params_sha256: 0068779d8bf932a136eb348437f892bd1c0bbe36692fdd5f920551300f98d30a`
+
+(Re-recorded 2026-11-12 for review SF-3: `OFFSETS_COLUMNS` gained `clock_changes_sha256` and `clock_scan`; no parameter value changed. Previous hash `9dcd662b…`, before that `0bfa7c8d…`.)
 
 (First recorded as `0bfa7c8d…` before the owner added `MIN_CLOCK_STEP_MS` on 2026-11-12; see the T6b.2 amendment below.)
 
@@ -135,3 +137,9 @@ Evidence: CO-19 scan of the decoded exports of the 11 allowlisted trials (`out/c
     - **Consequence of the planned order** (revert, boot, reading, resync, reading, scenario): the resync would come after ep-01's only pairs. With the cut rule, ep-01 becomes `stale` or `none`, and CO-17 refuses every rerun trial.
     - **Decision:** drop the sync for every rerun trial. Each trial gets a reading before the scenario and one after collection on EP-01/02/03 (+ `tzutil /g`). The cut rule (D2) is unchanged, with no pair carry-over across a logged shift.
     - **Amends** decision 032 item 2 (sync before reruns), spec 08 CO-12 and §8 Q8, and `docs/lab/rerun_plan.md`.
+12. **Review SF-1, SF-3, SF-4 fixed (owner 2026-11-12):**
+    - **SF-1:** clock changes found by the CO-19 export scan count like DB rows for the cut and for `stale` (deduplicated on host, channel, event id and instant). In every existing trial the exports are the only source.
+    - **Flag (owner):** `clock_change_in_window` and the classification are measured against the host's **original** pairs (before the cut). A counted step between them is `between_pairs` and flags the trial, even though the cut drops the earlier pairs.
+    - **SF-3:** `data/processed` clock files are written only by a run that includes the export scan (`--no-scan` removed). The offsets file carries `clock_changes_sha256` and `clock_scan`. `trial_window` and the gate refuse a trial whose offsets or changes rows name another trial, whose changes file does not match the hash, or that has an `ok`/`wide` row without `offset_ms`.
+    - **SF-4:** an incomplete scan (a skipped manifest-listed export, or a clock-change record without a time) gives `clock_scan = incomplete`, and the trial is refused.
+    - **Effect on the 11 allowlisted trials:** none on offsets, pairs, clock changes or the gate CSVs; every scan is complete.

@@ -19,6 +19,7 @@ OFFSETS_COLUMNS = [
     "trial_id", "host", "offset_ms", "offset_status", "offset_unc_ms", "n_pairs", "n_dropped_far",
     "n_pairs_lab_ip", "late_gap_s", "min_ms", "q1_ms", "median_ms", "q3_ms", "max_ms", "loo_shift_ms",
     "pair_span_s", "host_has_events", "method", "search_start_utc", "search_end_utc", "db_sha256", "tool_version",
+    "clock_changes_sha256", "clock_scan",
 ]
 CHANGES_COLUMNS = [
     "trial_id", "host", "channel", "event_id", "change_utc", "previous_time", "new_time", "shift_ms", "counted",
@@ -58,8 +59,14 @@ def changes_path(repo: Path, trial: str) -> Path:
     return Path(repo).joinpath(*PROCESSED, f"{trial}{CHANGES_SUFFIX}")
 
 
-def write_offsets(path: Path, trial: str, db_sha: str, spec: Spec | None = None) -> str:
-    """Write an offsets file with the spec 08 section 3 header; returns the SHA-256 of the file."""
+def write_offsets(path: Path, trial: str, db_sha: str, spec: Spec | None = None, *,
+                  changes_sha: str | None = None, clock_scan: str = "complete") -> str:
+    """Write an offsets file with the spec 08 section 3 header; returns the SHA-256 of the file.
+
+    `changes_sha` is the `clock_changes_sha256` column (SF-3), repeated on every row; None writes an empty cell (use
+    `write_clock_files`, which passes the SHA-256 of the changes file it writes). `clock_scan` is `complete` unless a
+    test says otherwise (SF-4).
+    """
     spec = default_offsets() if spec is None else spec
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -72,7 +79,8 @@ def write_offsets(path: Path, trial: str, db_sha: str, spec: Spec | None = None)
             row.update(trial_id=trial, host=host, offset_ms="" if none_like or offset_ms is None else offset_ms,
                        offset_status=status, offset_unc_ms="" if none_like else 0,
                        host_has_events="true" if has_events else "false", db_sha256=db_sha,
-                       method="synthetic", tool_version="clock_offset test")
+                       method="synthetic", tool_version="clock_offset test",
+                       clock_changes_sha256="" if changes_sha is None else changes_sha, clock_scan=clock_scan)
             w.writerow(row)
     return sha256_bytes(path)
 
@@ -102,7 +110,23 @@ def write_changes(path: Path, rows: Sequence[Mapping] | None = None) -> str:
 
 
 def write_clock_files(repo: Path, trial: str, db_sha: str, spec: Spec | None = None,
-                      rows: Sequence[Mapping] | None = None) -> tuple[str, str]:
-    """Both files next to the DB under data/processed; returns (offsets sha256, clock_changes sha256)."""
-    return (write_offsets(offsets_path(repo, trial), trial, db_sha, spec),
-            write_changes(changes_path(repo, trial), rows))
+                      rows: Sequence[Mapping] | None = None, *, clock_scan: str = "complete",
+                      offsets_trial: str | None = None, recorded_changes_sha: str | None = None,
+                      swap_changes: Sequence[Mapping] | None = None) -> tuple[str, str]:
+    """Both files next to the DB under data/processed; returns (offsets sha256, clock_changes sha256 of the file on disk).
+
+    The changes file is written first and its SHA-256 goes into every offsets row (`clock_changes_sha256`, SF-3), as
+    a real clock_offset run does; `clock_scan` is `complete` (SF-4) unless given. One defect at a time for the refusal
+    tests:
+    - `offsets_trial`: the trial id written in the offsets rows (an offsets file for another trial);
+    - `recorded_changes_sha`: the hash the offsets rows record, instead of the changes file's own;
+    - `swap_changes`: rows of a DIFFERENT changes file that replaces the written one AFTER the offsets recorded the
+      hash (a clock_changes.csv copied from another run); the returned hash is that of the file now on disk.
+    """
+    changes_sha = write_changes(changes_path(repo, trial), rows)
+    o_sha = write_offsets(offsets_path(repo, trial), offsets_trial or trial, db_sha, spec,
+                          changes_sha=changes_sha if recorded_changes_sha is None else recorded_changes_sha,
+                          clock_scan=clock_scan)
+    if swap_changes is not None:
+        changes_sha = write_changes(changes_path(repo, trial), swap_changes)
+    return o_sha, changes_sha

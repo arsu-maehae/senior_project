@@ -1114,7 +1114,8 @@ def test_tw67_refusals_write_no_row_and_say_why(tmp_path):
     _expect_skipped(_run_one(repo, tmp_path / "b"), "s02_t00", "clock_changes")
     # offsets computed from another DB version
     repo = _simple_repo(tmp_path / "c", ["s02_t00"], manifest)
-    cf.write_offsets(cf.offsets_path(repo, "s02_t00"), "s02_t00", "9" * 64)
+    cf.write_offsets(cf.offsets_path(repo, "s02_t00"), "s02_t00", "9" * 64,
+                     changes_sha=cf.sha256_bytes(cf.changes_path(repo, "s02_t00")))
     _expect_skipped(_run_one(repo, tmp_path / "c"), "s02_t00", "db_sha256")
     # clock-only and quarantine
     repo = _simple_repo(tmp_path / "d", ["s04_t01", "s05q_t01"], [("s04", "t01", at(-3600), at(3600)),
@@ -1132,6 +1133,72 @@ def test_tw67_refusals_write_no_row_and_say_why(tmp_path):
     make_manifest(bare, manifest)
     with pytest.raises(TrialWindowError, match="trial DB not found"):
         _run_one(bare, tmp_path / "f")
+
+
+SF_MANIFEST = [("s02", "t00", at(-3600), at(3600))]
+
+
+def _sf_changes_row(trial: str = "s02_t00") -> dict:
+    return cf.change(trial, "ep-02", at(-30), shift_ms=8480, counted=True, classification="expected_before_first_pair")
+
+
+# review SF-3 / SF-4: each defect of the clock files, as kwargs of `cf.write_clock_files`, with the words the SKIPPED
+# reason must contain (spec 08 section 3; spec 02 section 2.2).
+SF_DEFECTS = {
+    "changes_file_not_the_one_the_offsets_hash_names": (dict(swap_changes=[_sf_changes_row()]),
+                                                        ("clock_changes_sha256",)),
+    "offsets_record_another_changes_hash": (dict(recorded_changes_sha="4" * 64), ("clock_changes_sha256",)),
+    "offsets_record_empty_changes_hash": (dict(recorded_changes_sha=""), ("clock_changes_sha256",)),
+    "changes_row_names_another_trial": (dict(rows=[_sf_changes_row("s03_t00")]),
+                                        ("clock changes file is for trial", "s03_t00")),
+    "offsets_rows_name_another_trial": (dict(offsets_trial="s03_t00"), ("clock offsets file is for trial", "s03_t00")),
+    "ok_row_without_offset_ms": (dict(spec=cf.offsets_spec(ep_01=(None, "ok", True))), ("offset_ms", "ep-01")),
+    "wide_row_without_offset_ms": (dict(spec=cf.offsets_spec(ep_02=(None, "wide", True))), ("offset_ms", "ep-02")),
+    "clock_scan_incomplete": (dict(clock_scan="incomplete"), ("incomplete", "clock_scan.json", "s02_t00")),
+    "clock_scan_unknown_value": (dict(clock_scan="partial"), ("clock_scan.json",)),
+}
+
+
+@pytest.mark.parametrize("name", sorted(SF_DEFECTS))
+def test_tw67b_sf3_sf4_unbound_or_incomplete_clock_files_give_no_row_and_say_why(tmp_path, name):
+    """TW-67b (review SF-3, SF-4; spec 02 section 2.2, spec 08 section 3): an offsets file that is not bound to its
+    clock-changes file or to the trial, whose scan was not `complete`, or that has an ok/wide row without an offset gives
+    no window row, a SKIPPED reason naming the cause, and writes nothing for the trial."""
+    kw, words = SF_DEFECTS[name]
+    repo = _simple_repo(tmp_path, ["s02_t00"], SF_MANIFEST)
+    db_sha = cf.sha256_bytes(repo / "data" / "processed" / "s02_t00.sqlite3")
+    cf.write_clock_files(repo, "s02_t00", db_sha, **kw)
+    res = _run_one(repo, tmp_path)
+    _expect_skipped(res, "s02_t00", *words)
+    out = tmp_path / "w.csv"
+    assert not out.exists() or "s02_t00" not in out.read_text(encoding="utf-8")
+
+
+def test_tw67c_sf3_control_the_same_files_without_the_defect_give_a_row(tmp_path):
+    """TW-67c: with the binding intact (changes hash recorded, scan complete) the very same trial gets its window row, so the
+    refusals above are caused by the defects only."""
+    repo = _simple_repo(tmp_path, ["s02_t00"], SF_MANIFEST)
+    db_sha = cf.sha256_bytes(repo / "data" / "processed" / "s02_t00.sqlite3")
+    cf.write_clock_files(repo, "s02_t00", db_sha, rows=[_sf_changes_row()])
+    res = _run_one(repo, tmp_path)
+    assert [r["trial_id"] for r in res["rows"]] == ["s02_t00"], res["skipped"]
+    assert res["rows"][0]["clock_changes_sha256"] == cf.sha256_bytes(cf.changes_path(repo, "s02_t00"))
+
+
+def test_tw67d_sf3_clock_refusal_function_with_trial_id_names_each_defect(tmp_path):
+    """TW-67d: `clock_refusal(clock, ..., trial_id=...)` returns None for bound files of a complete scan and names each
+    SF-3 / SF-4 defect otherwise."""
+    repo = _simple_repo(tmp_path, ["s02_t00"], SF_MANIFEST)
+    db = repo / "data" / "processed" / "s02_t00.sqlite3"
+    db_sha = cf.sha256_bytes(db)
+    off, chg = cf.offsets_path(repo, "s02_t00"), cf.changes_path(repo, "s02_t00")
+    good = window.load_clock_files(off, chg)
+    assert window.clock_refusal(good, None, db_sha, trial_id="s02_t00") is None
+    for name, (kw, words) in SF_DEFECTS.items():
+        cf.write_clock_files(repo, "s02_t00", db_sha, **kw)
+        clock = window.load_clock_files(off, chg)
+        reason = window.clock_refusal(clock, None, db_sha, trial_id="s02_t00")
+        assert reason and all(w in reason for w in words), (name, reason)
 
 
 def _shifted_tree(first_root_utc: str, last_off: float = 100.0) -> list[dict]:

@@ -38,6 +38,12 @@ FLAG_CLASSES: frozenset[str] = frozenset({CLASS_BETWEEN, CLASS_AFTER, CLASS_NO_P
 SOURCE_DB = "db"
 SOURCE_EXPORT = "export"
 
+# Trial-level CO-19 scan status, written into the offsets file (review SF-4, owner 2026-11-12); consumers refuse
+# anything but ``complete``. Defined here because scan.py (writer) and correct.py (reader) both import this module.
+SCAN_COMPLETE = "complete"
+SCAN_INCOMPLETE = "incomplete"
+SCAN_STATUSES: tuple[str, ...] = (SCAN_COMPLETE, SCAN_INCOMPLETE)
+
 CHANGES_SUFFIX = ".clock_changes.csv"
 # D5 file. ``channel``, ``event_id`` and ``last_boot_before_utc`` are added to the owner's list: the first two
 # tell a 4616 from a System 1, the third is the lower end of the "logged before" interval (D4), which a
@@ -178,8 +184,11 @@ def sort_changes(changes: Iterable[ClockChange]) -> list[ClockChange]:
 def classify(change: ClockChange, bounds: Bounds | None) -> str:
     """routine (not counted) / expected (before the first kept pair) / between / after / no_pairs (D3).
 
-    The bounds are the host's first and last KEPT pair 4624. After the D2 cut no counted DB change lies
-    between kept pairs, so a ``between_pairs`` change is one the estimate did not see (an export hit).
+    The bounds are the host's first and last ORIGINAL pair 4624: the mutual-nearest pairs after the far drop
+    and before the change cut (owner 2026-11-12, ``pairs.original_bounds``), for DB and export changes alike.
+    So a step before the first original pair is expected; a step between the first and last original pair is
+    ``between_pairs`` and flags the trial even though the cut dropped the earlier pairs; a step after the last
+    original pair is ``after_last_pair`` and flags (the cut rule makes the host stale).
     """
     if not change.counted:
         return CLASS_ROUTINE
@@ -207,7 +216,11 @@ def class_counts(changes: Sequence[ClockChange], bounds: Bounds | None) -> dict[
 
 
 def pair_bounds(pair_rows: Iterable[Mapping]) -> dict[str, tuple[int, int]]:
-    """host -> (first, last) 4624 instant of its kept pairs, from pairs rows (``host``, ``t_4624_utc``)."""
+    """host -> (first, last) 4624 instant of the given pairs rows (``host``, ``t_4624_utc``).
+
+    Not the classification bounds since owner 2026-11-12 (those come from the original pairs,
+    ``pairs.original_bounds``); kept for callers that hold only pairs rows.
+    """
     out: dict[str, tuple[int, int]] = {}
     for r in pair_rows:
         us = to_us(r["t_4624_utc"])

@@ -7,7 +7,10 @@ the answer-key folder is never opened.
 
 The CO-19 export scan (scan.py) runs as part of the step (``scan=True``, owner D6). It reads the decoded
 exports and the JSONL lines of DB clock-change rows, both read-only, and its files are written together
-with the offsets, so a rerun never deletes them (``write_outputs`` empties the folder first).
+with the offsets, so a rerun never deletes them (``write_outputs`` empties the folder first). Its hits feed
+the pair cut and the stale status like DB clock changes (review SF-1), and the data/processed files are
+written only after a scan (SF-3): the offsets file names the clock_changes.csv it belongs to
+(``clock_changes_sha256``) and whether the scan was complete (``clock_scan``, SF-4).
 """
 from __future__ import annotations
 
@@ -27,7 +30,7 @@ from . import check, estimate, outputs, params
 from . import scan as co19  # CO-19 scan; ``scan`` is the run() flag name (owner D6)
 from .correct import co17_refusal, offsets_from_rows
 from .common import s_to_us, us_to_s
-from .pairs import HostPairs, pair_trial
+from .pairs import HostPairs, original_bounds, pair_trial
 
 REPO = Path(__file__).resolve().parents[2]
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
@@ -200,6 +203,34 @@ def window_stats(win: WindowResult, last_agent_utc: str | None, span: Mapping | 
             "manifest_span": dict(span) if span else None, "time_basis": "raw"}
 
 
+def binding_columns(changes_text: str, clock_scan: str) -> dict[str, str]:
+    """The two trial-level offsets columns that bind the offsets file to its clock_changes.csv (SF-3, SF-4).
+
+    ``clock_changes_sha256`` is the SHA-256 of the exact changes text written in the same run (UTF-8, ``\n``
+    endings, as ``outputs.write_text`` writes it), so a consumer can tell a swapped or rewritten changes
+    file; ``clock_scan`` says whether every manifest-listed export was scanned.
+    """
+    return {"clock_changes_sha256": hashlib.sha256(changes_text.encode("utf-8")).hexdigest(),
+            "clock_scan": clock_scan}
+
+
+def trial_pairs(events: Sequence[Mapping], win: WindowResult, shifts: Mapping[str, ch.ShiftInfo] | None,
+                export: "co19.ExportScan | None") -> tuple[dict[str, HostPairs], list[Mapping], int, int, int]:
+    """(host pairs, dc01 tickets, span lo, span hi, window end exclusive) for one trial's raw agent window.
+
+    WHY one function: the step (``compute_trial``) and the standalone scan (``scan.scan_one``) must pair,
+    cut and therefore classify identically (owner 2026-11-12: classification uses the original pairs).
+    """
+    start_us, end_us = to_us(win.start_utc), to_us(win.end_utc)
+    end_excl = end_us + US_PER_MS            # window convention: start <= t < end + 1 ms (as the gate)
+    pad = s_to_us(params.PAIR_PAD_S)
+    lo, hi = start_us - pad, end_us + pad
+    extra_changes, extra_shifts = co19.export_change_inputs(export)
+    host_pairs, tickets = pair_trial(events, lo, hi, end_excl, shifts=shifts, extra_changes=extra_changes,
+                                     extra_shifts=extra_shifts)
+    return host_pairs, tickets, lo, hi, end_excl
+
+
 def compute_trial(trial: str, events: Sequence[Mapping], span: Mapping | None, db_sha: str, db_text: str,
                   sha_after: str | None = None, *, shifts: Mapping[str, ch.ShiftInfo] | None = None,
                   export: "co19.ExportScan | None" = None, win: WindowResult | None = None) -> dict[str, Any]:
@@ -208,27 +239,28 @@ def compute_trial(trial: str, events: Sequence[Mapping], span: Mapping | None, d
     are out of scope here). Pure: ``events`` must carry ``us``.
 
     ``shifts`` resolves the DB clock-change rows (D2; None -> unknown -> counted). ``export`` holds the CO-19
-    export hits (None: the scan was not run, so the clock-change outputs cover the DB only). ``win`` may be
-    passed when the caller already computed the raw agent window.
+    export hits (None: the scan was not run, so the clock-change outputs cover the DB only and ``clock_scan``
+    is ``incomplete``). The export hits are change rows for the pair cut too (SF-1), with their logged shift.
+    ``win`` may be passed when the caller already computed the raw agent window.
     """
     win = win if win is not None else computed_window(events, span)
     if win is None:
         return {"refused": "no agent roots in the trial DB (the raw agent window bounds the pair search)"}
     start_us, end_us = to_us(win.start_utc), to_us(win.end_utc)
-    end_excl = end_us + US_PER_MS            # window convention: start <= t < end + 1 ms (as the gate)
-    pad = s_to_us(params.PAIR_PAD_S)
-    lo, hi = start_us - pad, end_us + pad
     last_agent = next((e for e in events if e["event_uid"] == win.end_event_uid), None)
     last_agent_us = last_agent["us"] if last_agent else None
+    host_pairs, tickets, lo, hi, end_excl = trial_pairs(events, win, shifts, export)
     has_events = hosts_with_events(events, start_us, end_excl)
-    host_pairs, tickets = pair_trial(events, lo, hi, end_excl, shifts=shifts)
-    common = estimate.common_columns(fmt_ms(lo), fmt_ms(hi), db_sha)
-    rows = estimate.offsets_rows(trial, host_pairs, has_events, last_agent_us, common)
-    offsets = offsets_from_rows(rows)
     pair_rows = [outputs.pair_row(p) for h in sorted(host_pairs) for p in host_pairs[h].kept]
     pairs_text = outputs.csv_text(pair_rows, params.PAIRS_COLUMNS)
     clock = co19.build_clock_outputs(trial, events, win.start_utc, win.end_utc, {"path": db_text, "sha256": db_sha},
-                                     export, shifts, ch.pair_bounds(pair_rows), co19.pairs_source_of(trial, pairs_text))
+                                     export, shifts, original_bounds(host_pairs),
+                                     co19.pairs_source_of(trial, pairs_text))
+    changes_txt = co19.changes_text(clock)
+    common = {**estimate.common_columns(fmt_ms(lo), fmt_ms(hi), db_sha),
+              **binding_columns(changes_txt, clock["clock_scan"])}
+    rows = estimate.offsets_rows(trial, host_pairs, has_events, last_agent_us, common)
+    offsets = offsets_from_rows(rows)
     check_rows, unjoined = check.check_pairs(events, offsets, start_us, end_excl, changes=clock["changes"])
     stats = {
         "trial_id": trial, "trial_role": trial_role(trial), "method": params.METHOD,
@@ -243,14 +275,16 @@ def compute_trial(trial: str, events: Sequence[Mapping], span: Mapping | None, d
                                                   "host_has_events")} for r in rows},
         "clock_flag": estimate.clock_flag(rows),
         # owner D3: a counted clock step after a host's first pair, or on a host without pairs (scan.py)
-        "clock_change_in_window": clock["flag"],
+        "clock_change_in_window": clock["flag"],        # null on an incomplete scan (SF-4)
+        "clock_scan": clock["clock_scan"],
         "clock_change_scan": clock["summary"],
         "co17_refusal_preview": co17_refusal(offsets, start_us),
         "check": {"rows": check_rows, "summary": check.check_summary(check_rows, unjoined)},
         "parameters": params_dict(),
         "pairs_total": len(pair_rows),
     }
-    return {"refused": None, "rows": rows, "pairs": pair_rows, "stats": stats, "clock": clock}
+    return {"refused": None, "rows": rows, "pairs": pair_rows, "stats": stats, "clock": clock,
+            "changes_text": changes_txt}
 
 
 def trial_files(result: Mapping[str, Any]) -> dict[str, str]:
@@ -283,11 +317,14 @@ def run(repo: Path, trials: Sequence[str] = params.DEFAULT_TRIALS, write: bool =
         scan: bool = True) -> dict[str, Any]:
     """Measure every trial, then write its files; return {"rows", "pairs", "stats", "clock", "refused"}.
 
-    ``scan`` runs the CO-19 export scan (about 90 s on the 11 default trials); ``scan=False`` skips it, so
-    clock_changes.csv then holds the DB clock changes only and stats.json says ``export_scan_run: false``.
-    Raises ClockOffsetError (nothing written) when an allowed trial has no DB or an event has no time.
-    Refused trials keep their reason and get no file.
+    ``scan`` runs the CO-19 export scan (about 90 s on the 11 default trials). ``scan=False`` is allowed only
+    with ``write=False`` (tests): the results then cover the DB clock changes only and say
+    ``clock_scan: incomplete``. Raises ClockOffsetError (nothing written) for ``write=True, scan=False``
+    (SF-3: a scan-less clock_changes.csv would look complete), when an allowed trial has no DB or an event
+    has no time. Refused trials keep their reason and get no file.
     """
+    if write and not scan:
+        raise ClockOffsetError("the export scan is required to write data/processed files")
     repo = Path(repo)
     wanted = list(dict.fromkeys(trials))          # de-duplicate, keep order
     require_dbs(repo, wanted)
@@ -318,7 +355,7 @@ def run(repo: Path, trials: Sequence[str] = params.DEFAULT_TRIALS, write: bool =
     if write:
         for trial, res in results.items():
             outputs.write_text(offsets_path(repo, trial), outputs.csv_text(res["rows"], params.OFFSETS_COLUMNS))
-            outputs.write_text(changes_path(repo, trial), co19.changes_text(res["clock"]))
+            outputs.write_text(changes_path(repo, trial), res["changes_text"])   # the text the offsets hash names
             outputs.write_outputs(out_dir(repo, trial), trial_files(res))
     return {"rows": {t: r["rows"] for t, r in results.items()}, "pairs": {t: r["pairs"] for t, r in results.items()},
             "stats": {t: r["stats"] for t, r in results.items()},

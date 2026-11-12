@@ -80,7 +80,7 @@ def clock_change_lines(stats: Mapping[str, Any], pre_steps: Sequence[Mapping] | 
              f"{s['min_clock_step_ms']} ms or shift unknown)", "",
              f"- export scan run: {str(s['export_scan_run']).lower()}; export hits {_fmt(s['export_hits'])}, "
              f"DB clock-change rows {s['db_clock_changes']}; files read {_fmt(s['files_read'])}, "
-             f"skipped {_fmt(s['files_skipped'])}",
+             f"skipped {_fmt(s['files_skipped'])}; clock scan {_fmt(s.get('clock_scan'))}",
              "- by classification: " + ", ".join(f"{k} {v}" for k, v in by.items()),
              f"- expected {s['expected_count']}, unexpected {s['unexpected_count']}, routine {s['routine_count']}; "
              f"clock_change_in_window: {_fmt(s['clock_change_in_window'])}"]
