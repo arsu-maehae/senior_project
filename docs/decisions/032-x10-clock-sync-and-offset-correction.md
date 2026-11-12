@@ -1,6 +1,6 @@
 # 032 — Clocks: sync before reruns, per-trial offset correction for kept trials, collector IPs
 
-**Date:** 2026-11-11 · **Status:** owner-directed 2026-11-11; the correction method is a proposal, to be decided on development data before any scoring · **Task:** ×10 ingest and validation · **Relates to:** decision 014 (5 s cross-host tolerance), 026 (trial window), 029 (criterion g)
+**Date:** 2026-11-11 · **Status:** owner-directed 2026-11-11; *item 2 (sync before reruns) superseded by decision 043 item 11 (owner 2026-11-12, review SF-2): no `w32tm /resync` is run during a rerun session; each trial's clocks are read before the scenario and after collection instead*; the correction method is a proposal, to be decided on development data before any scoring · **Task:** ×10 ingest and validation · **Relates to:** decision 014 (5 s cross-host tolerance), 026 (trial window), 029 (criterion g)
 
 ## Context
 Criterion g measures each endpoint's offset against dc01 from endpoint 4624 ↔ dc01 4769 pairs with the same LogonGuid (validation report §5, `docs/research/x10_design_validation.md`). Findings:

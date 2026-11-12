@@ -17,8 +17,11 @@ Broken trials are archived, never deleted (decision 034).
 - **Archive of the old trials:** the old broken copies stay in `data/incoming/x10/`. Before the first `x10_v2` ingest, the old S04 and S07 copies in `data/raw/`, `data/processed/` and `data/manifest.csv` are moved by a script, with hash checks, to `archive_x10_v1/` paths, so the new trials sit on the normal paths (details in decision 034). The old S05 trials are already in quarantine and do not collide. S01 has no old ×10 trials.
 
 ## Before the first run and in every session
-- All VMs are time-synced before the session starts (decision 032).
-- The offsets between hosts are checked at the start and at the end of each session and written down.
+- *(Owner 2026-11-12, decision 043 item 11; replaces the session sync of decision 032 item 2.)* **No clock sync:** do not run `w32tm /resync` on any VM before or between trials. A sync would land after ep-01's only offset pairs (its boot logons) and the trial would be refused.
+- **Clock readings, every trial, on EP-01, EP-02 and EP-03:**
+  1. after the VMs are up and **before the Caldera operation starts**: `w32tm /stripchart /computer:<dc01> /samples:5`, then `tzutil /g`, both appended to `<HOST>_clock.txt` in the trial folder;
+  2. **after log collection**: the same two commands, appended to the same file.
+  One file per VM per trial (`EP-01_clock.txt`, …), never edited afterwards (spec 08 CO-12). t01 readings are used in step 2; t02–t10 readings are reported only.
 - The logs are exported per trial as before (4 hosts × 5 logs, 20 files). Check the file count before leaving the lab.
 
 ## Items
@@ -38,7 +41,7 @@ Broken trials are archived, never deleted (decision 034).
 Do not start an item before the previous one is validated, unless the owner says so.
 
 ### Per-item checklist
-For each item, record in `docs/PROGRESS.md`: the trial ids, the date, the clock offsets at the start and end of the session, the validator result of the first trial, and the final validator result of the item.
+For each item, record in `docs/PROGRESS.md`: the trial ids, the date, that each trial folder has the three `<HOST>_clock.txt` files with a start and an end reading, the validator result of the first trial, and the final validator result of the item.
 
 ## Development and test mapping (decision 034)
 For the full reruns, new `t01` = development and `t02`–`t10` = test. Replacement trials (`s03_t11`, `s06_t11`, `s06_t12`) are test. Development stays `t00` for S02–S07 plus `t01` for all seven scenarios; the old S04 and S07 `t01` are invalid and replaced by the new `t01`. Each scenario ends with 9 test trials.

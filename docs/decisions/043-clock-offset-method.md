@@ -46,7 +46,7 @@
 - **Q3:** a host with 1 pair is not corrected; `MIN_PAIRS = 2` is provisional.
 - **Q4:** an unstable host is corrected with status `wide`, never left raw.
 - **Q6:** Security 4616 and System 1 are kept for new ingests only (spec 01 amendment in T6b.2), with no re-ingest. A read-only scan of the existing trials' decoded exports flags any trial with a clock change in its window (CO-18, CO-19).
-- **Q8 (c):** each rerun scenario's t01 (development) is not synced, with readings before the run and after collection. t02–t10 are synced after a reading, and both readings are recorded. Step 2 uses only the t01 start/end readings (CO-12).
+- **Q8 (revised 2026-11-12, review SF-2; was option c):** no rerun trial is synced, t01 and t02–t10 alike. Every trial gets a reading before the scenario and one after collection on EP-01/02/03, each followed by `tzutil /g`. Step 2 uses only the t01 readings; the t02–t10 readings are reported, never used to change a parameter (CO-12).
 - **Q5:** readings are `w32tm /stripchart` text, `<HOST>_clock.txt`, one per VM per trial in the trial folder.
 - **Q10:** every host is corrected; no minimum offset.
 - **Q12:** no change to the identity value now. `offset_unc` and `clock_unreliable` are carried to T7, and the T7 spec council decides.
@@ -130,3 +130,8 @@ Evidence: CO-19 scan of the decoded exports of the 11 allowlisted trials (`out/c
 10. **Other owner notes (2026-11-12):**
     - 11 of the 18 CO-10 check pairs have two candidate logons (WinRM keep-alive). The nearest is always the first logon, so no result changes (spec 08 §10.5).
     - The ep-01 4616 found in both the s06_t00 and s07_t00 exports is the known same-day overlap of those trials' exports (decision 026). Noted, no action.
+11. **Review SF-2: no sync in the reruns (owner 2026-11-12).**
+    - **Measured (read-only, 11 allowlisted trials):** ep-01's offset pairs are all its boot logons, 4–35 s after the boot: svc_sql / svc_backup / admin_it scheduled-task logons (type 4), the machine account (type 3) and an admin_it unlock (type 7). Examples: s04_t01 boot 04:08:56, pairs 04:09:04–04:09:25; s06_t01 boot 06:18:23, pairs 06:18:28–06:19:03. A few admin_it pairs come minutes later in s02_t00 and s02_t01. ep-01 has no later pairs, and the first agent command comes about 15 s after the boot.
+    - **Consequence of the planned order** (revert, boot, reading, resync, reading, scenario): the resync would come after ep-01's only pairs. With the cut rule, ep-01 becomes `stale` or `none`, and CO-17 refuses every rerun trial.
+    - **Decision:** drop the sync for every rerun trial. Each trial gets a reading before the scenario and one after collection on EP-01/02/03 (+ `tzutil /g`). The cut rule (D2) is unchanged, with no pair carry-over across a logged shift.
+    - **Amends** decision 032 item 2 (sync before reruns), spec 08 CO-12 and §8 Q8, and `docs/lab/rerun_plan.md`.
