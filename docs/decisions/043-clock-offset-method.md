@@ -114,7 +114,7 @@ Evidence: CO-19 scan of the decoded exports of the 11 allowlisted trials (`out/c
 7. **`late_gap_s`:**
    - **Reading taken:** the CSV uses spec §3's stated meaning, "to the last agent event", i.e. the uncut window end − 300 s.
    - **Why it matters:** the bracketed "(window end − 300 s)" equals that only when the export span does not cut the window. On 7 of 11 trials the span does cut it. The clipped-end value, which reproduces §10.7, is kept in `stats.json` (`late_gap_clipped_end_s`).
-   - **Open:** §10.7 and CO-16's "35–97 s on t01" understate the gap (e.g. s06_t01 ep-01 280 s, not 35 s). The owner confirms the definition before Q11 (step 2).
+   - **Resolved (owner 2026-11-12):** `late_gap_s` = time from the host's last pair to the last agent event in the window. Spec 08 §3, CO-16 and §10.7 are corrected (e.g. s06_t01 ep-01 280 s, not 35 s). The Q11 limit (step 2) uses this definition.
 8. **Gate and window (to be applied in T6b.2 tasks 4–5):**
    - **Columns:** CO-09 naming. `event_utc` = original, plus `event_utc_corrected`; `event_utc_raw` is dropped.
    - **GTA-05:** redefined to run on any development trial with a .97/.98/.99 session, and skipped until one exists.
@@ -127,3 +127,6 @@ Evidence: CO-19 scan of the decoded exports of the 11 allowlisted trials (`out/c
      - This adds 5 dc01 `::1` `loopback_or_self` 4624s to `dispositions.csv` (3 in s03_t00, 2 in s07_t00) and changes `removed_by_window` / `near_window` counts (s05_t00: 117 ep-03 PowerShell 4103 enter the window).
    - **Manifest span:** corrected per host before the clip (owner choice; spec 02 §2.1).
    - **`host_has_events`:** stays on the raw window (owner choice; spec 08 §3).
+10. **Other owner notes (2026-11-12):**
+    - 11 of the 18 CO-10 check pairs have two candidate logons (WinRM keep-alive). The nearest is always the first logon, so no result changes (spec 08 §10.5).
+    - The ep-01 4616 found in both the s06_t00 and s07_t00 exports is the known same-day overlap of those trials' exports (decision 026). Noted, no action.
