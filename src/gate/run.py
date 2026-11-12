@@ -69,25 +69,31 @@ def check_allowed(trial_id: str, db_path: Path, windows_csv: Path, repo: Path | 
     return row, start_us, end_us
 
 
-def apply_rules(events: Sequence[Mapping], logons_all: Sequence[Mapping], params: GateParams) -> dict[str, Any]:
+def apply_rules(events: Sequence[Mapping], logons_all: Sequence[Mapping], params: GateParams,
+                own_ll_sysmon3_all: Sequence[Mapping] = ()) -> dict[str, Any]:
     """GT-02..GT-16 on the in-window events: suppression, R4/R5/R6/R8, unmatched, supporting signals.
 
     Pure: returns every intermediate needed for the outputs and stats so each row stays traceable.
+    ``logons_all`` (every 4624) and ``own_ll_sysmon3_all`` (outbound link-local Sysmon 3) come from the
+    unclipped DB; they only feed the GT-02(b) map, the own-link-local lookup (decision 042) and stats.
     """
     excl_map = classify.excluded_logon_map(logons_all, params)
+    own_ll = classify.own_link_local(logons_all, own_ll_sysmon3_all, params)
+    wsm_pairs = classify.pair_wsmprovhost_91(events, seconds_to_us(params.winrm_pair_s))
     e7045 = [e for e in events if classify.is_7045(e)]
     e4697 = [e for e in events if classify.is_4697(e)]
     pairs = classify.pair_services(e7045, e4697, params.service_pair_s)
-    suppressed = classify.suppress_all(events, excl_map, pairs, params)
+    suppressed = classify.suppress_all(events, excl_map, pairs, params, own_ll.own, wsm_pairs)
     remote = [e for e in events if classify.is_remote_logon(e, suppressed)]
     r5, r5_reverse = rules.r5_rows(remote, events, suppressed, params)
     drafts = (rules.r4_rows(remote, events, suppressed) + r5
-              + rules.r6_rows(remote, events, suppressed, pairs) + rules.r8_rows(remote, events, suppressed, params))
+              + rules.r6_rows(remote, events, suppressed, pairs)
+              + rules.r8_rows(remote, events, suppressed, params, wsm_pairs))
     unmatched = outputs.unmatched_drafts(remote, drafts)
     signals = rules.supporting_signals(events, excl_map, suppressed, params)
     return {"excl_map": excl_map, "service_pairs": pairs, "suppressed": suppressed, "remote": remote,
             "drafts": drafts, "unmatched": unmatched, "signals": signals, "r5_reverse": r5_reverse,
-            "e7045": e7045, "e4697": e4697}
+            "e7045": e7045, "e4697": e4697, "own_ll": own_ll, "wsm_pairs": wsm_pairs}
 
 
 def sensitivity(events: Sequence[Mapping], res: Mapping[str, Any], params: GateParams) -> dict[str, dict[str, int]]:
@@ -113,8 +119,9 @@ def sensitivity(events: Sequence[Mapping], res: Mapping[str, Any], params: GateP
             if w["host"] == a["host"] and classify.norm_ip(a.get("source_ip")) is not None
             and classify.norm_ip(w.get("source_ip")) == classify.norm_ip(a.get("source_ip"))
             and classify.within(w["us"], a["us"], us))
+        # Decision 042: the 91 is 0..t s AFTER the wsmprovhost Sysmon 1 (the order seen in the data).
         out["winrm_91_to_wsmprovhost_pairs"][key] = sum(
-            1 for s in starts for w in w91 if w["host"] == s["host"] and 0 <= s["us"] - w["us"] <= us)
+            1 for s in starts for w in w91 if w["host"] == s["host"] and 0 <= w["us"] - s["us"] <= us)
     return out
 
 
@@ -156,6 +163,7 @@ def build_stats(trial_id: str, db_text: str, sha_before: str, sha_after: str, wi
                          events, res["excl_map"], res["service_pairs"])},
         "near_duplicate_uids": near_dup,
         "tier_d_ip_lookup": outputs.tier_d_lookup(res["drafts"], ids, ip_lookup),
+        "own_link_local": res["own_ll"].report,
         "sensitivity": sensitivity(events, res, params),
         "parameters": params_dict(params),
     }
@@ -180,7 +188,7 @@ def run_gate(trial_id: str, db_path: Path, windows_csv: Path, out_root: Path, re
     windows_sha = sha256_file(Path(windows_csv))
     scan, sha_before, sha_after = inputs.load_events(Path(db_path), start_us, end_us, params,
                                                        expected_sha256=window_row["db_sha256"])
-    res = apply_rules(scan.in_window, scan.logons_all, params)
+    res = apply_rules(scan.in_window, scan.logons_all, params, scan.own_ll_sysmon3_all)
     near_dup = {u for uids in scan.near_dup_groups.values() if len(set(uids)) > 1 for u in uids}
     ws, tb = window_row["window_source"], params.time_basis
     trig_rows = outputs.numbered_rows(res["drafts"], trial_id, "g", ws, tb, near_dup, TRIGGER_COLUMNS)

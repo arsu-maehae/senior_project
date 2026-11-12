@@ -65,7 +65,7 @@ EVENT_COLUMNS = [
     "destination_ip", "destination_port", "initiated", "account_name", "domain_short", "target_logon_id", "target_linked_logon_id",
     "subject_logon_id", "session_id", "machine_account", "authentication_package", "image", "parent_image",
     "share_name", "relative_target_name", "service_name", "service_image_path", "target_image", "granted_access",
-    "duplicate_content_sha256", "source_relative_path", "source_line", "timestamp_utc", "trial_id",
+    "subject_account", "duplicate_content_sha256", "source_relative_path", "source_line", "timestamp_utc", "trial_id",
 ]
 INT_COLUMNS = {"event_id", "record_id", "logon_type", "source_port", "destination_port", "initiated",
                "target_logon_id", "target_linked_logon_id", "subject_logon_id", "session_id", "machine_account",
@@ -503,8 +503,9 @@ def test_gtt02_excluded_session_artefacts_listed_in_stats(tmp_path):
 
 
 def test_gtt02_c_winrm91_and_sysmon3_from_excluded_ip_are_excluded(tmp_path):
-    """GT-02(c): WinRM 91 / inbound Sysmon 3 from an excluded IP are excluded; a wsmprovhost within 5 s after the 91 too (no R8 row)."""
-    rows = [w91("X91", 0, "192.168.50.99"), wsm("XWSM", 3, 8888),
+    """GT-02(c): WinRM 91 / inbound Sysmon 3 from an excluded IP are excluded; an unanchored wsmprovhost whose paired 91
+    (0-5 s after it, decision 042) is that 91 too (no R8 row)."""
+    rows = [wsm("XWSM", 0, 8888), w91("X91", 0.08, "192.168.50.99"),
             s3("XS3", 20, "192.168.50.97", 50000)]
     o = go(tmp_path, rows)
     assert o.trig == [] and o.sup == []
@@ -513,9 +514,9 @@ def test_gtt02_c_winrm91_and_sysmon3_from_excluded_ip_are_excluded(tmp_path):
     assert o.d("XS3")["disposition"].startswith("excluded")
 
 
-def test_gtt02_c_wsmprovhost_more_than_5s_after_excluded_91_is_not_excluded(tmp_path):
-    """GT-02(c) boundary: a wsmprovhost Sysmon 1 more than 5 s after an excluded 91 is not excluded by that rule (R8 tier D)."""
-    rows = [w91("X91", 0, "192.168.50.99"), wsm("LATE-WSM", 5.5, 8889)]
+def test_gtt02_c_excluded_91_more_than_5s_after_wsmprovhost_is_not_paired(tmp_path):
+    """GT-02(c) boundary (decision 042): an excluded 91 more than 5 s after the wsmprovhost Sysmon 1 is not its pair (R8 tier D)."""
+    rows = [wsm("LATE-WSM", 0, 8889), w91("X91", 5.5, "192.168.50.99")]
     o = go(tmp_path, rows)
     assert o.d("X91")["disposition"].startswith("excluded")
     assert not o.d("LATE-WSM")["disposition"].startswith("excluded")
@@ -1119,10 +1120,11 @@ def test_d041_r8_anchored_91_other_ip_or_host_not_supporting(tmp_path):
     assert sup(o.one("R8_winrm")) == set()
 
 
-def test_d041_r8_tier_d_takes_latest_91_before_sysmon1_for_source_ip(tmp_path):
-    """Decision 041: tier-D R8: the latest 91 0-5 s before the Sysmon 1 gives source_ip and is supporting."""
-    rows = [w91("V91a", -4.0, "192.168.50.23"), w91("V91b", -1.0, "192.168.50.21"),
-            w91("V91c", 1.0, "192.168.50.10"), wsm("W", 0.0, 7300)]
+def test_d042_r8_tier_d_takes_earliest_91_after_sysmon1_for_source_ip(tmp_path):
+    """Decision 042 (replaces decision 041's 'latest 91 before'): tier-D R8: the earliest 91 0-5 s AFTER the Sysmon 1
+    gives source_ip and is supporting; a 91 before it and a later 91 are not used."""
+    rows = [w91("V91a", -1.0, "192.168.50.23"), w91("V91b", 1.0, "192.168.50.21"),
+            w91("V91c", 4.0, "192.168.50.10"), wsm("W", 0.0, 7300)]
     o = go(tmp_path, rows)
     r = o.one("R8_winrm")
     assert r["gate_tier"] == "D" and r["method"] == "none" and r["anchor_logon_uid"] == ""
@@ -1131,9 +1133,9 @@ def test_d041_r8_tier_d_takes_latest_91_before_sysmon1_for_source_ip(tmp_path):
     assert o.d("V91b")["disposition"] == "supporting"
 
 
-@pytest.mark.parametrize("dt,used", [(0.0, True), (-5.0, True), (-5.001, False), (0.5, False)])
-def test_d041_r8_tier_d_91_window_is_0_to_5s_before(tmp_path, dt, used):
-    """Decision 041: tier-D R8 uses a 91 0-5 s before the Sysmon 1 (inclusive); later or > 5 s earlier gives no source_ip."""
+@pytest.mark.parametrize("dt,used", [(0.0, True), (5.0, True), (5.001, False), (-0.5, False), (-5.0, False)])
+def test_d042_r8_tier_d_91_window_is_0_to_5s_after(tmp_path, dt, used):
+    """Decision 042: tier-D R8 uses a 91 0-5 s after the Sysmon 1 (inclusive); earlier or > 5 s later gives no source_ip."""
     o = go(tmp_path, [w91("V91", dt, "192.168.50.21"), wsm("W", 0.0, 7300)])
     r = o.one("R8_winrm")
     assert (r["source_ip"] == "192.168.50.21") is used
@@ -2065,8 +2067,9 @@ def test_gtt16_mapped_excluded_session_with_pre_window_4624_still_excludes(tmp_p
 
 
 def test_gtt16_mapped_excluded_winrm91_and_wsmprovhost(tmp_path):
-    """GTT-16 / GT-02(c): WinRM 91 from ::ffff:192.168.50.97 -> excluded_source_ip; a wsmprovhost 2 s later -> excluded; no R8 row."""
-    o = go(tmp_path, [w91("X91", 0, "::ffff:192.168.50.97"), wsm("XWSM", 2, 8888)])
+    """GTT-16 / GT-02(c): WinRM 91 from ::ffff:192.168.50.97 -> excluded_source_ip; the wsmprovhost 2 s before it (its pair,
+    decision 042) -> excluded; no R8 row."""
+    o = go(tmp_path, [wsm("XWSM", 0, 8888), w91("X91", 2, "::ffff:192.168.50.97")])
     assert o.trig == [] and o.sup == []
     assert o.d("X91")["disposition"] == "excluded_source_ip"
     assert o.d("XWSM")["disposition"].startswith("excluded")
@@ -2137,7 +2140,7 @@ def test_gtt16_r8_winrm91_plain_supports_mapped_anchor_and_keeps_original_text(t
 
 def test_gtt16_r8_tier_d_mapped_91_gives_original_text_and_ipv4_kind(tmp_path):
     """GT-13 tier D + normalisation: the tier-D row's source_ip is the 91's original text, ip_kind = ipv4."""
-    o = go(tmp_path, [w91("V91", -1.0, "::ffff:192.168.50.21"), wsm("W", 0.0, 7300)])
+    o = go(tmp_path, [w91("V91", 1.0, "::ffff:192.168.50.21"), wsm("W", 0.0, 7300)])
     r = o.one("R8_winrm")
     assert r["gate_tier"] == "D" and r["source_ip"] == "::ffff:192.168.50.21" and r["ip_kind"] == "ipv4"
     assert sup(r) == {"V91"}
@@ -2241,7 +2244,7 @@ def test_gtt17_r4_flag_still_follows_the_anchor_4624(tmp_path):
 STATS_TOP_KEYS = {"trial_id", "db", "window", "time_basis", "events", "removed_by_window", "near_window",
                   "dispositions", "triggers", "unmatched_remote", "supporting", "remote_logons_per_ip_kind",
                   "machine_account_triggers_per_host", "local_installs", "excluded", "near_duplicate_uids",
-                  "tier_d_ip_lookup", "sensitivity", "parameters"}
+                  "tier_d_ip_lookup", "own_link_local", "sensitivity", "parameters"}
 SENS_NAMES = {"rdp_pairs", "service_pairs", "winrm_91_anchor_pairs", "winrm_91_to_wsmprovhost_pairs"}
 SENS_TOLS = {"2", "5", "10"}
 
@@ -2261,6 +2264,7 @@ def _check_stats_shape(st: dict) -> None:
     assert set(st["local_installs"]) == {"count", "trigger_ids"}
     assert set(st["excluded"]) == {"per_ip", "excluded_ip_with_artefacts"}
     assert isinstance(st["near_duplicate_uids"], list) and isinstance(st["tier_d_ip_lookup"], list)
+    assert set(st["own_link_local"]) == {"per_host", "conflicts", "machine_accounts", "e2_rejected"}
     assert set(st["sensitivity"]) == SENS_NAMES
     for name, per_tol in st["sensitivity"].items():
         assert set(per_tol) == SENS_TOLS, name
@@ -2268,7 +2272,7 @@ def _check_stats_shape(st: dict) -> None:
 
 
 def test_gtt18_stats_top_level_keys_are_exactly_spec_3_1(tmp_path):
-    """GTT-18 / spec 3.1: stats.json has exactly the 19 listed top-level keys, with the documented sub-keys."""
+    """GTT-18 / spec 3.1: stats.json has exactly the 20 listed top-level keys (own_link_local: decision 042), with the documented sub-keys."""
     o = go(tmp_path, mixed_rows())
     _check_stats_shape(o.stats)
     assert o.stats["time_basis"] == "raw" and o.stats["trial_id"] == TRIAL
@@ -2360,20 +2364,22 @@ def test_gtt18_sensitivity_winrm_91_anchor_pairs_by_tolerance_rows_unchanged(tmp
     assert o.stats["sensitivity"]["winrm_91_anchor_pairs"] == {"2": 1, "5": 2, "10": 3}
     got = {r["trigger_event_uid"]: sup(r) for r in o.rule("R8_winrm")}
     assert got == {"W0": {"V0"}, "W1": {"V1"}, "W2": set()}
-    assert o.stats["sensitivity"]["winrm_91_to_wsmprovhost_pairs"] == {"2": 0, "5": 0, "10": 0}   # every Sysmon 1 is BEFORE its 91
+    # decision 042: each Sysmon 1 is 1.0 / 3.5 / 7.5 s BEFORE its 91, the counted direction
+    assert o.stats["sensitivity"]["winrm_91_to_wsmprovhost_pairs"] == {"2": 1, "5": 2, "10": 3}
 
 
-def test_gtt18_sensitivity_winrm_91_to_wsmprovhost_pairs_after_only(tmp_path):
-    """GTT-18: 91 followed by a wsmprovhost Sysmon 1 1.5 s, 4 s and 8 s later -> {2:1, 5:2, 10:3}; a Sysmon 1 2 s BEFORE its 91 counts at no tolerance."""
+def test_gtt18_sensitivity_winrm_91_to_wsmprovhost_pairs_91_after_only(tmp_path):
+    """GTT-18 (decision 042): a wsmprovhost Sysmon 1 followed by its 91 1.5 s, 4 s and 8 s later -> {2:1, 5:2, 10:3};
+    a 91 2 s BEFORE its Sysmon 1 counts at no tolerance and is never paired."""
     rows = []
     for i, d in enumerate((1.5, 4.0, 8.0)):
         base = 100 * i
-        rows += [w91(f"V{i}", base, "192.168.50.21"), wsm(f"W{i}", base + d, 7100 + i)]
-    rows += [w91("V-BEFORE", 300, "192.168.50.21"), wsm("W-BEFORE", 298, 7110)]
+        rows += [wsm(f"W{i}", base, 7100 + i), w91(f"V{i}", base + d, "192.168.50.21")]
+    rows += [w91("V-BEFORE", 298, "192.168.50.21"), wsm("W-BEFORE", 300, 7110)]
     o = go(tmp_path, rows)
     assert o.stats["sensitivity"]["winrm_91_to_wsmprovhost_pairs"] == {"2": 1, "5": 2, "10": 3}
     assert o.stats["sensitivity"]["winrm_91_anchor_pairs"] == {"2": 0, "5": 0, "10": 0}
-    got = {r["trigger_event_uid"]: sup(r) for r in o.rule("R8_winrm")}      # rules use 5 s, 0-5 s before the Sysmon 1
+    got = {r["trigger_event_uid"]: sup(r) for r in o.rule("R8_winrm")}      # rules use 5 s, 0-5 s after the Sysmon 1
     assert got == {"W0": {"V0"}, "W1": {"V1"}, "W2": set(), "W-BEFORE": set()}
 
 
@@ -2384,7 +2390,7 @@ def _boundary_rows(kind: str, d: float) -> list[dict]:
         return [svc4697("V4", 0, 6001), svc7045("V7", d)]
     if kind == "winrm_91_anchor_pairs":
         return [logon("L", 0, 7000), wsm("W", 0.0, 7000), w91("V91", d, "192.168.50.21")]
-    return [w91("V91", 0.0, "192.168.50.21"), wsm("W", d, 7100)]
+    return [wsm("W", 0.0, 7100), w91("V91", d, "192.168.50.21")]
 
 
 @pytest.mark.parametrize("kind", sorted(SENS_NAMES))
@@ -2401,7 +2407,7 @@ SPEC_COLUMNS_USED = [
     "destination_ip", "destination_port", "initiated", "account_name", "domain_short", "target_logon_id",
     "target_linked_logon_id", "subject_logon_id", "session_id", "machine_account", "authentication_package", "image",
     "parent_image", "share_name", "relative_target_name", "service_name", "service_image_path", "target_image",
-    "granted_access",
+    "granted_access", "subject_account",   # subject_account: added by the owner 2026-11-12, decision 042 (E2)
 ]
 
 
@@ -2531,3 +2537,231 @@ def test_gtt14_trial_window_margins_are_imported_from_lab_common_not_defined_loc
     text = (REPO / "src" / "trial_window" / "params.py").read_text(encoding="utf-8")
     tree = ast.parse(text)
     assert any(isinstance(n, ast.ImportFrom) and n.module == "lab_common.margins" for n in ast.walk(tree))
+
+
+# ====================================================================================== GTT-19 own link-local (decision 042)
+PRE = "2026-09-24T09:00:00.000000Z"          # before the window: evidence is read from the unclipped DB
+
+
+def sys_logon(uid, host, machine, *, utc=PRE, lid=900001):
+    """A 4624 opened by SYSTEM (subject 0x3e7) on `host`: its subject account is the host's own machine account."""
+    return ev(uid, 4624, "Security", None, utc=utc, host=host, logon_type=5, target_logon_id=lid,
+              subject_logon_id=999, subject_account=machine, account_name="system", domain_short="nt authority")
+
+
+def out_s3(uid, host, src, *, utc=PRE, dest="fe80::99", dport=445):
+    """Outbound Sysmon 3 (initiated = 1) logged on `host`: its source_ip is an address of `host` itself (E1)."""
+    return ev(uid, 3, "Sysmon", None, utc=utc, host=host, source_ip=src, source_port=50123, destination_ip=dest,
+              destination_port=dport, initiated=1)
+
+
+def ll_smb(uid, off, lid, ip, *, host, account="admin_it"):
+    """A type 3 4624 from `ip` with one 5145: fires R4 unless the address is suppressed."""
+    return [logon(uid, off, lid, ip=ip, host=host, account=account), share(f"{uid}-S", off + 0.1, lid, host=host)]
+
+
+def test_gtt19_e2_dc01_self_logon_over_own_link_local_is_loopback_or_self(tmp_path):
+    """GTT-19 / decision 042 E2: dc01 4624 from fe80::f374:... as its own machine account (read from dc01's SYSTEM 4624s)
+    -> loopback_or_self 'own link-local (E2)'; no trigger, no unmatched row; listed in stats."""
+    ip = "fe80::f374:6da8:f7ba:1a61"
+    rows = [sys_logon("SYS", "dc01", r"LAB\dc-01$")] + ll_smb("SELF", 1, 4001, ip, host="dc01", account="dc-01$")
+    o = go(tmp_path, rows)
+    assert o.trig == [] and o.unm == []
+    d = o.d("SELF")
+    assert d["disposition"] == "loopback_or_self" and d["reason_detail"].endswith("own link-local (E2)")
+    st = o.stats["own_link_local"]
+    assert st["per_host"] == {"dc01": [{"address": ip, "evidence": "E2", "e1_sysmon3": 0, "e2_4624": 1}]}
+    assert st["machine_accounts"] == {"dc01": ["dc-01$"]} and st["conflicts"] == [] and st["e2_rejected"] == []
+
+
+def test_gtt19_e1_outbound_sysmon3_before_window_marks_own_address_any_text_form(tmp_path):
+    """GTT-19 E1: an outbound Sysmon 3 on ep-02 (before the window) from fe80::2 makes fe80::2 ep-02's own address;
+    an in-window 4624 on ep-02 logged as `fe80:0:0:0:0:0:0:2%12` is loopback_or_self 'own link-local (E1)'."""
+    rows = [out_s3("E1", "ep-02", "fe80::2")] + ll_smb("SELF", 1, 4002, "fe80:0:0:0:0:0:0:2%12", host="ep-02")
+    o = go(tmp_path, rows)
+    assert o.trig == [] and o.unm == []
+    assert o.d("SELF")["reason_detail"].endswith("own link-local (E1)")
+    assert o.stats["own_link_local"]["per_host"]["ep-02"] == [
+        {"address": "fe80::2", "evidence": "E1", "e1_sysmon3": 1, "e2_4624": 0}]
+
+
+def test_gtt19_both_evidences_give_e1_e2(tmp_path):
+    """GTT-19: an address with E1 and E2 on the same host is recognised with evidence `E1/E2`."""
+    rows = [sys_logon("SYS", "ep-02", r"LAB\endpoint-02$"), out_s3("E1", "ep-02", "fe80::2")] + \
+        ll_smb("SELF", 1, 4003, "fe80::2", host="ep-02", account="endpoint-02$")
+    o = go(tmp_path, rows)
+    assert o.d("SELF")["reason_detail"].endswith("own link-local (E1/E2)")
+    assert o.stats["own_link_local"]["per_host"]["ep-02"][0]["evidence"] == "E1/E2"
+
+
+def test_gtt19_cross_host_link_local_logon_stays_remote(tmp_path):
+    """GTT-19: fe80::3 is ep-03's own address (E1 on ep-03). A 4624 on ep-02 from fe80::3 is a cross-host logon:
+    it is NOT suppressed and fires R4 with ip_kind link_local."""
+    rows = [out_s3("E1", "ep-03", "fe80::3")] + ll_smb("XH", 1, 4004, "fe80::3", host="ep-02")
+    o = go(tmp_path, rows)
+    r = o.one("R4_smb")
+    assert r["anchor_logon_uid"] == "XH" and r["ip_kind"] == "link_local" and r["source_ip"] == "fe80::3"
+    assert o.d("XH")["disposition"] == "trigger"
+    assert o.stats["own_link_local"]["per_host"] == {"ep-03": [
+        {"address": "fe80::3", "evidence": "E1", "e1_sysmon3": 1, "e2_4624": 0}]}
+
+
+def test_gtt19_link_local_with_no_evidence_stays_remote(tmp_path):
+    """GTT-19: never all link-local: a link-local source with no E1/E2 evidence is still remote (GT-06) and fires."""
+    o = go(tmp_path, ll_smb("LL", 1, 4005, "fe80::5", host="ep-02"))
+    assert o.one("R4_smb")["ip_kind"] == "link_local"
+    assert o.stats["own_link_local"]["per_host"] == {}
+
+
+def test_gtt19_conflict_address_seen_as_own_on_two_hosts_is_recognised_for_none(tmp_path):
+    """GTT-19 conflict rule: fe80::4 has evidence on ep-02 (E1) and on ep-03 (E1) -> recognised for neither host;
+    logons from it on both hosts still fire; stats lists the conflict."""
+    rows = [out_s3("E1a", "ep-02", "fe80::4"), out_s3("E1b", "ep-03", "fe80::4")] + \
+        ll_smb("A", 1, 4006, "fe80::4", host="ep-02") + ll_smb("B", 2, 4007, "fe80::4", host="ep-03")
+    o = go(tmp_path, rows)
+    assert sorted(r["anchor_logon_uid"] for r in o.rule("R4_smb")) == ["A", "B"]
+    st = o.stats["own_link_local"]
+    assert st["per_host"] == {}
+    assert st["conflicts"] == [{"address": "fe80::4", "hosts": ["ep-02", "ep-03"],
+                                "evidence": {"ep-02": "E1", "ep-03": "E1"}}]
+
+
+def test_gtt19_conflict_between_e1_and_e2_on_two_hosts(tmp_path):
+    """GTT-19 conflict rule across evidence kinds: E2 on dc01 and E1 on ep-02 for one address -> recognised for none."""
+    rows = [sys_logon("SYS", "dc01", r"LAB\dc-01$"), out_s3("E1", "ep-02", "fe80::7")] + \
+        ll_smb("D", 1, 4008, "fe80::7", host="dc01", account="dc-01$")
+    o = go(tmp_path, rows)
+    assert o.one("R4_smb")["anchor_logon_uid"] == "D"
+    assert o.stats["own_link_local"]["conflicts"][0]["evidence"] == {"dc01": "E2", "ep-02": "E1"}
+
+
+def test_gtt19_e2_guard_other_account_from_the_address_rejects_it(tmp_path):
+    """GTT-19 E2 guard: if any 4624 on dc01 from the address uses another account, E2 does not recognise it;
+    both logons stay remote and stats lists the rejection."""
+    rows = [sys_logon("SYS", "dc01", r"LAB\dc-01$")] + ll_smb("M", 1, 4009, "fe80::8", host="dc01", account="dc-01$") + \
+        ll_smb("U", 2, 4010, "fe80::8", host="dc01", account="admin_it")
+    o = go(tmp_path, rows)
+    assert sorted(r["anchor_logon_uid"] for r in o.rule("R4_smb")) == ["M", "U"]
+    st = o.stats["own_link_local"]
+    assert st["per_host"] == {}
+    assert st["e2_rejected"] == [{"host": "dc01", "address": "fe80::8", "machine_account": "dc-01$",
+                                  "other_accounts": ["admin_it"]}]
+
+
+def test_gtt19_e2_needs_the_hosts_own_machine_account(tmp_path):
+    """GTT-19 E2: the account must be the RECEIVING host's own machine account: dc-01$ logging on to ep-02 from a
+    link-local address is not ep-02's own address (ep-02's account is endpoint-02$); it fires."""
+    rows = [sys_logon("SYS", "ep-02", r"LAB\endpoint-02$")] + ll_smb("DC", 1, 4011, "fe80::9", host="ep-02", account="dc-01$")
+    o = go(tmp_path, rows)
+    assert o.one("R4_smb")["anchor_logon_uid"] == "DC"
+    assert o.stats["own_link_local"]["per_host"] == {}
+
+
+def test_gtt19_e2_needs_exactly_one_machine_account_on_the_host(tmp_path):
+    """GTT-19 E2: a host whose SYSTEM-opened 4624s name two machine accounts gives no E2 evidence."""
+    rows = [sys_logon("SYS1", "dc01", r"LAB\dc-01$"), sys_logon("SYS2", "dc01", r"LAB\other$", lid=900002)] + \
+        ll_smb("D", 1, 4012, "fe80::a", host="dc01", account="dc-01$")
+    o = go(tmp_path, rows)
+    assert o.one("R4_smb")["anchor_logon_uid"] == "D"
+    assert o.stats["own_link_local"]["machine_accounts"] == {"dc01": ["dc-01$", "other$"]}
+    assert o.stats["own_link_local"]["per_host"] == {}
+
+
+def test_gtt19_e1_needs_initiated_1_inbound_sysmon3_is_no_evidence(tmp_path):
+    """GTT-19 E1: an inbound Sysmon 3 (initiated = 0) with a link-local source is the OTHER end, never own evidence."""
+    rows = [ev("IN", 3, "Sysmon", None, utc=PRE, host="ep-02", source_ip="fe80::b", source_port=1,
+               destination_ip="fe80::c", destination_port=445, initiated=0)] + ll_smb("L", 1, 4013, "fe80::b", host="ep-02")
+    o = go(tmp_path, rows)
+    assert o.one("R4_smb")["anchor_logon_uid"] == "L"
+    assert o.stats["own_link_local"]["per_host"] == {}
+
+
+def test_gtt19_own_link_local_winrm91_is_loopback_or_self(tmp_path):
+    """GTT-19: GT-05 applies to every event judged by its remote address: a WinRM 91 on ep-02 from its own link-local
+    address is loopback_or_self."""
+    rows = [out_s3("E1", "ep-02", "fe80::2"), w91("V91", 1, "fe80::2")]
+    o = go(tmp_path, rows)
+    assert o.d("V91")["disposition"] == "loopback_or_self"
+    assert o.d("V91")["reason_detail"].endswith("own link-local (E1)")
+
+
+# ====================================================================================== GTT-20 WinRM 91 pairing (decision 042)
+def test_gtt20_excluded_91_before_unanchored_wsmprovhost_does_not_pair_or_exclude(tmp_path):
+    """GTT-20: a WinRM 91 BEFORE the wsmprovhost Sysmon 1 never pairs (decision 042): an excluded 91 1 s before an
+    unanchored wsmprovhost excludes only itself; the wsmprovhost fires R8 tier D with a blank source_ip."""
+    rows = [w91("X91", -1.0, "192.168.50.99"), wsm("W", 0.0, 8100)]
+    o = go(tmp_path, rows)
+    assert o.d("X91")["disposition"] == "excluded_source_ip"
+    r = o.one("R8_winrm")
+    assert r["gate_tier"] == "D" and r["source_ip"] == "" and sup(r) == set()
+    assert o.stats["sensitivity"]["winrm_91_to_wsmprovhost_pairs"] == {"2": 0, "5": 0, "10": 0}
+
+
+def test_gtt20_lab_91_before_wsmprovhost_is_not_its_tier_d_source(tmp_path):
+    """GTT-20: a lab-IP 91 before the Sysmon 1 is not used by tier D (source_ip blank, the 91 is no_rule)."""
+    o = go(tmp_path, [w91("V91", -0.08, "192.168.50.21"), wsm("W", 0.0, 8101)])
+    r = o.one("R8_winrm")
+    assert r["source_ip"] == "" and sup(r) == set()
+    assert o.d("V91")["disposition"] == "no_rule"
+
+
+def test_gtt20_excluded_paired_91_with_lab_tier_a_anchor_does_not_exclude_wsmprovhost(tmp_path):
+    """GTT-20 / GT-02(c): a wsmprovhost with a tier-A anchor from 192.168.50.21 is not excluded even though its paired
+    91 (0.1 s after) comes from .99: the anchor decides, never the time pairing alone."""
+    rows = [logon("L", 0, 8200), wsm("W", 0.5, 8200), w91("X91", 0.6, "192.168.50.99")]
+    o = go(tmp_path, rows)
+    r = o.one("R8_winrm")
+    assert r["gate_tier"] == "A" and r["anchor_logon_uid"] == "L" and r["source_ip"] == "192.168.50.21"
+    assert o.d("W")["disposition"] == "trigger"
+    assert o.d("X91")["disposition"] == "excluded_source_ip"
+
+
+def test_gtt20_suppressed_anchor_is_not_a_tier_a_anchor_for_gt02c(tmp_path):
+    """GTT-20 / GT-02(c): an anchor removed by GT-05 (own lab IP) is not a tier-A anchor, so a paired excluded 91
+    excludes the wsmprovhost."""
+    rows = [logon("SELF", 0, 8300, ip="192.168.50.22"), wsm("W", 0.5, 8300), w91("X91", 0.6, "192.168.50.98")]
+    o = go(tmp_path, rows)
+    assert o.d("SELF")["disposition"] == "loopback_or_self"
+    assert o.d("W")["disposition"] == "excluded_source_ip_session"
+    assert "winrm91=X91" in o.d("W")["reason_detail"]
+    assert o.rule("R8_winrm") == []
+
+
+def test_gtt20_pairing_is_one_to_one_earliest_first(tmp_path):
+    """GTT-20: two wsmprovhost starts (0 s, 1 s) and two 91s (2 s, 3 s): the earlier start takes the earlier 91,
+    the second start the next one; each 91 is used once."""
+    rows = [wsm("W1", 0.0, 8401), wsm("W2", 1.0, 8402),
+            w91("V1", 2.0, "192.168.50.21"), w91("V2", 3.0, "192.168.50.23")]
+    o = go(tmp_path, rows)
+    got = {r["trigger_event_uid"]: (r["source_ip"], sup(r)) for r in o.rule("R8_winrm")}
+    assert got == {"W1": ("192.168.50.21", {"V1"}), "W2": ("192.168.50.23", {"V2"})}
+
+
+def test_gtt20_one_91_serves_only_one_start(tmp_path):
+    """GTT-20: one 91 after two starts goes to the earlier start only; the later start gets no 91."""
+    rows = [wsm("W1", 0.0, 8411), wsm("W2", 1.0, 8412), w91("V1", 2.0, "192.168.50.21")]
+    o = go(tmp_path, rows)
+    got = {r["trigger_event_uid"]: (r["source_ip"], sup(r)) for r in o.rule("R8_winrm")}
+    assert got == {"W1": ("192.168.50.21", {"V1"}), "W2": ("", set())}
+
+
+def test_gtt20_one_excluded_91_excludes_only_the_start_it_is_paired_with(tmp_path):
+    """GTT-20 / GT-02(c): with 1:1 pairing an excluded 91 excludes one unanchored start, not every start within 5 s."""
+    rows = [wsm("W1", 0.0, 8421), wsm("W2", 1.0, 8422), w91("X91", 2.0, "192.168.50.99")]
+    o = go(tmp_path, rows)
+    assert o.d("W1")["disposition"] == "excluded_source_ip_session"
+    assert [r["trigger_event_uid"] for r in o.rule("R8_winrm")] == ["W2"]
+
+
+def test_gtt20_pairing_is_per_host(tmp_path):
+    """GTT-20: a 91 on another host is never paired."""
+    o = go(tmp_path, [wsm("W", 0.0, 8431), w91("V91", 0.5, "192.168.50.21", host="ep-03")])
+    assert o.one("R8_winrm")["source_ip"] == ""
+
+
+def test_gtt20_paired_91_removed_by_gt05_is_not_used_for_tier_d(tmp_path):
+    """GTT-20 (decision 042 reading): a paired 91 from loopback is loopback_or_self and gives the tier-D row no IP."""
+    o = go(tmp_path, [wsm("W", 0.0, 8441), w91("V91", 0.1, "127.0.0.1")])
+    r = o.one("R8_winrm")
+    assert r["gate_tier"] == "D" and r["source_ip"] == "" and sup(r) == set()
+    assert o.d("V91")["disposition"] == "loopback_or_self"

@@ -34,6 +34,8 @@ DB_COLUMNS: tuple[str, ...] = (
     "target_image", "granted_access",
     # Decision 041: the remote end of an outbound Sysmon 3 (GT-02(c), GT-05).
     "destination_ip",
+    # Decision 042: the host's own machine account (subject of its SYSTEM-opened 4624s), for evidence E2.
+    "subject_account",
 )
 
 # Spec section 3, in the order listed there.

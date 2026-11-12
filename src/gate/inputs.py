@@ -133,6 +133,8 @@ class ScanResult:
     """
     in_window: list[Row] = field(default_factory=list)
     logons_all: list[Row] = field(default_factory=list)
+    # Decision 042: outbound Sysmon 3 with a link-local source_ip, unclipped (evidence E1 only).
+    own_ll_sysmon3_all: list[Row] = field(default_factory=list)
     loaded_total: int = 0
     in_window_total: int = 0
     removed_by_window: dict[str, dict[str, int]] = field(default_factory=dict)
@@ -180,6 +182,8 @@ def scan_events(rows: Iterable[Mapping], start_us: int, end_us: int, params: Gat
             raise GateError(f"event {row.get('event_uid')} has no valid event_utc ({exc})") from exc
         if classify.is_4624(row):
             res.logons_all.append(row)
+        elif classify.is_own_link_local_sysmon3(row):
+            res.own_ll_sysmon3_all.append(row)
         if not (start_us <= row["us"] < end_excl):
             _bump(res.removed_by_window, str(row.get("host")), event_key(row))
             side = _near_side(row["us"], start_us, end_excl, near_us)

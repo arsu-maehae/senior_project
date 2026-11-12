@@ -293,6 +293,10 @@ def report_md(stats: Mapping) -> str:
               f"- machine-account triggers per host: {json.dumps(stats['machine_account_triggers_per_host'], sort_keys=True)}",
               f"- remote logons per ip_kind: {json.dumps(stats['remote_logons_per_ip_kind'], sort_keys=True)}",
               f"- near-duplicate uids: {len(stats['near_duplicate_uids'])}",
+              "- own link-local addresses (GT-05, decision 042): " + (", ".join(
+                  f"{host} {a['address']} ({a['evidence']})"
+                  for host, addrs in sorted(stats["own_link_local"]["per_host"].items()) for a in addrs) or "none")
+              + f"; conflicts (not recognised): {len(stats['own_link_local']['conflicts'])}",
               f"- tier-D IP lookups: {len(stats['tier_d_ip_lookup'])}"]
     for t in stats["tier_d_ip_lookup"]:
         lines.append(f"  - {t['trigger_id']} {t['rule']} {t['host']} logon {t['logon_id_hex'] or '-'}: "

@@ -217,30 +217,29 @@ def r6_rows(remote: Sequence[Mapping], events: Sequence[Mapping], suppressed: Ma
 # ---------------------------------------------------------------- R8 WinRM (GT-13)
 
 def r8_rows(remote: Sequence[Mapping], events: Sequence[Mapping], suppressed: Mapping[str, Suppression],
-            params: GateParams) -> list[TriggerDraft]:
+            params: GateParams, wsm_pairs: Mapping[str, Mapping] | None = None) -> list[TriggerDraft]:
     """R8: every surviving wsmprovhost start (Sysmon 1, ``image``).
 
     Anchor = remote type 3 4624 on its host whose target_logon_id or target_linked_logon_id = the
     Sysmon 1 session_id, logged at or before it; one row per anchor (logon_id, A). Supporting WinRM 91
-    of an anchored row: same host, clientIP = the anchor's source_ip (both ``norm_ip``), |91 - anchor| <= 5 s. A tier-D
-    row takes the latest WinRM 91 on the host 0-5 s before the Sysmon 1: its clientIP becomes the
-    row's source_ip and its uid is supporting (decision 041).
+    of an anchored row: same host, clientIP = the anchor's source_ip (both ``norm_ip``), |91 - anchor| <= 5 s.
+    A tier-D row takes the WinRM 91 paired with the Sysmon 1 (``classify.pair_wsmprovhost_91``: the
+    earliest 91 0-5 s AFTER it, one-to-one; decision 042): its clientIP becomes the row's source_ip and
+    its uid is supporting. A paired 91 that GT-02..05 removed is not used (the row's IP stays blank).
     """
     tol = seconds_to_us(params.winrm_pair_s)
-    by_lid: dict[tuple, list[Mapping]] = {}
-    for a in remote:
-        if a.get("logon_type") != 3:
-            continue
-        for lid in {logon_id(a.get("target_logon_id")), logon_id(a.get("target_linked_logon_id"))} - {None}:
-            by_lid.setdefault((a["host"], lid), []).append(a)
+    if wsm_pairs is None:
+        wsm_pairs = classify.pair_wsmprovhost_91(events, tol)
+    index = classify.r8_anchor_index(remote)
     w91 = _surviving(events, suppressed, classify.is_winrm91)
     out: list[TriggerDraft] = []
     for ev in _surviving(events, suppressed, classify.is_wsmprovhost_start):
-        anchors = _anchors(by_lid, ev["host"], logon_id(ev.get("session_id")), ev["us"], (3,))
+        anchors = classify.r8_anchors(index, ev)
         if not anchors:
-            before = [w for w in w91 if w["host"] == ev["host"] and 0 <= ev["us"] - w["us"] <= tol]
-            latest = max(before, key=lambda r: (r["us"], r["event_uid"])) if before else None
-            out.append(TriggerDraft("R8_winrm", ev, None, (latest,) if latest else (), "none", "D", 0, latest))
+            paired = wsm_pairs.get(ev["event_uid"])
+            if paired is not None and paired["event_uid"] in suppressed:
+                paired = None
+            out.append(TriggerDraft("R8_winrm", ev, None, (paired,) if paired else (), "none", "D", 0, paired))
             continue
         ordered = _by_time(anchors)
         for a in ordered:
