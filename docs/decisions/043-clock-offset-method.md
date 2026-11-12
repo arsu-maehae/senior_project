@@ -64,6 +64,15 @@
   - ep-01's pairs are start-of-trial logons, not attack hops;
   - the skew-period development evidence is s06_t01 plus the two clock-only trials until the reruns.
 
+## Parameter freeze (spec 08 §5, ATK-10, COT-17; T6b.2, 2026-11-12)
+`src/clock_offset/params.py` SHA-256, computed over its bytes with CRLF normalised to LF (so git's line-ending conversion on Windows cannot change it):
+
+`params_sha256: 9dcd662b18863d062741e904482d45df005c73c2ba679f7718dfd68a70df82e3`
+
+(First recorded as `0bfa7c8d…` before the owner added `MIN_CLOCK_STEP_MS` on 2026-11-12; see the T6b.2 amendment below.)
+
+Step 2 may change only `MIN_PAIRS`, `MAX_LOO_SHIFT_S`, `READING_AGREE_S` and `MIN_CLOCK_STEP_MS` (marked PROVISIONAL in the file), and only from the rerun t01 trials. Any change records a new hash here.
+
 ## Kill criteria
 Decision 032 applies, measured independently of the estimating pairs. Do not use the correction, and the owner decides exclusions or reruns, if either holds:
 - a development port-join check has corrected |Δ| > 5 s;
@@ -74,3 +83,40 @@ Today 18/18 check pairs are ≤ 1.58 s.
 ## Committee answer
 **EN:** Each endpoint's clock is compared with the domain controller's using Kerberos records that both sides log with the same ID. We take the median gap per host and trial, and subtract it. We checked the result on connections the method never used: after correction they agree within 1.6 s, against up to 18 s before.
 **TH:** เราเทียบนาฬิกาของแต่ละเครื่องกับ DC โดยใช้บันทึก Kerberos ที่ทั้งสองฝั่งบันทึกด้วย ID เดียวกัน ใช้ค่ามัธยฐานของส่วนต่างต่อเครื่องต่อรอบแล้วนำไปหักออก และตรวจกับการเชื่อมต่อที่วิธีนี้ไม่ได้ใช้ หลังแก้แล้วต่างกันไม่เกิน 1.6 วินาที จากเดิมสูงสุด 18 วินาที
+
+## T6b.2 implementation amendment (owner answers 2026-11-12)
+Evidence: CO-19 scan of the decoded exports of the 11 allowlisted trials (`out/clock_offset/<trial>/clock_events.csv`), the T6b.1 measurement script re-run for COA-01, and `tests/unit/test_clock_offset.py`.
+
+1. **COA-01 path:** the T6b.1 script (`clock_measure.py`, read-only, hard allowlist) still existed. A wrapper called its own functions unchanged to get ms medians. The new code agrees within 1 ms on all 33 endpoint rows, with equal pair counts (largest difference 0.49 ms, from rounding to whole ms). The fallback (±5 ms vs §10.1) was not needed.
+2. **Rounding:** each median is computed exactly in µs and rounded half away from zero to whole ms. Quartiles use position (n−1)·p. The `wide` test is strict (`loo_shift > 2.5 s`).
+3. **Clock-change rule (CO-15/CO-18 amended):**
+   - **Owner choice:** a clock change counts only with \|shift\| ≥ `MIN_CLOCK_STEP_MS` = 1000 ms (new, provisional, step 2) or an unknown shift. Boots always count.
+   - **Evidence:**
+     - Windows logs routine 0–2 ms time-service adjustments as 4616 + Kernel-General System 1, e.g. s06_t00 ep-02 +2 ms between pairs at 09:05:52.
+     - Real steps are 8.48 s (s02_t00 ep-02) to 15 days (snapshot-revert catch-up on the t01s).
+     - Without the threshold, a routine adjustment after the last pair in a new DB would make the host `stale` and refuse a post-10-26 trial.
+   - **Cut:** a counted change between pairs drops the pairs before it. One after the last kept pair → `stale`. One before the first pair → `expected`. This replaces the self-contradictory CO-18 sentence.
+   - **Shift of a DB row:** read from its JSONL line through `source_relative_path` + `source_line`, read-only.
+4. **`clock_change_in_window` (CO-19 amended):**
+   - It is set only by a counted change after the host's first pair, or on a host with no pairs (dc01 included). `expected` and `routine` changes are listed, not flagged.
+   - **Result:** false on all 11 trials. The scan found 4616/System 1 in the exports of 9 trials, every one `expected` or `routine`.
+   - The counted in-window steps are on ep-02: s02_t00 +8.48 s; s06_t00 +1 h 50 min; s07_t00 +2 h 2 min; every t01.
+   - 0 of the 225 key-hop events in the six t00 keys were logged before a counted step on their host (owner check, COA-08). The t01 trials have no approved keys yet.
+5. **Events before a counted change → `clock_unreliable = 1` in every output** (owner addition).
+   - "Logged before" = recorded time in [the host's last boot before the change, max(previous time, change time)). For a backward step, the whole interval counts. Boots do not trigger this rule.
+   - **Carrier:** the new `data/processed/<trial>.clock_changes.csv`, with DB and export changes together. It adds `channel`, `event_id` and `last_boot_before_utc` to the owner's column list, so consumers can apply the interval without the DB.
+   - Its SHA-256 goes into the window row next to `offsets_sha256`.
+6. **Readings (CO-12):**
+   - **Time zone:** read from the `tzutil /g` line appended to each file and mapped Windows → IANA by an explicit table. The venv has no `tzdata`, so zones without DST use fixed offsets and DST zones are refused. With no line, the time zone is a required argument; with neither, the file is invalid.
+   - **Sign:** assumed host − dc01 = −o (`SIGN_CONVENTION = -1`). The sign and the time zone are confirmed at the first rerun session.
+   - **Assignment:** start = last session before min(run start, sync). A file is invalid if any session does not track dc01.
+   - **Ingest copy:** planned only (spec 08 §4.2); no code touches `data/raw`.
+7. **`late_gap_s`:**
+   - **Reading taken:** the CSV uses spec §3's stated meaning, "to the last agent event", i.e. the uncut window end − 300 s.
+   - **Why it matters:** the bracketed "(window end − 300 s)" equals that only when the export span does not cut the window. On 7 of 11 trials the span does cut it. The clipped-end value, which reproduces §10.7, is kept in `stats.json` (`late_gap_clipped_end_s`).
+   - **Open:** §10.7 and CO-16's "35–97 s on t01" understate the gap (e.g. s06_t01 ep-01 280 s, not 35 s). The owner confirms the definition before Q11 (step 2).
+8. **Gate and window (to be applied in T6b.2 tasks 4–5):**
+   - **Columns:** CO-09 naming. `event_utc` = original, plus `event_utc_corrected`; `event_utc_raw` is dropped.
+   - **GTA-05:** redefined to run on any development trial with a .97/.98/.99 session, and skipped until one exists.
+   - **Clock-only trials:** s04_t01 and s07_t01 are refused by `trial_window` (`CLOCK_ONLY_TRIALS`).
+   - **Pairings:** every gate pairing is same-host, so only the GT-01 clip depends on the time basis.
