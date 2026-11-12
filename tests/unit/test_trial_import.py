@@ -516,3 +516,132 @@ def test_real_t00_accounting_matches_manifest(n):
     assert conn.execute("select count(*) from events_dedup").fetchone()[0] <= \
         conn.execute("select count(*) from events").fetchone()[0]
     conn.close()
+
+
+# ---------------------------------------------------------------- CO-18: clock-change events (NF-09 amended, decision 043)
+KG = "Microsoft-Windows-Kernel-General"
+
+
+def clock_event(channel: str, event_id: int, provider, *, rel: str, record_id: int, data: dict) -> dict:
+    ev = make_event(channel, event_id, data, rel=rel, record_id=record_id,
+                    ts=f"2026-09-24T05:00:{record_id % 60:02d}.5000000Z")
+    if provider is None:
+        ev["system"].pop("provider", None)
+    else:
+        ev["system"]["provider"] = provider
+    return ev
+
+
+def clock_files() -> dict[str, list[tuple[str, str]]]:
+    sec, sysc = "ep-02/security.evtx", "ep-02/system.evtx"
+    t4616 = {"SubjectUserSid": "S-1-5-18", "SubjectUserName": "ENDPOINT-02$", "SubjectDomainName": "LAB",
+             "SubjectLogonId": "0x3e7", "PreviousTime": "2026-09-24T05:00:01.0000000Z",
+             "NewTime": "2026-09-24T05:00:09.4800000Z", "ProcessId": "0x4",
+             "ProcessName": "C:\\Windows\\System32\\svchost.exe"}
+    time_change = {"NewTime": "2026-09-24T05:00:09.4800000Z", "OldTime": "2026-09-24T05:00:01.0000000Z"}
+    return {
+        sec: [("kept", dump(logon4624(sec, 8001))),
+              ("kept", dump(clock_event("Security", 4616, "Microsoft-Windows-Security-Auditing", rel=sec,
+                                        record_id=8002, data=t4616)))],
+        sysc: [("kept", dump(clock_event("System", 1, KG, rel=sysc, record_id=8101, data=time_change))),
+               ("kept", dump(clock_event("System", 1, KG.lower() + " ", rel=sysc, record_id=8102, data=time_change))),
+               ("nr", dump(clock_event("System", 1, "Microsoft-Windows-Power-Troubleshooter", rel=sysc,
+                                       record_id=8103, data={"TargetState": "4"}))),
+               ("nr", dump(clock_event("System", 1, "Microsoft-Windows-FilterManager", rel=sysc, record_id=8104,
+                                       data={"Reason": "x"}))),
+               ("nr", dump(clock_event("System", 1, None, rel=sysc, record_id=8105, data=time_change))),
+               ("kept", dump(clock_event("System", 6005, "EventLog", rel=sysc, record_id=8106,
+                                         data={"param1": "x"})))],
+    }
+
+
+@pytest.fixture()
+def clock_imported(tmp_path):
+    jdir = build_trial(tmp_path, clock_files())
+    db, rep, result = do_import(tmp_path, jdir)
+    return {"jdir": jdir, "db": db, "rep": rep, "tmp": tmp_path}
+
+
+def test_co18_kernel_general_system1_and_4616_are_in_events(clock_imported):
+    """CO-18 / NF-09: a Kernel-General System 1 (also lower case with padding) and a Security 4616 end up in `events`,
+    each with a valid event_utc, its source_relative_path and its physical source_line."""
+    conn = connect(clock_imported["db"])
+    sys1 = conn.execute("select * from events where channel='System' and event_id=1 order by source_line").fetchall()
+    sec = conn.execute("select * from events where channel='Security' and event_id=4616").fetchall()
+    assert [r["source_line"] for r in sys1] == [1, 2]                    # physical lines of the two Kernel-General rows
+    assert [r["source_line"] for r in sec] == [2]
+    for r in sys1 + sec:
+        assert r["event_utc"] and r["event_utc"].endswith("Z")
+        assert r["event_utc"].startswith("2026-09-24T05:00:")
+        assert r["source_relative_path"] and r["source_relative_path"].endswith(".evtx")
+        assert r["host"] == "ep-02"
+    assert {r["source_relative_path"] for r in sys1} == {"ep-02/system.evtx"}
+    assert {r["source_relative_path"] for r in sec} == {"ep-02/security.evtx"}
+    assert {str(r["record_id"]) for r in sys1} == {"8101", "8102"}
+    for r in sys1 + sec:                          # the pointer round-trips: that line of that file is this record
+        path = clock_imported["jdir"] / "per_file" / Path(r["source_relative_path"]).with_suffix(".jsonl")
+        line = json.loads(path.read_bytes().split(b"\n")[r["source_line"] - 1].decode("utf-8"))
+        assert line["system"]["event_id"] == str(r["event_id"])
+
+
+def test_co18_other_provider_and_no_provider_system1_not_in_events_and_counted(clock_imported):
+    """CO-18: System 1 from Power-Troubleshooter, FilterManager and with no provider are not in `events`; each is
+    counted in excluded_not_relevant (3 of them) and the accounting still adds up."""
+    conn = connect(clock_imported["db"])
+    ids = {str(r[0]) for r in conn.execute("select record_id from events")}
+    assert not ids & {"8103", "8104", "8105"}
+    assert conn.execute("select count(*) from events where channel='System' and event_id=1").fetchone()[0] == 2
+    row = conn.execute("select * from source_files where relative_path='ep-02/system.evtx'").fetchone()
+    assert (row["kept"], row["excluded_not_relevant"], row["excluded_bad_event_id"], row["blank_lines"]) == (3, 3, 0, 0)
+    assert row["lines_read"] == 6 and row["emitted_event_count"] == 6
+    sec = conn.execute("select * from source_files where relative_path='ep-02/security.evtx'").fetchone()
+    assert (sec["kept"], sec["excluded_not_relevant"]) == (2, 0)
+    rep = json.loads(next(clock_imported["rep"].rglob("*.json")).read_text(encoding="utf-8"))
+    pf = {p["relative_path"]: p for p in rep["per_file"]}
+    assert pf["ep-02/system.evtx"]["excluded_not_relevant"] == 3 and pf["ep-02/system.evtx"]["kept"] == 3
+
+
+def test_co18_system1_with_non_string_provider_is_not_kept(tmp_path):
+    """CO-18: a System 1 whose `system.provider` is not a string (null, number, list) is not kept."""
+    sysc = "ep-02/system.evtx"
+    odd = []
+    for i, prov in enumerate([None, 5, ["Microsoft-Windows-Kernel-General"]]):
+        ev = clock_event("System", 1, "x", rel=sysc, record_id=8200 + i,
+                         data={"NewTime": "2026-09-24T05:00:09.0000000Z"})
+        ev["system"]["provider"] = prov
+        odd.append(("nr", dump(ev)))
+    jdir = build_trial(tmp_path, {sysc: odd})
+    db, _, _ = do_import(tmp_path, jdir)
+    conn = connect(db)
+    assert conn.execute("select count(*) from events").fetchone()[0] == 0
+    assert conn.execute("select excluded_not_relevant from source_files").fetchone()[0] == 3
+
+
+def test_co18_sysmon_1_is_not_system_1(tmp_path):
+    """CO-18: a Sysmon event id 1 is kept as before whatever its provider; the provider filter is for System 1 only."""
+    sysm = "ep-02/sysmon.evtx"
+    ev = make_event("Sysmon", 1, {"ProcessGuid": "{aaaa}", "Image": "C:\\x.exe", "UtcTime": "2026-09-24 05:00:00.123"},
+                    rel=sysm, record_id=8300)
+    ev["system"]["provider"] = "Microsoft-Windows-Sysmon"
+    jdir = build_trial(tmp_path, {sysm: [("kept", dump(ev))]})
+    db, _, _ = do_import(tmp_path, jdir)
+    assert connect(db).execute("select count(*) from events where channel='Sysmon' and event_id=1").fetchone()[0] == 1
+
+
+def test_co18_existing_trial_dbs_untouched_and_have_no_new_events(tmp_path):
+    """CO-18 / spec 08: existing DBs are not re-ingested. A synthetic import in tmp_path leaves the real s02_t00 DB's
+    hash unchanged (compared read-only), and that DB holds no 4616 and no System 1 (ingested before CO-18)."""
+    real_db = PROCESSED / "s02_t00.sqlite3"
+    if not real_db.exists():
+        pytest.skip(f"missing {real_db}")
+    before = hashlib.sha256(real_db.read_bytes()).hexdigest()
+    jdir = build_trial(tmp_path, clock_files())
+    do_import(tmp_path, jdir)
+    assert hashlib.sha256(real_db.read_bytes()).hexdigest() == before
+    con = sqlite3.connect(f"{real_db.resolve().as_uri()}?mode=ro", uri=True)
+    try:
+        n = con.execute("select count(*) from events where (channel='Security' and event_id=4616) "
+                        "or (channel='System' and event_id=1)").fetchone()[0]
+    finally:
+        con.close()
+    assert n == 0

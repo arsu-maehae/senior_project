@@ -597,3 +597,54 @@ def test_no_zero_logon_ids_first_2000(rel):
             if n >= 2000:
                 break
     assert n > 0
+
+
+# ---------------------------------------------------------------- CO-18: clock-change events (NF-09 amended, decision 043)
+KG = "Microsoft-Windows-Kernel-General"
+
+
+def test_is_relevant_security_4616_kept():
+    """CO-18: Security 4616 (system time changed) is kept, with or without a provider."""
+    assert is_relevant("Security", 4616) is True
+    assert is_relevant("Security", 4616, "Microsoft-Windows-Security-Auditing") is True
+    assert is_relevant("Security", 4616, None) is True
+
+
+@pytest.mark.parametrize("provider", [KG, KG.lower(), KG.upper(), f"  {KG}  ", f"\t{KG.lower()}\n"])
+def test_is_relevant_system1_kernel_general_kept(provider):
+    """CO-18: System 1 is kept when its provider is Microsoft-Windows-Kernel-General (case and padding ignored)."""
+    assert is_relevant("System", 1, provider) is True
+
+
+@pytest.mark.parametrize("provider", [
+    "Microsoft-Windows-Power-Troubleshooter", "Microsoft-Windows-FilterManager", None, "", "   ",
+    "Microsoft-Windows-Kernel-General-X", "Kernel-General", "Microsoft-Windows-Kernel-Power", 1234,
+])
+def test_is_relevant_system1_other_provider_not_kept(provider):
+    """CO-18: System 1 from another provider, with an empty / missing provider, is not kept (FilterManager really
+    reuses id 1 in the s02/s06/s07 t00 exports)."""
+    assert is_relevant("System", 1, provider) is False
+
+
+def test_is_relevant_system1_without_provider_argument_not_kept():
+    """CO-18: no provider argument at all: System 1 is not kept (the provider is required)."""
+    assert is_relevant("System", 1) is False
+
+
+@pytest.mark.parametrize("provider", [None, "", "p", KG, "Microsoft-Windows-FilterManager"])
+@pytest.mark.parametrize("ch,eid,expected", [
+    ("Security", 4624, True), ("Sysmon", 1, True), ("System", 7045, True), ("System", 6005, True),
+    ("Security", 4799, False), ("System", 12345, False), ("Sysmon", 22, False),
+])
+def test_is_relevant_other_ids_ignore_the_provider(ch, eid, expected, provider):
+    """CO-18: only System 1 depends on the provider; every other (channel, id) answers as before.
+    In particular Sysmon 1 is not System 1."""
+    assert is_relevant(ch, eid, provider) is expected
+
+
+def test_provider_restricted_lists_only_system_1():
+    """CO-18: the provider restriction covers exactly System 1, Kernel-General."""
+    from evtx_pipeline.trial_normalize import PROVIDER_RESTRICTED
+    assert dict(PROVIDER_RESTRICTED) == {("System", 1): KG}
+    assert 4616 in TRIAL_RELEVANT_EVENT_IDS["Security"] and 1 in TRIAL_RELEVANT_EVENT_IDS["System"]
+    assert 1 in TRIAL_RELEVANT_EVENT_IDS["Sysmon"]            # unchanged

@@ -158,6 +158,19 @@ def peek_channel_event_id(event: Any) -> tuple[str | None, int | None]:
     return channel, event_id
 
 
+def peek_provider(event: Any) -> str | None:
+    """Decoded record's ``system.provider`` (None when absent), for the CO-18 provider filter.
+
+    WHY: System event id 1 is a clock change only from Kernel-General; the DB
+    has no provider column, so the import must read it before the row is kept.
+    """
+    if not isinstance(event, dict):
+        return None
+    system = event.get("system") if isinstance(event.get("system"), dict) else {}
+    provider = system.get("provider")
+    return provider if isinstance(provider, str) else None
+
+
 def iter_physical_lines(path: Path) -> Iterator[tuple[int, bytes, str]]:
     """Yield (1-based line number, raw bytes, text) splitting on b'\\n' only (NF-16/NF-20).
 
@@ -222,7 +235,7 @@ def import_file(connection: sqlite3.Connection, item: dict[str, Any], jsonl_path
                 " VALUES(?,?,?,?,?,?)",
                 (relative_path, number, "error", "event_id", "invalid_event_id", "event id missing or not an integer; row excluded"))
             continue
-        if not is_relevant(channel, event_id):
+        if not is_relevant(channel, event_id, peek_provider(event)):
             counters["excluded_not_relevant"] += 1
             continue
         row = normalize_trial_event(event, scenario_id=scenario, trial_id=trial, line_number=number)

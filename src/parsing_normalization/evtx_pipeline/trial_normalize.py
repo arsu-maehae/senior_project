@@ -34,6 +34,16 @@ TRIAL_RELEVANT_EVENT_IDS: dict[str, set[int]] = {
 }
 TRIAL_RELEVANT_EVENT_IDS["Security"] |= {1102, 4634, 4647, 4688}
 TRIAL_RELEVANT_EVENT_IDS["System"] |= {104, 6005, 6006, 6008, 41, 1074}
+# NF-09 amended / decision 043 / spec 08 CO-18 (new ingests only): clock-change
+# events, so a clock step inside a trial is visible to clock_offset (CO-15).
+# Security 4616 = system time changed; System 1 = Kernel-General time change,
+# restricted by provider below because other System providers reuse id 1.
+TRIAL_RELEVANT_EVENT_IDS["Security"] |= {4616}
+TRIAL_RELEVANT_EVENT_IDS["System"] |= {1}
+
+# CO-18: (channel, event id) pairs kept only for one provider.  The DB has no
+# provider column, so this check must happen at ingest time.
+PROVIDER_RESTRICTED: dict[tuple[str, int], str] = {("System", 1): "Microsoft-Windows-Kernel-General"}
 
 # NF-11: which logon-id column is "the session" for each Security event.
 _SESSION_TARGET_EVENTS = {4624, 4634}
@@ -46,13 +56,23 @@ _WINRM_RESOURCE_RE = re.compile(r"\(\s*([^\\\s()]+)\\([^\s()]+)\s+clientIP:\s*([
 _PREDEFINED_NAMES = {"system", "local service", "network service", "anonymous logon"}
 
 
-def is_relevant(channel: str | None, event_id: int | None) -> bool:
+def is_relevant(channel: str | None, event_id: int | None, provider: str | None = None) -> bool:
     """NF-09: True if (channel, event id) belongs in the analysis DB.
 
     WHY: the DB keeps only events the stitcher or the log-state checks need,
-    which keeps the per-trial SQLite file small.
+    which keeps the per-trial SQLite file small.  For a pair listed in
+    ``PROVIDER_RESTRICTED`` (CO-18: System 1) the provider must match too,
+    because the same id from another provider (e.g. resume from sleep) is not
+    a clock change and the DB could not tell them apart later.  A missing
+    provider is not kept.  Every other pair ignores ``provider``.
     """
-    return channel in TRIAL_RELEVANT_EVENT_IDS and event_id in TRIAL_RELEVANT_EVENT_IDS[channel]
+    if (channel is None or event_id is None or channel not in TRIAL_RELEVANT_EVENT_IDS
+            or event_id not in TRIAL_RELEVANT_EVENT_IDS[channel]):
+        return False
+    required = PROVIDER_RESTRICTED.get((channel, event_id))
+    if required is None:
+        return True
+    return isinstance(provider, str) and provider.strip().casefold() == required.casefold()
 
 
 def host_lower(value: Any) -> str | None:
