@@ -1,6 +1,6 @@
 # 044 — Council: SMB/NTLM source linking, link time windows, offset uncertainty and identity (T7 spec)
 
-**Date:** 2026-11-13 · **Status:** **proposed — council verdict of 2026-11-13, awaiting the owner; nothing here is approved** · **Task:** T7 (7.1) · **Relates to:** 011, 013, 014, 015, 039, 043 (Q12), spec [03_stitch](../specs/03_stitch.md), input notes [03_stitch_input_notes](../specs/03_stitch_input_notes.md), review [08_clock_offset-2026-11-12](../reviews/08_clock_offset-2026-11-12.md) SF-6, SF-7
+**Date:** 2026-11-13 · **Status:** **proposed — the owner accepted the call on 2026-11-13 with the 15 s "after" side; this record stays proposed until the owner approves its final text** · **Task:** T7 (7.1) · **Relates to:** 011, 013, 014, 015, 039, 043 (Q12), spec [03_stitch](../specs/03_stitch.md), input notes [03_stitch_input_notes](../specs/03_stitch_input_notes.md), review [08_clock_offset-2026-11-12](../reviews/08_clock_offset-2026-11-12.md) SF-6, SF-7
 
 ## Brief (owner, 2026-11-13; council skill step 0)
 
@@ -107,7 +107,7 @@ reported uncertainty is too small to decide an identity value.
 7 of 14 groups, two signals for 2, none for 5; the grouping margin rests on one pair of hops.
 
 **WHERE THE COUNCIL SPLIT.** After side: 10 s (fact-checker, committee member) vs 15 s (attacker, implementer;
-researcher 15 s to record, 10 s for the tier). Look-back before the peer review: 120 s (committee member), 60 s
+researcher 15 s to record, 10 s for the tier). The owner chose 15 s. Look-back before the peer review: 120 s (committee member), 60 s
 (attacker), 30 s (others); after it, 30 s for all, the researcher keeping a 120 s outer ring. The attacker also
 wants a guard that logons owning different install names never share a hop; not adopted (unmeasured), flagged instead.
 
@@ -132,10 +132,23 @@ with uncertainties of 1.76 s and 2.97 s is flagged and keeps its value.
 4. A development hop inside the uncertainty band → the owner decides (c) with that hop in hand.
 5. Decision 013's kill criteria stay in force.
 
+## Owner answers (2026-11-13)
+| Item | Owner's answer |
+|---|---|
+| (a) name check | accepted: a recorded field and tie-break only; it never changes the tier |
+| (b) look-back | accepted: 30 s |
+| (b) "after" side | **15 s** — the owner's choice between the split values: "10 s leaves 2.85 s, about the 2.5 s offset floor" |
+| (b) grouping gap | accepted: 2 s, frozen; flags and counts on trials outside the margin |
+| (c) offset uncertainty (spec 08 Q12) | accepted: flag only, floor 2.5 s |
+| Decision 014 | amend its 120 s / 10 s sentence to 30 s / 15 s, citing this record (done 2026-11-13) |
+
+The spec's other open questions (03_stitch Q6–Q16) were answered or kept open in the spec itself, §8.
+
 ## Consequences
 - Spec 03_stitch ST-20, ST-42, ST-43, ST-46, ST-50, ST-62 and §5 carry these values. Decision 014's sentence "the
-  command-line window stays [t − 120 s, t + 10 s]" is amended to [t − 30 s, t + 15 s] for T7 **if the owner
-  accepts**; its 5 s floor and the order rule are unchanged. CLAUDE.md is not edited.
+  command-line window stays [t − 120 s, t + 10 s]" **is amended** to [t − 30 s, t + 15 s] for the 4648 and
+  command-line methods (owner 2026-11-13, citing this record); its 5 s floor and the order rule are unchanged.
+  CLAUDE.md is not edited.
 - **Limitation to state in the report (owner's fear 3):** "For NTLM SMB hops the source session is found from a
   command on the source host that names the target (9 of 14 development groups at the chosen range; 2 of them also
   by a 4648; 5 have no source candidate). The port join links none of them, because Sysmon did not log SMB and an SMB connection belongs to the kernel, and

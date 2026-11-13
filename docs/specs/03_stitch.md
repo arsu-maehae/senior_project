@@ -1,6 +1,6 @@
 # Stage spec: 03_stitch
 
-**Owner:** <stage owner> · **Status:** **draft — not approved.** Measured on development data 2026-11-13; data-checker and attacker review merged ([review](../reviews/03_stitch-spec-2026-11-13.md)); council verdict [044](../decisions/044-stitch-linking-and-windows-council.md) merged as **proposed**. Every value marked "044" waits for the owner. · **Last updated:** 2026-11-13
+**Owner:** <stage owner> · **Status:** **draft — not approved.** Measured on development data 2026-11-13; data-checker and attacker review merged ([review](../reviews/03_stitch-spec-2026-11-13.md)); council verdict [044](../decisions/044-stitch-linking-and-windows-council.md) merged; **owner answers of 2026-11-13 merged** (044 accepted with the 15 s "after" side; Q6–Q14 answered except Q9, Q11, Q13b; new Q15, Q16). 044 stays **proposed** until the owner approves its final text. · **Last updated:** 2026-11-13
 
 Decisions this spec rests on: [011](../decisions/011-smb-linking-without-sysmon3.md), [013](../decisions/013-council-correction-i-amended.md) (Correction I amended), [014](../decisions/014-cross-host-time-tolerance.md) (5 s), [015](../decisions/015-port-zero-kerberos-hops.md), [038](../decisions/038-gate-rule-choices.md) (`confidence_tier` belongs to T7), [039](../decisions/039-gate-window-input-and-clock.md) (identity look-back), [043](../decisions/043-clock-offset-method.md) (corrected times). Proposed with this spec: [044](../decisions/044-stitch-linking-and-windows-council.md) (council), [045](../decisions/045-tier-rule-scope.md) (tier rule scope, review 08 SF-9). Input notes: [03_stitch_input_notes](03_stitch_input_notes.md) (IN-01, IN-02). Measurements: §10.
 
@@ -47,7 +47,7 @@ Refused inputs (stop with an error, write nothing):
   functions, so a stale gate folder cannot be stitched;
 - **S01 (review 08 SF-8):** the clock step refuses a trial with no agent roots, so no S01 trial has an offsets
   file, the window step and the gate refuse it, and the stitcher has no input. This spec adds no special case:
-  S01 is stitched only after the clock step can use the operator window (spec 08 §2). See OPEN Q8.
+  **Owner 2026-11-13 (Q8): the refusal stays.** S01 is fixed by operator times and an offsets file after the lab (review 08 SF-8), not by loosening this rule.
 
 ## 3. Output contract
 Location `out/stitch/<trial_id>/`. Rebuilt on every run. Rows sorted by time, then id. Every file except
@@ -70,15 +70,16 @@ Location `out/stitch/<trial_id>/`. Rebuilt on every run. Rows sorted by time, th
 | gap_near_threshold, splits_at_1s, merges_at_3s | int | 1 if a gap lies in the review band; 1 if a 1 s gap would cut this hop; 1 if a 3 s gap would join it to a neighbour (ST-20) |
 | service_install_count | int | installs attached to the hop; more than 1 is a sign of two hops in one group |
 | shares_port_with_hops | text | other hops with a member on the same (source IP, source port) (ST-24) |
+| followup_logon_uids, followup_logon_count | text / int | logons attached to this hop as follow-ups (ST-26); they are not members |
 | candidate_count, best_tier | int, text | distinct candidate source sessions over all methods; best `confidence_tier` of its link rows |
 | evidence_before_range, evidence_after_range | int | source evidence naming the target between 120 s and `LINK_LOOKBACK_S` before, and between `LINK_AFTER_S` and 30 s after: counted, never a candidate (ST-42) |
 | supporting_span_ms | int | first to last attached artefact event (ST-34) |
 | clock_unreliable, gate_clock_unreliable | int | the hop's own hosts and events (ST-02); the value inherited from the members' gate rows |
 
 **`hop_artefacts.csv`** — one row per artefact attached to a hop (ST-30..ST-34): `hop_id, kind` (`share_burst`,
-`service_install`, `winrm_host`, `winrm_91`, `rdp_connection`)`, member_logon_uid` (the member whose logon ID the
+`service_install`, `winrm_host`, `winrm_91`, `rdp_connection`, `followup_logon`)`, member_logon_uid` (the member whose logon ID the
 events carry; empty for an install with no 4697)`, logged_under_hop_id` (the hop of that logon ID; differs from
-`hop_id` only for a burst moved by ST-32)`, method` (`logon_id`, `file_name_time`, `ip_time`)`, candidate_count,
+`hop_id` only for a burst moved by ST-32)`, method` (`logon_id`, `file_name_time`, `ip_time`, `port_reuse`)`, candidate_count,
 time_delta_ms` (artefact start − hop first 4624, same host)`, supporting_span_ms, confidence_tier, event_uids,
 names` (service name and binary file name, or the `.exe` file names of a share burst)`, untied_same_name_bursts`.
 
@@ -113,15 +114,19 @@ session_open_before_window, end_unknown_session_uids, not_applicable, clock_unre
 on its source host has one row per account with empty dump columns. A hop with no known source host, or a
 machine-account member, has one row with `not_applicable` = `source_host_unknown` / `machine_account`.
 
-**`paths.csv`** and **`path_nodes.csv`** — candidate paths (ST-70..ST-74). **Provisional until Q6 and Q7 are
-answered.** `paths.csv`: `path_id, hop_ids` (time order)`, hosts` (in hop order)`, n_hops, seed_trigger_ids` (of
-all its seeds)`, merged_from` (the single-seed paths it was built from)`, isolated` (1 if it shares no node with
-another path). `path_nodes.csv`: `path_id, hop_id, role` (`target_logon`, `artefact`, `source_evidence`,
-`source_session_event`, `target_session_event`)`, context` (1 for session events, ST-71)`, host, session_id,
+**`paths.csv`**, **`path_edges.csv`** and **`path_nodes.csv`** — candidate paths (ST-70..ST-74).
+`paths.csv`: `path_id, hop_ids` (time order)`, hosts` (in hop order)`, n_hops, seed_trigger_ids` (of all its
+seeds)`, merged_from` (the maximal chains it was built from, ST-73)`, isolated` (1 if it has one hop and no edge)`,
+edge_types` (`session` / `host_time` counts)`, shared_source_session_with, shared_event_with` (notes: other paths
+that share a source session or an event; never a merge, ST-73).
+`path_edges.csv`: `path_id, from_hop_id, to_hop_id, link_type` (`session` | `host_time`)`, time_delta_ms`
+(to-hop first member − from-hop first member, corrected)`, order_within_tolerance, clock_unreliable`.
+`path_nodes.csv`: `path_id, hop_id, role` (`target_logon`, `artefact`, `source_evidence`, `source_session_event`,
+`target_session_event`)`, context` (1 for session events and follow-up logons, ST-71)`, host, session_id,
 event_uid, link_id`.
 
 **`stats.json`**, **`report.md`**, **`run_info.json`** — counts per file; hops per protocol and tier; per protocol
-the number of hops linked by 0, 1, 2 and 3 methods; `target_only` reasons; hops in no path (ids); hops with
+the number of hops linked by 0, 1, 2 and 3 methods; `target_only` reasons; hops in no path (ids); follow-up logons attached (ST-26); chain edges per link type; hops with
 `gap_near_threshold`, counted apart for user endpoint → endpoint hops; system-session candidates excluded; events
 refused by the window rule; parameters; DB hash before and after.
 
@@ -131,22 +136,23 @@ refused by the window rule; parameters; DB hash before and after.
 | ST-00 | **Allowed trial.** Refuse per §2 before reading any event. | 02_gate GT-00; 08 CO-17; review 08 SF-8 |
 | ST-01 | **Window.** An event whose corrected time is outside the trial window is never a hop member, an artefact, source evidence or a path node. The only exception is the identity look-back of ST-63. Such events are counted in `stats.json`, never listed. | PLAN 7.7; decision 039 |
 | ST-02 | **Corrected times** for every cross-host comparison; both times written. `clock_unreliable` = 1 on a row when a host of the row is `none`, `wide` or `stale`, or an event of the row was logged before a counted clock change on its host. `gate_clock_unreliable` carries the gate's value, which is also 1 for every row of a trial whose window-edge host is unreliable. The two are kept apart so the first stays a signal. | 08 CO-09, CO-15; decision 043; review ATK-12 |
-| ST-03 | **Remote logons** = the anchors of `triggers.csv` plus the rows of `unmatched_remote.csv`. Nothing else starts a hop. | 02_gate GT-14, GT-15 |
+| ST-03 | **Remote logons** = the anchors of `triggers.csv` plus the rows of `unmatched_remote.csv`. Nothing else starts a hop. Each remote logon is a member of exactly one hop or a follow-up logon of exactly one hop (ST-26). | 02_gate GT-14, GT-15 |
 | ST-04 | **No threshold, nothing dropped.** Every hop and every candidate link is written. Every path is written. A hop that ends in no path is still in `hops.csv` with `in_path` = 0 and is listed in `stats.json`. | Correction J, G.4; review ATK-04 |
 | ST-05 | **Near duplicates.** Rows the gate flags `near_duplicate` (same host, channel and record ID, different uid) count as one event: one hop member, one piece of evidence. All uids are kept in the uid columns. | 02_gate GT-18; review ATK-14 |
 | ST-10 | **Sessions per host.** A session is (host, logon ID, boot epoch): opened by a 4624 of any type, closed by a 4634 or 4647 with that logon ID in `target_logon_id`, or by the next boot event (any of System 41, 1074, 6005, 6006, 6008; no single one is required). A process belongs to the session of its Sysmon 1 `session_id` (4688: `subject_logon_id`). | PLAN 7.2; handoff §9.1; review §1 |
 | ST-11 | **Process trees.** Sysmon 1 rows are linked by `process_guid` / `parent_process_guid`. A Sysmon 3, 10 or 11 belongs to the process with its `process_guid` when a Sysmon 1 for it exists; no rule requires that it does. A Sysmon 1 and a 4688 of one process (same host, `process_id`, \|Δt\| ≤ `PROCESS_COLLAPSE_S`) count once. | PLAN 7.2; spec 00 LC-04f |
-| ST-20 | **Hop groups (IN-01).** Remote logons with the same target host and the same normalised source IP, taken in time order, form one hop while each gap to the previous logon is ≤ `GROUP_GAP_S`. A larger gap starts a new hop. A logon with a blank IP is a hop of its own. The row records every member uid and logon ID, the largest inside gap, the gaps to the neighbouring hops, `gap_near_threshold` (a gap inside `GROUP_REVIEW_BAND_S`), `splits_at_1s`, `merges_at_3s` and `service_install_count`. **The value is frozen (044 (b)):** a trial whose gaps fall in the band gets the same rule and the flags, never its own value. | IN-01 items 1, 2; §10.2; 044 (b) |
+| ST-20 | **Hop groups (IN-01).** Remote logons with the same target host and the same normalised source IP, taken in time order, form one hop while each gap to the previous logon is ≤ `GROUP_GAP_S`. A larger gap starts a new hop, unless ST-26 attaches the new group to the hop before it. A logon with a blank IP is a hop of its own. The row records every member uid and logon ID, the largest inside gap, the gaps to the neighbouring hops, `gap_near_threshold` (a gap inside `GROUP_REVIEW_BAND_S`), `splits_at_1s`, `merges_at_3s` and `service_install_count`. **The value is frozen (044 (b)):** a trial whose gaps fall in the band gets the same rule and the flags, never its own value. | IN-01 items 1, 2; §10.2; 044 (b) |
 | ST-21 | **Account is never a grouping key.** A group may hold several accounts (`mixed_account`); every account check is made per member. | Correction I; decision 013; IN-01 item 3; §10.2 (s06-smb-1) |
 | ST-22 | **Protocol** of a hop, from the gate rules of its members, first that applies: R8 → `winrm`; R5 → `rdp`; R6 → `smb_service`; R4 → `smb`; else `none`. | 02_gate GT-10..13; spec 00 LC-04f |
-| ST-23 | **Seeds.** A hop with at least one gate trigger row is a path seed. A hop with only unmatched logons is kept in `hops.csv` and linked like any other; it does not start a path (OPEN Q13). | PLAN 7.5 ("candidate paths from triggers") |
-| ST-24 | **Shared source port.** A (source IP, source port) pair may carry several hops (one SMB connection reused for minutes; WinRM logons 11–13 s after a hop on the hop's ports). The port is never a grouping key; hops that share a port are listed in `shares_port_with_hops`. | IN-01 "related"; §10.2 |
+| ST-23 | **Seeds (owner 2026-11-13, Q13).** A hop with at least one gate trigger row is a path seed. A hop with only unmatched logons is kept in `hops.csv`, linked like any other, flagged (`is_seed` = 0, `in_path` = 0) and listed in `stats.json`. It does not seed a path, and in this draft it is not added to one by chaining either (ST-72 chains seeds only; reading to be confirmed by the owner). | PLAN 7.5 ("candidate paths from triggers"); owner Q13 |
+| ST-24 | **Shared source port.** A (source IP, source port) pair may carry several hops (one SMB connection reused for minutes). The port is never a grouping key; hops that share a port are listed in `shares_port_with_hops`. The only use of a shared port is ST-26. | IN-01 "related"; §10.2 |
+| ST-26 | **Follow-up logons (owner 2026-11-13, Q10).** A group with no gate trigger row is **not a hop** when (i) the hop before it with the same target host and source IP is a seed, (ii) every member's source port is a member port of that hop, and (iii) its first logon is at most `FOLLOWUP_MAX_S` after that hop's last member (same host clock). Its logons are attached to that hop as `followup_logon` artefacts (`method = port_reuse`, `context`). They are not members: they add no links, no identity rows and no protocol, and their own source evidence is not linked. Development: 3 groups (§10.7). Without condition (i) the port rule would also take 11 machine-account dc01 groups that follow other untriggered groups. | owner Q10; §10.7 |
 | ST-25 | **Evaluation match (T7.6).** A key hop matches a hop group when the key's target 4624 is any member. | IN-01 item 4 |
 | ST-30 | **Share bursts (IN-02).** The 5145 and 5140 events of one member logon ID (same host, `subject_logon_id` = the member's logon ID, at or after its 4624) are cut into bursts: a gap > `BURST_GAP_S` starts a new burst. Only 5145 carries a file name. | IN-02 item 1; §10.3; review §1 |
 | ST-31 | **Burst attachment.** A burst belongs to the hop of its own logon ID (`method = logon_id`, tier A) unless ST-32 ties it to an install of another hop. Every row records `time_delta_ms` and `supporting_span_ms`, so a burst far from its hop's logon is visible. | IN-02 items 1, 3 |
 | ST-32 | **Copy ↔ install tie.** A service install (4697 and/or 7045, paired as 02_gate GT-12) with binary file name F is tied to a share burst on the same host that holds a 5145 whose `relative_target_name` file name equals F (case-insensitive), where the burst's last such write is at or before the install and at most `COPY_INSTALL_S` before it. `method = file_name_time`, tier B, `candidate_count` = number of bursts that match; **every matching burst is attached**, none is chosen. The install belongs to the hop of the 4697's logon ID (tier A). A tied burst is attached to **the install's hop**, also when it was logged under another hop's logon ID; `logged_under_hop_id` keeps that hop. A same-name burst outside `COPY_INSTALL_S` is not tied and is listed in `untied_same_name_bursts`. A 7045 with no 4697 is attached through this tie only; with no tie it is listed as unattached. | Correction I ("7045 by time + binary file name"); IN-02 items 2, 4; §10.3; review ATK-10 |
 | ST-33 | **Other artefacts.** `wsmprovhost` Sysmon 1 whose `session_id` is a member logon ID (or its linked ID, which is never set in the development data); WinRM 91 and inbound 3389 Sysmon 3 as the gate paired them. | 02_gate GT-11, GT-13; review §1 |
-| ST-34 | **Span.** `supporting_span_ms` = first to last event of an artefact row, and of all artefacts of a hop. | IN-02 item 3 |
+| ST-34 | **Span.** `supporting_span_ms` = first to last event of an artefact row, and of all artefacts of a hop. **Computed by the stitcher; the gate is not changed (owner 2026-11-13, Q12).** The artefact events come from the trigger rows' `supporting_event_uids` in `triggers.csv` and from the DB rows the stitcher attaches (ST-30..33); `supporting.csv` lists only `R1_lsass`, `R3_explicit` and `R8_parent` rows and holds no share or service event. | IN-02 item 3; owner Q12 |
 | ST-40 | **Source host** = the lab host that owns the hop's source IP. An unknown, blank or unrecognised link-local source gives a `target_only` row (`source_host_unknown`); a source host with no logs in the DB gives `source_host_no_logs`. | decision 013; §10.4 |
 | ST-41 | **Method `sysmon3_port` (tier A where logged).** A Sysmon 3 on the source host with `initiated` = 1, destination IP = the target's IP, `source_port` = a member's port (> 0; port 0 never joins) and \|Sysmon 3 − that member's 4624\| ≤ `PORT_JOIN_S` on corrected times. Its `process_guid` gives the Sysmon 1 and that gives the session. The join is made per member; one Sysmon 3 may match several members and members of several hops. `candidate_count` counts distinct **sessions**; `matched_member_count` counts members. A Sysmon 3 whose process has no Sysmon 1 inside the window gives a row with an empty session and `session_unresolved_reason`; it is never dropped. | Correction I; decisions 005, 014, 015; IN-01 item 5; review ATK-13 |
 | ST-42 | **Method `source_4648`.** A 4648 on the source host whose target fields name the target (host name forms or IP, boundary-aware), with corrected time in **[first member − `LINK_LOOKBACK_S`, last member + `LINK_AFTER_S`]**. Session = its SubjectLogonId. Evidence of ST-42 or ST-43 that names the target outside this range but within 120 s before or 30 s after is counted in `evidence_before_range` / `evidence_after_range` and is never a candidate. | decision 013; spec 00 LC-04h; 044 (b) |
@@ -163,10 +169,10 @@ refused by the window rule; parameters; DB hash before and after.
 | ST-62 | **Order.** `order_margin_ms` = move − (dump − `ORDER_TOL_S`), on corrected times. `order_ok` = margin ≥ 0 (decision 014). `order_within_tolerance` = \|move − dump\| < `ORDER_TOL_S` (decision 014). `order_within_uncertainty` = \|`order_margin`\| < max(`offset_unc`(source) + `offset_unc`(target), `ORDER_UNC_FLOOR_S`); a `none` or `stale` host sets it. **Flag only: it never changes `order_ok` (044 (c)).** | decision 014; spec 08 §4.1 item 7, Q12; 044 (c) |
 | ST-63 | **Open sessions and the look-back.** A session of the moving account on the source host is open at the dump when its 4624 is at or before the dump and it is not closed before it (ST-10), on the source host's own clock. System logon IDs and machine accounts are excluded. For this check **only**, the session's opening 4624, its 4634 / 4647 and the host's boot events may lie before the trial window (`session_open_before_window` = 1). None of them becomes a member, artefact, source evidence or path node. A session with a Security log clear (1102) between its opening and the dump is listed in `end_unknown_session_uids` and is **not** counted as open by the stitcher. | Correction K; decision 039; spec 00 LC-08; review ATK-05 |
 | ST-64 | **The stitcher writes facts, T9 computes the value.** One row per (hop, account, LSASS read). | PLAN 9.3 |
-| ST-70 | **Candidate paths from triggers.** Every seed hop starts a candidate path. | PLAN 7.5 |
-| ST-71 | **Nodes of a hop:** its member logons; its attached artefacts; the source evidence events of its first-ranked sessions; and, marked `context` = 1, events of processes in the members' sessions on the target, and events of processes of a first-ranked source session **only when its tier is A or B and only at or before the hop's last member**. A tier C or D link gives no source-session events. | PLAN 7.2, 7.5; review ATK-01 |
-| ST-72 | **Chaining two hops into one path: OPEN Q6.** No rule is fixed in this draft. | §10.7 |
-| ST-73 | **Merge.** Paths that share a node are merged; the merged path lists what it was merged from. **Which nodes count for the merge: OPEN Q7.** | Correction J; PLAN 7.5 |
+| ST-70 | **Seeds start paths.** Every seed hop starts a candidate path. A hop with no trigger is in no path (ST-23). | PLAN 7.5; owner Q13 |
+| ST-71 | **Nodes of a hop:** its member logons; its attached artefacts; the source evidence events of its first-ranked sessions; and, marked `context` = 1, events of processes in the members' sessions on the target, and events of processes of a first-ranked source session **only when its tier is A or B and only at or before the hop's last member**. A tier C or D link gives no source-session events. Node events are path content for T8 / T9; **they never merge paths** (ST-73). | PLAN 7.2, 7.5; review ATK-01; owner Q7 |
+| ST-72 | **Chaining (owner 2026-11-13, Q6).** Two seed hops H1 → H2 are chained when H2's source host is H1's target host and H2 starts after H1: H2's first member 4624 ≥ H1's first member 4624 − `ORDER_TOL_S` on corrected times (a cross-host comparison, decision 014; within ±`ORDER_TOL_S` the edge has `order_within_tolerance` = 1). Link type **`session`** when one of H2's first-ranked tier A or B source sessions is a member logon ID of H1; otherwise **`host_time`**, the weaker type. Every edge is written to `path_edges.csv` with its type. Development: 0 `session` edges; the only key path built by chaining is `s05-p1` (`host_time`, 118.8 s). As written, the rule also chains background and machine-account hops: 9 edges in total (§10.7; OPEN Q15). | owner Q6; §10.7 |
+| ST-73 | **Paths and merging (owner 2026-11-13, Q7).** A candidate path is a maximal chain of seed hops. Maximal chains that contain the same hop are merged (the locked "merge paths that share nodes", with the hop as the node); `merged_from` lists the chains. **Nothing else merges paths:** a shared source session, a shared evidence event or shared context events never merge two paths; they are recorded as notes (`shared_source_session_with`, `shared_event_with`). | Correction J; PLAN 7.5; owner Q7 |
 | ST-74 | **Isolated paths are kept.** A path that shares nothing with any other, including a single `target_only` seed, is written like every other path. | Correction G.4 |
 
 ## 5. Parameters
@@ -181,6 +187,7 @@ refused by the window rule; parameters; DB hash before and after.
 | `LINK_AFTER_S` | **15 s (044 (b), proposed; amends 014's 10 s)** | latest evidence a hop depends on +6.75 … +7.15 s (s06-smb-1): 7.85 s to spare; results at 10 s and 30 s are identical. It absorbs clock residual; it is not causal evidence (§10.8) | 5 / 10 / 30 s |
 | `ORDER_TOL_S` | 5 s | decision 014 | – |
 | `ORDER_UNC_FLOOR_S` | **2.5 s (044 (c), proposed, provisional)** | reported `offset_unc` (0.001–0.64 s in s06_t00) is below the residual seen there (≥ 1.55 s, §10.8); 2.5 s is half the tolerance, the same reasoning as spec 08 `MAX_LOO_SHIFT_S` | report flagged hops at 0 / 2.5 / 5 s |
+| `FOLLOWUP_MAX_S` | **30 s (proposed with the owner's Q10 answer; to approve)** | the 3 follow-up groups start 9.6–11.9 s after their hop's last member; the same 3 at 15, 30, 60 s and unbounded (§10.7). 30 s leaves 18 s and matches the look-back | 15 / 60 s |
 | `PROCESS_COLLAPSE_S` | 2 s | spec 00 LC-04f | no |
 | `LAB_HOST_IPS`, `SYSTEM_LOGON_IDS` | as `src/gate/params.py` | one definition | no |
 
@@ -204,7 +211,10 @@ falls outside a margin is reported with its flags and counts; T10 reports result
 | Hop linked only by evidence after its logon | s06_t00 s06-smb-1 (+6.75 … +7.15 s) | linked (inside +15 s); `time_delta_ms` positive, visible | STA-07 |
 | No Sysmon 3 for a WinRM hop | s06_t00 ep-01 → ep-03 | no tier A; linked by 4648 and command line (tier B) | STA-05 |
 | Sysmon 3 whose process started before the window | not in current data | row with empty session and `session_unresolved_reason` | STT-04 |
-| Logons 11–13 s after a WinRM hop on its ports | s06_t00, s06_t01 | a hop of its own, not a seed, `shares_port_with_hops` set, `in_path` per Q10 / Q13 | STA-02 |
+| Logons 11–13 s after a WinRM hop on its ports | s06_t00, s06_t01 | follow-up logons of that hop (ST-26), not a hop | STA-02 |
+| Two hops chaining into one hop | s05_t00 (s05-h1 and background s05-t1 → s05-h2) | two `host_time` edges; one merged path (ST-73; OPEN Q16) | STA-09 |
+| Hop into a host, later machine-account logons from that host to dc01 | s02_t01, s05_t00, s06_t01 (7 edges) | `host_time` edges as ST-72 stands (OPEN Q15) | STA-09 |
+| Two hops of one agent session | s07 X and Y; the S06 hops | separate paths; `shared_source_session_with` set (ST-73) | STA-09 |
 | Discovery command naming dc01 before a machine-account logon to dc01 | not in current data (0 candidates for dc01 in every trial) | candidate row with `account_match` none, tier D, no session nodes | STT-06 |
 | Source host has no logs | s07_t00 ep-03 → dc01 (5 groups) | `target_only`, `source_host_no_logs` | STT-09 |
 | User hop with a blank or unrecognised link-local source | not in current data (blank IPs are machine accounts to dc01) | each logon its own hop, `target_only`, identity row `not_applicable` | STT-09 |
@@ -223,7 +233,7 @@ Unit (synthetic rows, STT):
 | ID | What must be true |
 |---|---|
 | STT-01 | Each refusal of §2 stops the run and writes nothing; an S01 trial without an offsets file is refused. |
-| STT-02 | Grouping: gaps of `GROUP_GAP_S` and `GROUP_GAP_S` + 1 ms; two accounts in one group; the same port in two groups; a blank-IP logon alone; **groups at a larger gap are unions of groups at a smaller gap**; the flags `splits_at_1s`, `merges_at_3s`, `service_install_count`; a near-duplicate logon is one member. |
+| STT-02 | Grouping: gaps of `GROUP_GAP_S` and `GROUP_GAP_S` + 1 ms; two accounts in one group; the same port in two groups; a blank-IP logon alone; **groups at a larger gap are unions of groups at a smaller gap**; a group whose ports are all the preceding seed hop's ports, 11 s later, is attached as follow-up logons, and the same group after an untriggered group, with one new port, or 31 s later, is a hop; the flags `splits_at_1s`, `merges_at_3s`, `service_install_count`; a near-duplicate logon is one member. |
 | STT-03 | Bursts and the copy ↔ install tie: a copy under another hop's logon ID moves to the install's hop; two bursts with the same file name are both attached with `candidate_count` 2; a copy after the install never ties; a copy outside `COPY_INSTALL_S` is listed, not tied. |
 | STT-04 | Port join: per member; port 0 and NULL never join; \|Δ\| = `PORT_JOIN_S` joins, + 1 ms does not; computed on corrected times (a raw gap of 18 s with an offset of −18 s joins); a process with no Sysmon 1 gives a row with an empty session. |
 | STT-05 | 4648 and command-line methods: name boundary cases (`.2` vs `.22`); the edges of [−`LINK_LOOKBACK_S`, +`LINK_AFTER_S`]; evidence at −60 s is counted, not a candidate; one process logged as Sysmon 1 and 4688 counts once. |
@@ -235,13 +245,13 @@ Unit (synthetic rows, STT):
 | STT-11 | Identity: session closed before the dump → not open; boot between → not open; opened and closed before the window → not open; opened before the window and still open → used, flagged, and absent from every other file; a log clear between → `end_unknown`, not open; changing the linked session changes no identity row. |
 | STT-12 | An event outside the window is in no row of any file (ST-01), the ST-63 look-back apart; `clock_unreliable` and `gate_clock_unreliable` as ST-02. |
 | STT-13 | No output file contains any substring of length ≥ 12 of any `command_line` value of the DB other than a target-side name; `src/stitch` opens nothing under `ground_truth/`; DB hash unchanged; two runs byte-identical. |
-| STT-14 | Paths: an isolated `target_only` seed is in `paths.csv`; a hop in no path has `in_path` = 0 and is in `stats.json`; a tier D link adds no source-session nodes. (Chaining and merge tests wait for Q6 / Q7 and fail until then.) |
+| STT-14 | Paths: an isolated `target_only` seed is in `paths.csv`; a hop in no path has `in_path` = 0 and is in `stats.json`; a tier D link adds no source-session nodes. Chaining: a `host_time` edge when the second hop's source is the first hop's target and it starts after the first; no edge when it starts more than 5 s before; a `session` edge when its first-ranked tier A / B session is a member logon of the first hop; two chains that share a hop are one path; two hops that share only a source session or an event are two paths with the note set. |
 | STT-15 | Order flags: a move 4 s inside the boundary with uncertainties 1.76 s and 2.97 s → `order_within_uncertainty` = 1 and `order_ok` unchanged; uncertainties of 1 ms → the floor applies. |
 
 Real data (development trials only; the tests read the keys, `src/stitch` never does):
 | ID | What must be true |
 |---|---|
-| STA-01 | Counts: every remote logon of the gate files is a member of exactly one hop; hop and link counts equal `stats.json`. |
+| STA-01 | Counts: every remote logon of the gate files is a member of exactly one hop or a follow-up logon of exactly one hop; hop and link counts equal `stats.json`. |
 | STA-02 | On the six t00 trials no two key hops share a hop group, and each key hop's group has the member count of the input-notes table (3 / 5 / 3 / 3 / 1 / 3 / 5 / 1 / 3 / 5 / 3 / 1 / 3 / 2 / 1). |
 | STA-03 | s06-smb-1: one hop with both accounts; the key's 4624 is a member. |
 | STA-04 | s07_t00: path Y's hop has the `Ypay.exe` copy and its own install; path X's hop has only its own copy. Each of the 6 installs with a copy has exactly one tied burst. |
@@ -249,21 +259,24 @@ Real data (development trials only; the tests read the keys, `src/stitch` never 
 | STA-06 | The 4 background key hops are `target_only`; s06-smb-1 and the s02_t01 05:34:09 group report `evidence_before_range` > 0. On t01 trials counts are reported without a right/wrong label. |
 | STA-07 | Sensitivity report at the §5 alternative values, and the kill criteria of 044: no keyed hop needs evidence outside [−30 s, +15 s]; link results at 15 s and 30 s are equal. Decision 014: port-join results at 5 s vs 10 s. |
 | STA-08 | Identity inputs: for the 15 keyed hops the facts give the key's `identity_expected`; no hop is within `ORDER_TOL_S` of a dump or inside the uncertainty band. |
-| STA-09 | The attack hops of every development key are in `paths.csv` (PLAN T7 done-when). For the two-hop key path `s05-p1` the test states which of Q6's options it assumes. |
+| STA-09 | The attack hops of every development key are in `paths.csv` (PLAN T7 done-when). `s05-p1`: s05-h1 and s05-h2 are in one path joined by a `host_time` edge; the path's other hops are reported (background s05-t1, and the machine-account groups while Q15 is open). s07 X and Y are in two paths with `shared_source_session_with` set. |
 
-## 8. OPEN questions
-| # | Question | Options | Who |
+## 8. OPEN questions and owner answers
+| # | Question | Answer / options | Status |
 |---|---|---|---|
-| Q1–Q5 | Council 044: name check and the tier; look-back; "after" side; grouping gap; offset uncertainty and identity | **proposed in 044:** tie-break only; 30 s; 15 s; 2 s frozen with flags; flag only with a 2.5 s floor | **owner: accept, amend or reject 044** |
-| Q6 | **Chaining hops into a multi-hop path.** The only two-hop key path is `s05-p1` (ep-01 → ep-02 → ep-03). In no development trial is a hop's source session a logon created by an earlier hop (0 of 23); host and time order chains s05 (1 of 23). | (a) session level only (s05-p1 stays two paths); (b) host + time order; (c) process tree from the earlier hop's service | owner (not in the council brief) |
-| Q7 | **Which nodes merge two paths, and which session events a path carries (attacker's top finding).** With hop-level events only (logons, artefacts, the evidence events), two hops merge when one evidence event serves both: s06_t00 and s06_t01 WinRM hop + its follow-up group. With the first-ranked source session as a node, hops of one agent session merge: s07 X + Y (the key has two paths), S06's three keyed hops and a follow-up group (the key has one path each). With every candidate counted, s04 A + B would merge too; ST-71 prevents that. | (a) hop-level events only; (b) first-ranked tier A / B source session; (c) no merge across seeds | owner |
-| Q8 | **S01 has no offsets file (review 08 SF-8).** | (a) change the clock step to use the operator window before S01 ×10 (spec 08 + `src/clock_offset`); (b) leave S01 refused | owner |
-| Q9 | Which `R1_lsass` rows count as the LSASS read for identity, and do `end_unknown` sessions count? R1 holds system processes too (`csrss`, `wininit`, `wmiprvse`, `msmpeng`: 2–15 rows per host). On development data the values are the same either way (§10.6). | all R1 rows / rows Sigma labels T1003.001 (T8) / non-system account | T8–T9 specs |
-| Q10 | Logons 11–13 s after a WinRM hop on the hop's ports (2 groups) | own hop, not a seed (draft) / sibling of that hop when the port matches | owner |
-| Q11 | **Tier line for clock pairs (review 08 SF-9).** Proposed record [045](../decisions/045-tier-rule-scope.md): the tier rule covers rows that link events of a path; clock pairs are measurement rows and carry none. | accept / amend | owner |
-| Q12 | `supporting_span_ms` in the gate output (input note IN-02 item 3) | computed here only (draft, no change to 02_gate) / also in the gate | owner |
-| Q13 | Hops with no trigger: should one with a tier A / B link seed a path? May the window look-back also read a process start before the window, to resolve a port join's session (PLAN 7.7 allows identity only)? | draft: no and no; both cases are counted and listed | owner |
-| Q14 | May time order break a tie between candidate sessions (nearest evidence at or before the logon)? | draft: no (clock residuals ≥ 1.5 s, §10.8); a tie stays a tie | owner |
+| Q1–Q5 | Council 044: name check and the tier; look-back; "after" side; grouping gap; offset uncertainty and identity | **Owner 2026-11-13:** accepted, with the "after" side 15 s (10 s leaves 2.85 s, about the 2.5 s floor). Decision 014's window sentence amended to 30 s / 15 s, citing 044 | answered; **044 final text to approve** |
+| Q6 | Chaining hops into a multi-hop path | **Owner:** chain when the second hop's source host is the first hop's target host and it starts after the first hop; type `host_time`, weaker than a `session` link (ST-72). `s05-p1` is the only development key case | answered |
+| Q7 | Which nodes merge two paths | **Owner:** never on a shared source session; paths join only through chaining; a shared session is a note (ST-73) | answered |
+| Q8 | S01 has no offsets file (review 08 SF-8) | **Owner:** keep the refusal; fixed by operator times and an offsets file after the lab | answered |
+| Q9 | Which `R1_lsass` rows count as the LSASS read for identity, and do `end_unknown` sessions count? On development data the values are the same either way (§10.6) | deferred to the T8 / T9 specs | **open** |
+| Q10 | Logons 11–13 s after a WinRM hop on the hop's ports | **Owner:** context on the preceding hop, not separate hops (ST-26). `FOLLOWUP_MAX_S` = 30 s proposed | answered; **parameter to approve** |
+| Q11 | Tier line for clock pairs (review 08 SF-9), record [045](../decisions/045-tier-rule-scope.md) | accept / amend / reject | **open (owner)** |
+| Q12 | `supporting_span_ms` in the gate output | **Owner:** no gate change; the stitcher computes the span (ST-34) | answered |
+| Q13 | Hops with no trigger | **Owner:** flagged and listed only; they do not seed paths. Draft reading: they are not added to a path by chaining either (ST-23) | answered; **reading to confirm** |
+| Q13b | May the look-back read a process start before the window, to resolve a port join's session (PLAN 7.7 allows identity only)? | draft: no; the row gets `session_unresolved_reason` | **open** |
+| Q14 | May time order break a tie between candidate sessions? | **Owner:** no | answered |
+| Q15 | **Chaining machine-account hops.** As ST-72 is written, a hop into ep-02 also chains to later ep-02 → dc01 machine-account logons (Group Policy and similar): 9 edges on development data, 2 of them between user-account hops (§10.7) | (a) as written (draft); (b) hops whose members are all machine accounts take no part in chaining, as Correction K excludes them from identity | **open (owner)** |
+| Q16 | **Merging chains that share a hop.** In s05_t00 both s05-h1 and background s05-t1 chain into s05-h2, so the key path [s05-h1, s05-h2] lies inside one merged path with s05-t1 (and, under Q15 (a), two machine-account groups) | (a) merge, as the locked rule says (draft); (b) keep maximal chains apart when they share only their last hop: this touches the locked merge rule and needs a council | **open (owner)** |
 
 ## 9. Out of scope
 Sigma labels (T8). Scores, the IdentityCoherence value and ranking (T9). Evaluation metrics (T10). The clock offset
@@ -411,7 +424,26 @@ evidence (−76 … −86 s, s06-smb-1) and the −92 s candidate.
   `candidates.csv`): s04 A and B stay apart; s07 X + Y and the S06 groups still join (one agent session each).
 - Seeds per trial: 3–10, of which 2–8 are endpoint → dc01 share logons with no source candidate. Each would be a
   single-hop `target_only` path.
-- Non-seed user endpoint → endpoint hops: 2 (the follow-up groups).
+- Non-seed user endpoint → endpoint hops: 2, both the follow-up groups that ST-26 now attaches to their hop, so
+  none remains.
+- **Follow-up rule (ST-26)**, measured on `hop_groups.csv`: 3 groups are attached: s06_t00 and s06_t01, two-logon
+  `admin_it` groups 11.0 s and 11.9 s after the WinRM hop on that hop's ports; s05_t00, one machine-account group to
+  dc01, 9.6 s after a seed group. The same 3 at 15, 30, 60 s and unbounded. Without condition (i) (the preceding
+  hop is a seed) the port rule takes 14 groups: 12 machine-account dc01 groups (11 of them after untriggered
+  groups) and the 2 user groups.
+- **Chain edges (ST-72)** among seeds, by the owner's rule (source = earlier target, starts after it):
+  9 edges, all `host_time` (0 `session`):
+  - s05_t00 (4): s05-h1 → s05-h2 (118.8 s); background s05-t1 → s05-h2 (450.8 s); s05-t1 → an ep-02 → dc01
+    machine-account group (7.6 s); s05-h2 → an ep-03 → dc01 machine-account group (197.0 s);
+  - s02_t01 (4): each of the two ep-01 → ep-02 hops → two later ep-02 → dc01 machine-account groups (113–285 s);
+  - s06_t01 (1): the ep-01 → ep-02 WinRM hop → an ep-02 → dc01 machine-account group 2.7 s later
+    (`order_within_tolerance` = 1).
+  Among user-account seeds only: 2 edges, both into s05-h2. So `s05-p1` is the only key path built by chaining,
+  and it is not the only chain (Q15, Q16).
+- **Paths under ST-73** (from these edges): s05_t00 one path {s05-t1, s05-h1, s05-h2} plus, under Q15 (a), two
+  machine-account groups; s02_t01 one path of the two ep-01 → ep-02 hops and two dc01 groups under Q15 (a), two
+  single-hop paths under (b); every other seed is its own path. s07 X and Y and the S06 hops stay separate paths
+  (shared source session recorded as a note).
 
 ### 10.8 Clock observations (evidence for review 08 SF-6 / SF-7; **the clock step is not changed**)
 Source evidence later than the target logon it belongs to, on corrected times:
