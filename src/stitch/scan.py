@@ -1,0 +1,222 @@
+"""One pure pass over the event rows: window flag (ST-01), corrected time and clock flag (ST-02), the kinds
+T7.2 keeps, the identity look-back view, and near-duplicate collapse (ST-05).
+
+WHY pure: the DB reading lives in ``inputs.load_scan``; this module takes any iterable of row mappings, so a
+test can feed synthetic rows and get exactly what the real run would get. Nothing here opens a file.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Iterable, Mapping
+
+from clock_offset.correct import ClockChanges, Offsets, corrected_us, event_unreliable
+from gate.inputs import event_key
+from gate.timeutil import US_PER_MS, to_us
+
+from .errors import StitchError
+from .params import BOOT_CHANNEL, BOOT_SHUTDOWN_IDS, BOOT_STARTUP_IDS, LOG_CLEAR_EVENTS, SCAN_COLUMNS
+
+__all__ = ["StitchError", "ScanResult", "scan_rows", "in_window", "is_logon", "is_logoff", "is_boot",
+           "is_log_clear", "is_sysmon1", "is_sec4688", "is_sysmon_attached", "is_window_kind",
+           "is_lookback_kind"]
+
+Row = dict[str, Any]
+
+
+# ---------------------------------------------------------------- window (ST-01)
+
+def in_window(us: int, start_us: int, end_us: int) -> bool:
+    """``start <= us < end + 1 ms``: the same predicate as gate GT-01 (``gate.inputs.scan_events``).
+
+    WHY + 1 ms: the window file holds millisecond text, the DB microseconds; an event logged within the
+    last millisecond of the window is inside it. Using the gate's exact predicate means the stitcher never
+    sees an event the gate clipped, or misses one it kept.
+    """
+    return start_us <= us < end_us + US_PER_MS
+
+
+# ---------------------------------------------------------------- kinds
+
+def _is(row: Mapping, channel: str, *event_ids: int) -> bool:
+    """Channel and event id together: event ids alone collide across channels (Sysmon 1 vs System 1)."""
+    return row.get("channel") == channel and row.get("event_id") in event_ids
+
+
+def is_logon(row: Mapping) -> bool:
+    """Security 4624: opens a session (ST-10)."""
+    return _is(row, "Security", 4624)
+
+
+def is_logoff(row: Mapping) -> bool:
+    """Security 4634 or 4647: closes a session; a 4647 carries its logon ID in ``target_logon_id`` (ST-10)."""
+    return _is(row, "Security", 4634, 4647)
+
+
+def is_boot(row: Mapping) -> bool:
+    """System startup (41, 6005, 6008) or shutdown (1074, 6006): an epoch boundary candidate (ST-10, 047)."""
+    return _is(row, BOOT_CHANNEL, *sorted(BOOT_STARTUP_IDS | BOOT_SHUTDOWN_IDS))
+
+
+def is_log_clear(row: Mapping) -> bool:
+    """Security 1102 only (ST-63; decision 047 item 7): a clear makes a session's end unknown."""
+    return (row.get("channel"), row.get("event_id")) in LOG_CLEAR_EVENTS
+
+
+def is_sysmon1(row: Mapping) -> bool:
+    """Sysmon 1: a process start with its guid tree and LogonId (ST-11; 047 item 1)."""
+    return _is(row, "Sysmon", 1)
+
+
+def is_sec4688(row: Mapping) -> bool:
+    """Security 4688: a process start, collapsed with its Sysmon 1 twin when there is one (ST-11)."""
+    return _is(row, "Security", 4688)
+
+
+def is_sysmon_attached(row: Mapping) -> bool:
+    """Sysmon 3, 10 or 11: events that belong to a process by ``process_guid`` (ST-11)."""
+    return _is(row, "Sysmon", 3, 10, 11)
+
+
+def is_lookback_kind(row: Mapping) -> bool:
+    """Kinds kept BEFORE the window: what ST-63 may read for identity (opens, closes, boots, clears).
+
+    WHY no Sysmon 1: owner Q13b; a pre-window process never becomes a process of the index.
+    """
+    return is_logon(row) or is_logoff(row) or is_boot(row) or is_log_clear(row)
+
+
+def is_window_kind(row: Mapping) -> bool:
+    """Kinds kept INSIDE the window by T7.2: the look-back kinds plus process starts and attached events."""
+    return is_lookback_kind(row) or is_sysmon1(row) or is_sec4688(row) or is_sysmon_attached(row)
+
+
+# ---------------------------------------------------------------- result
+
+@dataclass
+class ScanResult:
+    """What one pass yields. Every kept row carries the ``SCAN_COLUMNS`` plus ``us_raw``, ``us``,
+    ``in_window``, ``clock_unreliable`` and ``event_uids``.
+
+    ``in_window`` holds the in-window rows of the T7.2 kinds; ``lookback`` the pre-window rows of the
+    look-back kinds (ST-63 only, never a member, artefact, evidence or node: ST-01). Out-of-window rows of
+    every kind are counted in ``removed_by_window`` (host -> "Channel/eid" -> n), also those kept in
+    ``lookback``. ``near_duplicate_groups`` counts ST-05 groups of two or more kept rows;
+    ``near_duplicate_split_by_window`` counts those whose members lie on both sides of the window start
+    (the kept row is the earliest, so such a group is placed by its earliest copy).
+    """
+    in_window: list[Row] = field(default_factory=list)
+    lookback: list[Row] = field(default_factory=list)
+    loaded_total: int = 0
+    removed_by_window: dict[str, dict[str, int]] = field(default_factory=dict)
+    kept_lookback_by_type: dict[str, int] = field(default_factory=dict)
+    near_duplicate_groups: int = 0
+    near_duplicate_split_by_window: int = 0
+
+
+# ---------------------------------------------------------------- per-row steps
+
+def _instant_raw(row: Mapping) -> int:
+    """Logged ``event_utc`` as µs; StitchError when missing or unparseable.
+
+    WHY refuse and not skip: an event with no time cannot be placed in or out of the window, and dropping
+    it silently could remove a hop member (ST-04: nothing dropped).
+    """
+    try:
+        return to_us(row["event_utc"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise StitchError(f"event {row.get('event_uid')} has no valid event_utc ({exc})") from exc
+
+
+def kept_row(raw: Mapping, start_us: int, end_us: int, offsets: Offsets | None,
+             changes: ClockChanges | Iterable = ()) -> Row:
+    """A new dict with only the ``SCAN_COLUMNS`` values plus the ST-01 / ST-02 fields.
+
+    WHY a new dict of SCAN_COLUMNS only: whatever extra keys the caller's rows carry (a test may pass a
+    command line) never reach the index. ``us`` is the shared CO-09 correction; ``clock_unreliable`` the
+    shared event-level flag (spec 08 D5). With no offsets there is no correction and no flag.
+    """
+    row: Row = {c: raw.get(c) for c in SCAN_COLUMNS}
+    host = str(row.get("host"))
+    row["us_raw"] = _instant_raw(raw)
+    row["us"] = row["us_raw"] if offsets is None else corrected_us(row["us_raw"], host, offsets)
+    row["in_window"] = in_window(row["us"], start_us, end_us)
+    row["clock_unreliable"] = (0 if offsets is None
+                               else int(event_unreliable(host, row["us_raw"], offsets, changes)))
+    row["event_uids"] = [row["event_uid"]]
+    return row
+
+
+def _bump(table: dict[str, dict[str, int]], host: str, key: str) -> None:
+    """Increment a host x key counter."""
+    inner = table.setdefault(host, {})
+    inner[key] = inner.get(key, 0) + 1
+
+
+def _order_key(row: Mapping) -> tuple[int, str]:
+    """(us_raw, event_uid): the ST-05 representative is the earliest logged copy, uid as the tie-break."""
+    return row["us_raw"], str(row["event_uid"])
+
+
+def collapse_near_duplicates(rows: Iterable[Row]) -> tuple[list[Row], int, int]:
+    """ST-05: rows with one (host, channel, record_id), record_id not None, become one row.
+
+    The earliest by (us_raw, event_uid) is kept and every uid of the group goes into its ``event_uids``
+    (sorted), so one event counts once and stays traceable to all its copies. Returns (rows, groups of two
+    or more, groups whose copies lie on both sides of the window start). Rows with no record_id are never
+    grouped (a NULL never matches, decision 005).
+    """
+    groups: dict[tuple, list[Row]] = {}
+    out: list[Row] = []
+    for row in rows:
+        if row.get("record_id") is None:
+            out.append(row)
+        else:
+            groups.setdefault((row.get("host"), row.get("channel"), row["record_id"]), []).append(row)
+    n_groups = n_split = 0
+    for members in groups.values():
+        keep = min(members, key=_order_key)
+        if len(members) > 1:
+            n_groups += 1
+            n_split += int(len({m["in_window"] for m in members}) > 1)
+            keep["event_uids"] = sorted({str(m["event_uid"]) for m in members})
+        out.append(keep)
+    return out, n_groups, n_split
+
+
+def _sort_key(row: Mapping) -> tuple[int, str]:
+    """Output order: corrected time, then uid, so two runs on the same rows give the same lists."""
+    return row["us"], str(row["event_uid"])
+
+
+# ---------------------------------------------------------------- the pass
+
+def scan_rows(rows: Iterable[Mapping], start_us: int, end_us: int, offsets: Offsets | None,
+              changes: ClockChanges | Iterable = ()) -> ScanResult:
+    """ST-01, ST-02, ST-05 in one pass: keep in-window T7.2 kinds and pre-window look-back kinds, count the rest.
+
+    A row after the window is only counted, never kept. A pre-window row is kept in ``lookback`` only when
+    it is a 4624, 4634, 4647, boot or 1102 (ST-63); a pre-window Sysmon 1 is never kept (owner Q13b).
+    Raises StitchError for a row without a parseable ``event_utc``.
+    """
+    res = ScanResult()
+    kept: list[Row] = []
+    for raw in rows:
+        res.loaded_total += 1
+        row = kept_row(raw, start_us, end_us, offsets, changes)
+        if row["in_window"]:
+            if is_window_kind(row):
+                kept.append(row)
+            continue
+        _bump(res.removed_by_window, str(row.get("host")), event_key(row))
+        if row["us"] < start_us and is_lookback_kind(row):
+            kept.append(row)
+    collapsed, res.near_duplicate_groups, res.near_duplicate_split_by_window = collapse_near_duplicates(kept)
+    collapsed.sort(key=_sort_key)
+    res.in_window = [r for r in collapsed if r["in_window"]]
+    res.lookback = [r for r in collapsed if not r["in_window"]]
+    for r in res.lookback:
+        key = event_key(r)
+        res.kept_lookback_by_type[key] = res.kept_lookback_by_type.get(key, 0) + 1
+    res.kept_lookback_by_type = dict(sorted(res.kept_lookback_by_type.items()))
+    res.removed_by_window = {h: dict(sorted(c.items())) for h, c in sorted(res.removed_by_window.items())}
+    return res
