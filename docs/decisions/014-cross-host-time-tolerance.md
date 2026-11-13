@@ -1,6 +1,6 @@
 # 014 — Cross-host time tolerance of at least 5 s
 
-**Date:** 2026-11-10 · **Status:** accepted (owner, T4 close); last sentence of the Decision ("measured offsets are reported per trial, not applied") amended by [043](043-clock-offset-method.md) (2026-11-12: per-host offsets are applied; tolerance unchanged); command-line window amended for T7 by [044](044-stitch-linking-and-windows-council.md) (owner 2026-11-13; 044 is proposed until the owner approves its final text) · **Task:** T4 (4.3)
+**Date:** 2026-11-10 · **Status:** accepted (owner, T4 close); last sentence of the Decision ("measured offsets are reported per trial, not applied") amended by [043](043-clock-offset-method.md) (2026-11-12: per-host offsets are applied; tolerance unchanged); command-line window amended for T7 by [044](044-stitch-linking-and-windows-council.md) (owner 2026-11-13; 044 accepted) · **Task:** T4 (4.3)
 
 ## Context
 Log-check LC-09 (mutual-nearest 4624 ↔ DC 4769 pairs, p50 per host): ep-01 −1.1 to +3.4 s, ep-02 −1.7 to +2.7 s, ep-03 +4.0 to +4.5 s versus dc01 (medians; single pairs spread further, e.g. S07 ep-02 −4.1 to +8.5 s); dc01 against itself 5–6 ms; S04 flagged `dc01_skew_possible`. Offsets change per trial (snapshot revert). In the SMB hops the source command appears −3.1 to +1.1 s from the target 4624 (`docs/research/data_reality.md` §2.7). Security 4688 and Sysmon 1 agree on every host (median 0 ms). Sysmon record-time outliers on ep-02/ep-03 (decision 010).

@@ -1,6 +1,6 @@
 # 045 — Which rows carry a tier: path-link rows only; clock pairs carry none
 
-**Date:** 2026-11-13 · **Status:** **proposed — awaiting the owner** · **Task:** T7 (7.1), from review [08_clock_offset-2026-11-12](../reviews/08_clock_offset-2026-11-12.md) SF-9 · **Relates to:** 038 (`gate_tier` / `confidence_tier`), 043 (clock offset method)
+**Date:** 2026-11-13 · **Status:** **accepted (owner, 2026-11-13)** · **Task:** T7 (7.1), from review [08_clock_offset-2026-11-12](../reviews/08_clock_offset-2026-11-12.md) SF-9 · **Relates to:** 038 (`gate_tier` / `confidence_tier`), 043 (clock offset method)
 
 ## Context
 CLAUDE.md (code rules) asks every output row that links events to record `method`, `candidate_count`,
@@ -20,15 +20,15 @@ artefact attachment.
 | A. Give clock pairs a tier too | The CLAUDE.md sentence holds literally | A tier would have no meaning: a pair is exact by GUID or it is not a pair; the quality of the estimate is already `offset_status` and `offset_unc_ms` per host | spec 08 CO-03, CO-06 |
 | B. The tier rule covers rows that link events **of a path**; measurement rows carry the other four fields but no tier | Says what the tier is for; no column without meaning | One more sentence to keep in mind when a new stage is added | spec 08 §3; decision 038 |
 
-## Decision (proposed)
+## Decision
 Option B. The tier required by the CLAUDE.md code rule applies to rows that link events of a candidate path:
 `gate_tier` on gate rows and `confidence_tier` on stitch link rows and artefact attachments (decision 038).
 Rows that pair events only to **measure** something (the clock pairs of spec 08, and the CO-10 check pairs) record
 `method`, `candidate_count`, `time_delta_ms` and the event uids, and carry no tier. The quality of a clock estimate
 is reported per host by `offset_status` and `offset_unc_ms`.
 
-If the owner accepts, the CLAUDE.md code rule gains the words "(rows that only measure, such as the clock pairs
-of spec 08, carry no tier; decision 045)". CLAUDE.md is not edited by this record.
+The CLAUDE.md code rule gains the words "(rows that only measure, such as the clock pairs of spec 08, carry no
+tier; decision 045)" (owner 2026-11-13; added with this acceptance).
 
 ## Consequences
 No code or output changes. Spec 08 §3 and spec 03 §3 can cite this record. A future stage that pairs events must

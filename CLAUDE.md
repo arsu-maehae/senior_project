@@ -33,7 +33,7 @@ EVTX → JSONL → normalise → SQLite (one DB per trial) → gate → stitch �
 ## Code rules
 - Python 3.11+, type hints, small pure functions, no hidden global state.
 - Every stage reads a documented input and writes a documented output (see its spec).
-- Every output row that links events records: `method`, `candidate_count`, `time_delta_ms`, a tier (`gate_tier` at the gate stage, the T7 link tier `confidence_tier` at the stitch stage; decision 038), supporting `event_uid`s.
+- Every output row that links events records: `method`, `candidate_count`, `time_delta_ms`, a tier (`gate_tier` at the gate stage, the T7 link tier `confidence_tier` at the stitch stage; decision 038), supporting `event_uid`s (rows that only measure, such as the clock pairs of spec 08, carry no tier; decision 045).
 
 ## Environment (Windows PC)
 - Repo: `D:\senior_project` (no spaces in the path). Python venv in `.venv`; start `claude` from a terminal where the venv is active.

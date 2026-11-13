@@ -1,6 +1,6 @@
 # 044 — Council: SMB/NTLM source linking, link time windows, offset uncertainty and identity (T7 spec)
 
-**Date:** 2026-11-13 · **Status:** **proposed — the owner accepted the call on 2026-11-13 with the 15 s "after" side; this record stays proposed until the owner approves its final text** · **Task:** T7 (7.1) · **Relates to:** 011, 013, 014, 015, 039, 043 (Q12), spec [03_stitch](../specs/03_stitch.md), input notes [03_stitch_input_notes](../specs/03_stitch_input_notes.md), review [08_clock_offset-2026-11-12](../reviews/08_clock_offset-2026-11-12.md) SF-6, SF-7
+**Date:** 2026-11-13 · **Status:** **accepted (owner, 2026-11-13)**, with the 15 s "after" side; final text approved 2026-11-13 · **Task:** T7 (7.1) · **Relates to:** 011, 013, 014, 015, 039, 043 (Q12), spec [03_stitch](../specs/03_stitch.md), input notes [03_stitch_input_notes](../specs/03_stitch_input_notes.md), review [08_clock_offset-2026-11-12](../reviews/08_clock_offset-2026-11-12.md) SF-6, SF-7
 
 ## Brief (owner, 2026-11-13; council skill step 0)
 
@@ -83,7 +83,7 @@ and sets only a 5 s floor.
 | (c) | Widen the order test by the uncertainty | uses the measured uncertainty | changes a locked rule; `offset_unc` understates the real error; no development case | §10.6, §10.8; review 08 SF-6 |
 | (c) | **Flag only (chosen)** | locked value unchanged; uncertain hops visible | the flag needs a floor to mean anything | 5 of 5 advisers |
 
-## Decision (chairman's verdict — proposed, awaiting the owner)
+## Decision (chairman's verdict; accepted by the owner 2026-11-13)
 **THE CALL.**
 - **(a)** Keep decision 013's three methods. `name_check` is a field recorded per link, computed only from the
   commands that are the link's own command-line evidence, matched boundary-aware. It may order candidates that are
