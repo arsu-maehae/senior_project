@@ -1596,12 +1596,13 @@ def test_gta06_runs_on_the_raw_basis_and_never_writes_the_real_window_file(gta06
 @pytest.mark.slow
 def test_tw70_a_fresh_corrected_run_reproduces_data_trial_windows_csv(tmp_path):
     """The window file in data/ is what `trial_window` writes today on the corrected basis from the current DBs, clock
-    files and manifest (written to tmp_path; the real file is only read)."""
+    files and manifest for the 9 development trials (written to tmp_path; the real file is only read)."""
+    from clock_offset.params import DEVELOPMENT_TRIALS      # the 9 development trials (t00 x6 + 3 t01), never copied
     real = REPO / "data" / "trial_windows.csv"
-    if not real.exists() or not all((PROCESSED / f"{t}.sqlite3").exists() for t in TRIALS):
-        pytest.skip("data/trial_windows.csv or a t00 DB is missing")
+    if not real.exists() or not all((PROCESSED / f"{t}.sqlite3").exists() for t in DEVELOPMENT_TRIALS):
+        pytest.skip("data/trial_windows.csv or a development-trial DB is missing")
     out = tmp_path / "w.csv"
-    res = tw_main.run(REPO, TRIALS, REPO / "data" / "operator_times.csv", out)
+    res = tw_main.run(REPO, list(DEVELOPMENT_TRIALS), REPO / "data" / "operator_times.csv", out)
     assert res["skipped"] == {}, res["skipped"]
     assert out.read_bytes() == real.read_bytes()
     with open(out, newline="", encoding="utf-8") as fh:
