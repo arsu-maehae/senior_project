@@ -1,6 +1,6 @@
 # 047 — Session model of the stitcher: session columns, boot epochs, repeated opens
 
-**Date:** 2026-11-13 · **Status:** **proposed.** Items 1–2 follow the owner's T7.2 instruction (pre-checks P1, P2). **Item 3 (boot groups, new parameter `BOOT_GROUP_S`) needs the owner's approval**, because it reads ST-10 differently from its literal text. Items 4–7 are implementation details the spec leaves open. · **Task:** T7 (7.2) · **Relates to:** spec [03_stitch](../specs/03_stitch.md) ST-10, ST-11, ST-63; 005 (NULL never joins); 039 (identity look-back)
+**Date:** 2026-11-13 · **Status:** **accepted (owner, 2026-11-13).** Items 1–2 follow the owner's T7.2 instruction (pre-checks P1, P2); item 3 (boot groups, `BOOT_GROUP_S` = 120 s) accepted by the owner with the margin recorded below; items 4–7 are implementation details the spec left open. Spec 03_stitch ST-10, §5 and STT-11 amended by this record · **Task:** T7 (7.2) · **Relates to:** spec [03_stitch](../specs/03_stitch.md) ST-10, ST-11, ST-63; 005 (NULL never joins); 039 (identity look-back)
 
 ## Context
 T7.2 builds sessions per host (ST-10) and process trees (ST-11). Read-only pre-checks were run on the nine development trials, with DBs opened `mode=ro` and every SHA-256 unchanged. The scripts and full counts are in `out/stitch_check/precheck/`. The counts below are listed in this order: s02_t00, s03_t00, s04_t00, s05_t00, s06_t00, s07_t00, s02_t01, s03_t01, s06_t01.
@@ -27,7 +27,7 @@ T7.2 builds sessions per host (ST-10) and process trees (ST-11). Read-only pre-c
 ## Decision
 1. **Sysmon 1 session** = `session_id`, which holds the Sysmon `LogonId` (P1). A missing value never forms a session (decision 005).
 2. **4688 session** = `target_logon_id` when it is present and non-zero, otherwise `subject_logon_id` (owner, P2). This replaces the "4688: `subject_logon_id`" reading in ST-10. That reading would put 306–1621 user processes per trial in a SYSTEM session.
-3. **Boot epochs (proposed, needs owner approval).** Option B with `BOOT_GROUP_S` = 120 s. The epoch of an instant is the number of boundaries at or before it on that host. A session closes at the first boundary after its open (`close_kind` = `boot`) unless a 4634 or 4647 comes first.
+3. **Boot epochs (accepted by the owner 2026-11-13).** Option B with `BOOT_GROUP_S` = 120 s. **Margin:** the widest spread inside one restart is 40.9 s (ep-01 41 → 6005) and the closest separate same-kind boot events are 383.6 s apart (shutdowns); 120 s lies between them. **No t00 key result changes under either rule** (13 of 13 key identity open sessions open at the dump under the literal and the grouped rule). The epoch of an instant is the number of boundaries at or before it on that host. A session closes at the first boundary after its open (`close_kind` = `boot`) unless a 4634 or 4647 comes first.
 4. **Repeated opens.**
    - A 4624 for a session that is open (system IDs only on development data) is added to that session's `open_uids`.
    - A 4624 after the session has closed starts a new session.
@@ -37,9 +37,7 @@ T7.2 builds sessions per host (ST-10) and process trees (ST-11). Read-only pre-c
 7. **Other details.** A process whose session has no 4624 gives a session with `open_known` = 0. A log clear is Security 1102 only, as ST-63 states.
 
 ## Consequences
-- ST-10's text needs a one-line amendment when item 3 is accepted ("boot = a group of boot events …; 4688 session per decision 047").
-- Item 3 adds `BOOT_GROUP_S` to spec §5, frozen like the other values.
-- STT-11 gains a case: a session opened between a 41 and a 6005 of one restart stays open.
+- Spec 03_stitch amended (owner 2026-11-13): ST-10 (boot groups, 4688 session), §5 (`BOOT_GROUP_S`, frozen like the other values), STT-11 (a session opened between a 41 and a 6005 of one restart stays open).
 - No key result changes under either rule.
 
 ## Kill criteria
