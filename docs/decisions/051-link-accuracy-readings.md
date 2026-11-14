@@ -118,4 +118,24 @@ T7.6 checks the stitch links against the approved development keys. The checks a
     - `parameters.boot_group_s` is missing;
     - a stitch `protocol` falls outside the ST-22 vocabulary;
     - with `--development`, one refused trial means nothing is written.
-11. Key lock: only the sha256 is checked against the key file, as item 9 says. The row's `key_path` is not compared. A manifest whose header differs, a UTF-8 BOM included, is refused. **Open for the owner** (T10): also check `key_path`, and accept a BOM or not.
+11. Key lock: superseded by the owner rulings below (2026-11-15).
+
+## Owner rulings on the key lock (2026-11-15; amends item 9 and reading 11)
+1. **Both columns are checked.** For split = test, the trial's row must match on `key_path` and `sha256`.
+   - `key_path` must equal the path of the key being read: repo-relative, forward slashes (for example `ground_truth/approved/s02_t05.yaml`), compared exactly.
+   - A different, backslashed or absolute path is a refusal, and nothing is written.
+2. **Encoding.**
+   - A UTF-8 BOM at the start of `key_lock.csv` is accepted and stripped; the exact header `trial_id,key_path,sha256` is then required.
+   - CRLF and LF line endings are both accepted.
+   - Any other encoding problem is a refusal: bytes that are not valid UTF-8, UTF-16, or a NUL byte.
+   - `sha256` is 64 lower-case hex characters.
+3. **The owner creates `key_lock.csv` with a command, not by hand in Excel**, after the test keys are approved and before the `answer-keys-locked` tag (PLAN 5.7). Code never writes the file.
+
+   Run this from the repo root in PowerShell, with the approved test trials listed in `$trials`:
+   ```powershell
+   $trials = 's02_t02','s02_t03'; $out = 'ground_truth/key_lock.csv'; if (Test-Path $out) { throw "$out exists; the lock is never overwritten" }; $rows = @('trial_id,key_path,sha256') + ($trials | ForEach-Object { $p = "ground_truth/approved/$_.yaml"; if (-not (Test-Path $p)) { throw "missing $p" }; "$_,$p,$((Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash.ToLower())" }); [IO.File]::WriteAllLines((Join-Path $PWD $out), [string[]]$rows, (New-Object Text.UTF8Encoding $false))
+   ```
+   - It writes UTF-8 without a BOM, with CRLF line endings, one row per trial and a lower-case SHA-256.
+   - It refuses to overwrite an existing lock and stops if a listed key is missing.
+   - It was checked on 2026-11-15 against two development keys, writing to a scratch file outside the repo. The real lock file has not been created.
+   - To change the lock later, the owner deletes the file on purpose and records why.

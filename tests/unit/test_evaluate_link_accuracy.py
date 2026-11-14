@@ -839,11 +839,89 @@ def test_key_lock_refuses_a_wrong_header(tmp_path):
         run_test_split(w)
 
 
-def test_key_lock_refuses_a_bom_header(tmp_path):
-    w = _test_world(tmp_path)
-    _manifest(w, [[w.trial, "k", w.key_sha]], bom=True)
+def _good_row(w):
+    return [w.trial, f"ground_truth/approved/{w.trial}.yaml", w.key_sha]
+
+
+def _raw_manifest(w, data: bytes):
+    p = w.repo / "ground_truth" / "key_lock.csv"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(data)
+    return p
+
+
+def _refused_and_nothing_written(w, tmp_path):
+    before = _snap(tmp_path)
     with pytest.raises(EvalError):
         run_test_split(w)
+    assert _snap(tmp_path) == before
+
+
+def test_key_lock_accepts_a_utf8_bom_before_the_exact_header(tmp_path):
+    """Owner decision (051 reading 11): a UTF-8 BOM is stripped, then the exact header applies."""
+    w = _test_world(tmp_path)
+    _manifest(w, [_good_row(w)], bom=True)
+    res = run_test_split(w)
+    assert key_info(res.run_info)["lock"] == "locked" and only_keyed(res)["rank1"] == "correct"
+
+
+def test_key_lock_bom_does_not_excuse_a_wrong_header(tmp_path):
+    w = _test_world(tmp_path)
+    _manifest(w, [_good_row(w)], header="trial,path,hash", bom=True)
+    _refused_and_nothing_written(w, tmp_path)
+
+
+def test_key_lock_accepts_crlf_and_lf_line_endings(tmp_path):
+    w = _test_world(tmp_path)
+    row = ",".join(_good_row(w))
+    _raw_manifest(w, f"trial_id,key_path,sha256\r\n{row}\r\n".encode("utf-8"))
+    assert key_info(run_test_split(w).run_info)["lock"] == "locked"
+    _raw_manifest(w, f"trial_id,key_path,sha256\n{row}\n".encode("utf-8"))
+    assert key_info(run_test_split(w).run_info)["lock"] == "locked"
+    _raw_manifest(w, b"\xef\xbb\xbf" + f"trial_id,key_path,sha256\r\n{row}".encode("utf-8"))   # BOM + CRLF, no final EOL
+    assert key_info(run_test_split(w).run_info)["lock"] == "locked"
+
+
+def test_key_lock_refuses_key_path_of_another_trials_key_with_the_right_sha(tmp_path):
+    w = _test_world(tmp_path)
+    _manifest(w, [[w.trial, "ground_truth/approved/s02_t06.yaml", w.key_sha]])
+    _refused_and_nothing_written(w, tmp_path)
+
+
+def test_key_lock_refuses_backslashes_in_key_path(tmp_path):
+    w = _test_world(tmp_path)
+    _manifest(w, [[w.trial, "ground_truth\approved\\" + w.trial + ".yaml", w.key_sha]])
+    _refused_and_nothing_written(w, tmp_path)
+
+
+def test_key_lock_refuses_an_absolute_key_path(tmp_path):
+    w = _test_world(tmp_path)
+    _manifest(w, [[w.trial, w.key_path.resolve().as_posix(), w.key_sha]])
+    _refused_and_nothing_written(w, tmp_path)
+
+
+@pytest.mark.parametrize("path", ["./ground_truth/approved/{t}.yaml", "ground_truth/approved/{t}.YAML",
+                                  "Ground_Truth/approved/{t}.yaml", "ground_truth/approved/{t}.yaml "])
+def test_key_lock_key_path_comparison_is_exact(tmp_path, path):
+    w = _test_world(tmp_path)
+    _manifest(w, [[w.trial, path.format(t=w.trial), w.key_sha]])
+    _refused_and_nothing_written(w, tmp_path)
+
+
+def test_key_lock_refuses_invalid_utf8_in_a_row(tmp_path):
+    w = _test_world(tmp_path)
+    row = ",".join(_good_row(w)).encode("utf-8")
+    _raw_manifest(w, b"trial_id,key_path,sha256\n" + row + b"\n" + b"s02_t07,\xff\xfe\xfa,deadbeef\n")
+    _refused_and_nothing_written(w, tmp_path)
+
+
+def test_key_lock_refuses_a_utf16_manifest_with_its_bom(tmp_path):
+    w = _test_world(tmp_path)
+    text = "trial_id,key_path,sha256\n" + ",".join(_good_row(w)) + "\n"
+    _raw_manifest(w, text.encode("utf-16"))             # starts with the UTF-16 BOM
+    _refused_and_nothing_written(w, tmp_path)
+    _raw_manifest(w, text.encode("utf-16-le"))
+    _refused_and_nothing_written(w, tmp_path)
 
 
 def test_key_lock_refuses_a_trial_that_is_not_listed(tmp_path):

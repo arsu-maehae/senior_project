@@ -307,28 +307,49 @@ def key_path(repo: Path, trial: str) -> Path:
     return Path(repo) / APPROVED_KEYS_REL / f"{trial}.yaml"
 
 
+def _decode_lock(data: bytes) -> str:
+    """Manifest bytes to text: UTF-8, one optional BOM at the very start stripped (owner, 051 reading 11).
+
+    WHY strict: the manifest is the owner's fingerprint list for the test keys; a UTF-16 file, a NUL byte or bytes
+    that are not UTF-8 mean it was not written as agreed, so it is refused rather than guessed at.
+    """
+    if b"\x00" in data:
+        raise EvalError("refused: key lock manifest contains a NUL byte (not UTF-8 text)")
+    try:
+        return data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise EvalError("refused: key lock manifest is not UTF-8 text") from None
+
+
 def _read_lock_rows(manifest: Path) -> list[list[str]]:
-    """The manifest's rows (header included) as lists of text; EvalError when it is missing or unreadable."""
+    """The manifest's rows (header included) as lists of text; EvalError when it is missing or unreadable.
+    CRLF and LF line ends are both accepted (the csv reader with ``newline=""``)."""
     if not manifest.is_file():
         raise EvalError(f"refused: key lock manifest {manifest.as_posix()} is missing (decision 051 item 9)")
     try:
-        text = manifest.read_bytes().decode("utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
+        data = manifest.read_bytes()
+    except OSError as exc:
         raise EvalError(f"refused: key lock manifest unreadable ({exc})") from None
+    text = _decode_lock(data)
     try:
         return [r for r in csv.reader(io.StringIO(text, newline=""))]
     except csv.Error as exc:
         raise EvalError(f"refused: key lock manifest malformed ({exc})") from None
 
 
-def check_key_lock(manifest: Path, trial: str, key_sha256: str) -> None:
-    """Split = test only: the owner's manifest must lock this trial's key at exactly this SHA-256 (051 item 9).
+def check_key_lock(manifest: Path, trial: str, key_sha256: str, key_path_rel: str | None = None) -> None:
+    """Split = test only: the owner's manifest must lock this trial's key at exactly this path and SHA-256
+    (051 item 9; reading 11).
 
-    Refused when: the manifest is missing; its header is not exactly ``trial_id,key_path,sha256``; a row has
-    another column count; the trial has no row or more than one; the row's sha256 is not 64 lower-case hex
-    digits; or it differs from the key file's SHA-256. WHY: a test key edited after the owner locked it must not
+    Refused when: the manifest is missing or not UTF-8 text (one leading BOM is allowed); its header is not
+    exactly ``trial_id,key_path,sha256``; a row has another column count; the trial has no row or more than one;
+    the row's ``key_path`` differs, compared exactly (no whitespace stripping), from the repo-relative POSIX path
+    of the key being read (``key_path_rel``; default ``ground_truth/approved/<trial>.yaml``, the only place
+    ``load_key`` reads); the row's sha256 is not 64 lower-case hex digits; or it differs from the key file's
+    SHA-256. WHY both: a test key edited after the owner locked it, or a row that locks another file, must not
     produce a test number. Reads the manifest only; never writes it.
     """
+    want_path = key_path_rel if key_path_rel is not None else (APPROVED_KEYS_REL / f"{trial}.yaml").as_posix()
     rows = _read_lock_rows(Path(manifest))
     if not rows or tuple(rows[0]) != KEY_LOCK_HEADER:
         raise EvalError(f"refused: key lock manifest header must be exactly {','.join(KEY_LOCK_HEADER)}")
@@ -338,7 +359,9 @@ def check_key_lock(manifest: Path, trial: str, key_sha256: str) -> None:
     mine = [r for r in body if r[0] == trial]
     if len(mine) != 1:
         raise EvalError(f"refused: key lock manifest has {len(mine)} rows for {trial} (exactly 1 required)")
-    sha = mine[0][2]
+    _tid, path_cell, sha = mine[0]
+    if path_cell != want_path:
+        raise EvalError(f"refused: key lock key_path for {trial} differs from the key being read")
     if not _SHA_RE.fullmatch(sha):
         raise EvalError(f"refused: key lock sha256 for {trial} is not 64 lower-case hex digits")
     if sha != key_sha256:
@@ -370,12 +393,12 @@ def load_key(repo: Path, trial: str, split: str, key_lock_path: Path | None = No
         raise EvalError(f"refused: approved key trial_id {got!r} differs from the trial {trial}")
     validate_key_data(data)
     sha = sha256_bytes(raw)
+    rel = (APPROVED_KEYS_REL / f"{trial}.yaml").as_posix()
     lock = "not_required"
     if split == SPLIT_TEST:
         manifest = Path(key_lock_path) if key_lock_path is not None else Path(repo) / KEY_LOCK_REL
-        check_key_lock(manifest, trial, sha)
+        check_key_lock(manifest, trial, sha, rel)
         lock = "locked"
-    rel = (APPROVED_KEYS_REL / f"{trial}.yaml").as_posix()
     return KeyData(path_rel=rel, sha256=sha, lock=lock, data=data)
 
 
