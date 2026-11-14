@@ -36,6 +36,7 @@ from .scan import ScanResult
 from .sessions import SessionIndex
 from .source import (METHOD_4648, METHOD_CMD, METHOD_PORT, METHOD_TARGET_ONLY, SubjectLinks, _initiated,
                      _targets_of, build_links, lab_ip_of)
+from .tiers import HopVerdicts, all_verdicts
 
 __all__ = ["LinkIndex", "HostLimit", "assemble", "run_links", "run_links_checked", "command_probes",
            "names_by_target", "process_uids_by_host", "link_4648_uids", "last_security_events", "data_limits",
@@ -98,7 +99,9 @@ class LinkIndex:
 
     ``links``: hop id -> ``SubjectLinks`` (follow-up groups have none, ST-26). ``confirm``: hop id ->
     (``confirm`` label, ``confirm_event_uids``) (ST-47). ``data_limits``: host -> ``HostLimit`` (048 item 13).
-    ``counts``: the JSON-ready counts block of ``link_counts``.
+    ``counts``: the JSON-ready counts block of ``link_counts``. ``verdicts`` (T7.4): hop id -> ``HopVerdicts``
+    (account match, name check, tier, rank per candidate session; ``tiers.all_verdicts``). WHY a keyword default:
+    the T7.3 constructions and the T7.3 check file stay unchanged; the verdicts are only added on top.
     """
     trial_id: str
     hopset: HopSet
@@ -107,6 +110,7 @@ class LinkIndex:
     confirm: dict[str, tuple[str, list[str]]]
     data_limits: dict[str, HostLimit]
     counts: dict[str, Any]
+    verdicts: dict[str, HopVerdicts] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------- command probes and uids
@@ -357,7 +361,8 @@ def link_counts(scan: ScanResult, hopset: HopSet, artefact_set: ArtefactSet, lin
 def assemble(trial_id: str, con: sqlite3.Connection, scan: ScanResult, gate_rows: GateRows,
              checked: CheckedInputs, params: StitchParams = StitchParams()) -> LinkIndex:
     """The ``extra`` step of ``inputs.load_link_inputs``: index, hops, artefacts, command facts (read on ``con``),
-    links (ST-40..44), confirmations (ST-47), data limits (048 item 13; owner instruction 2026-11-14) and counts.
+    links (ST-40..44), confirmations (ST-47), data limits (048 item 13; owner instruction 2026-11-14), counts
+    and the T7.4 verdicts (ST-45, ST-46, ST-48, ST-50; ``tiers.all_verdicts``, pure, after the links).
 
     ``checked`` supplies the clock offsets (ST-02 host part of ``clock_unreliable``) and the window end. The
     index's ``SessionIndex`` is mutated by ``source.by_4648`` (unknown-open 4648 sessions, as documented there).
@@ -373,8 +378,9 @@ def assemble(trial_id: str, con: sqlite3.Connection, scan: ScanResult, gate_rows
     limits = data_limits(scan, hopset, index.processes, cmd, t4648, checked.end_us, params,
                          sessions=index.sessions)
     counts = link_counts(scan, hopset, arts, links, confirm, limits)
+    verdicts = all_verdicts(hopset, links, arts.rows)
     return LinkIndex(trial_id=trial_id, hopset=hopset, artefacts=arts, links=links, confirm=confirm,
-                     data_limits=limits, counts=counts)
+                     data_limits=limits, counts=counts, verdicts=verdicts)
 
 
 def run_links_checked(repo: Path, trial_id: str, params: StitchParams = StitchParams()

@@ -157,7 +157,11 @@ class Evidence:
     added in ``link_subject``). ``credential_accounts`` (4648 only): the TargetUserName of its naming 4648s, the
     ST-45 data side. ``names_found`` / ``names_event_uids`` (command line only): the target-side names found in
     its matching command events and those events (ST-46 data side). ``match_kinds`` / ``match_vias`` (command
-    line only): counts of the matched field kind and of plain / decoded matches.
+    line only): counts of the matched field kind and of plain / decoded matches. ``names_by_uid`` (command
+    line only; decision 049 item 5): uid -> the target-side names of THIS target found in that one command
+    event, sorted like ``names_found``. WHY per uid: ``names_found`` / ``names_event_uids`` lose which name sat in
+    which event, and ``name_check_event_uids`` must name exactly the events holding the matched names. Names
+    only, never command text.
     """
     method: str
     session_key: SessionKey | None
@@ -174,6 +178,7 @@ class Evidence:
     names_event_uids: list[str] = field(default_factory=list)
     match_kinds: dict[str, int] = field(default_factory=dict)
     match_vias: dict[str, int] = field(default_factory=dict)
+    names_by_uid: dict[str, list[str]] = field(default_factory=dict)
 
     @property
     def is_candidate(self) -> bool:
@@ -220,6 +225,7 @@ class _Acc:
         self.accounts: set[str] = set()
         self.names: set[str] = set()
         self.name_uids: set[str] = set()
+        self.names_by_uid: dict[str, set[str]] = {}
         self.kinds: dict[str, int] = {}
         self.vias: dict[str, int] = {}
 
@@ -249,7 +255,13 @@ class _Acc:
                         credential_accounts=sorted(self.accounts, key=lambda a: (a.lower(), a)),
                         names_found=sorted(self.names, key=lambda n: (n.lower(), n)),
                         names_event_uids=sorted(self.name_uids),
-                        match_kinds=dict(sorted(self.kinds.items())), match_vias=dict(sorted(self.vias.items())))
+                        match_kinds=dict(sorted(self.kinds.items())), match_vias=dict(sorted(self.vias.items())),
+                        names_by_uid={u: _sorted_names(ns) for u, ns in sorted(self.names_by_uid.items())})
+
+
+def _sorted_names(names: Iterable[str]) -> list[str]:
+    """Names sorted case-insensitively, then exactly: the one order of every name list (``names_found``)."""
+    return sorted(names, key=lambda n: (n.lower(), n))
 
 
 def _finish(method: str, groups: Mapping[tuple[SessionKey | None, str], _Acc]) -> list[Evidence]:
@@ -462,7 +474,8 @@ def by_cmdline(subject: Subject | tuple, processes: ProcessIndex, cmd: Mapping[s
     process does have its start event, so ``no_sysmon1_in_window`` would be false). A system session is not a
     candidate and is counted in ``system_evidence`` (ST-44). Matching processes in the ST-42 bands are counted
     in ``before_range`` / ``after_range``. Per session: ``names_found`` = the target-side names of THIS target
-    found in its matching uids (ST-46 data side) and the field kind / via counts of the matches.
+    found in its matching uids (ST-46 data side), ``names_by_uid`` = the same names per uid (049 item 5) and the
+    field kind / via counts of the matches.
     """
     s = as_subject(subject)
     out = MethodResult(METHOD_CMD)
@@ -498,6 +511,7 @@ def by_cmdline(subject: Subject | tuple, processes: ProcessIndex, cmd: Mapping[s
             if found:
                 acc.names.update(found)
                 acc.name_uids.add(u)
+                acc.names_by_uid.setdefault(u, set()).update(found)
     out.evidence = _finish(METHOD_CMD, groups)
     return out
 
