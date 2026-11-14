@@ -719,3 +719,529 @@ def test_artefacts_are_identical_across_two_builds(trial):
                         r.supporting_span_ms, r.event_uids, r.ref_id) for r in a.rows],
                       [(t.install_id, t.burst_id, t.hop_id, t.delta_ms) for t in a.ties], a.counts)
     assert view(art) == view(again)
+
+
+# ================================================================================================ T7.3 task 4: source linking
+# Plan section 5 C7-C12, C15 and spec 03_stitch 10.4, 10.5, 10.8, STA-05 (the link check that does not use the key), STA-06,
+# ST-01, ST-02 on the nine development trials. The whole pipeline (index, hops, artefacts, command results, links) is built
+# once per trial inside the read-only bracket of `load_link_inputs`. The key is read by the tests only. Messages carry counts,
+# hop ids, hex session IDs and uids only, never command text.
+from stitch import source as src  # noqa: E402
+from stitch.confirm import confirm_of, kerberos_confirm, norm_logon_guid  # noqa: E402
+from stitch.sessions import hex_id, logon_id_int  # noqa: E402
+
+PORT, E4648, CMD = src.METHOD_PORT, src.METHOD_4648, src.METHOD_CMD
+EP_IP = dict(PARAMS.lab_host_ips)
+
+
+@dataclass
+class Linked:
+    trial: str
+    paths: Any
+    checked: Any
+    scan: Any
+    hs: Any
+    index: Any
+    arts: Any
+    links: dict
+    cmd: dict
+    t4648: dict
+    hosts: set
+    by_uid: dict[str, dict]
+    sha: tuple
+
+
+@functools.lru_cache(maxsize=None)
+def _linked(trial: str):
+    assert trial in DEV, trial            # belt and braces: only development trials, ever
+    paths = trial_paths(REPO, trial)
+    if not paths.db.is_file() or not (paths.gate_dir / "stats.json").is_file():
+        return None
+    checked = check_allowed(paths)
+
+    def extra(con, scan):
+        index = build_index(trial, scan, PARAMS)
+        gate = read_gate_rows(paths.gate_dir)
+        hopset = build_hops(trial, gate, scan, index.sessions, PARAMS)
+        arts = build_artefacts(hopset, scan, index.sessions, gate, PARAMS)
+        hosts = sorted(PARAMS.lab_host_ips)
+        probes = {h: [(t, target_name_forms(t, PARAMS.lab_host_ips[t])) for t in hosts if t != h] for h in hosts}
+        hop_target = {h.hop_id: h.target_host for h in hopset.hops}
+        names: dict[str, set[str]] = {}
+        for r in arts.rows:
+            if r.kind in ("share_burst", "service_install"):
+                names.setdefault(hop_target[r.hop_id], set()).update(r.names)
+        uids_by_host: dict[str, list[str]] = {}
+        for p in index.processes.processes.values():
+            uids_by_host.setdefault(p.host, []).extend(p.sysmon1_uids + p.sec4688_uids)
+        cmd = read_command_results(con, uids_by_host, probes, {k: sorted(v) for k, v in names.items()})
+        u4648 = [u for r in scan.link_rows if (r["channel"], r["event_id"]) == ("Security", 4648)
+                 for u in (r.get("event_uids") or [r["event_uid"]])]
+        t4648 = read_4648_targets(con, u4648)
+        links = src.build_links(hopset, scan, index, cmd, t4648, PARAMS, offsets=checked.clock.offsets)
+        return hopset, index, arts, links, cmd, t4648
+
+    gate_sha = _gate_sha_after(paths)
+    sha_pre = sha256_file(paths.db)
+    scan, (hopset, index, arts, links, cmd, t4648), before, after = load_link_inputs(checked, paths, extra, PARAMS)
+    by_uid = {u: r for r in scan.in_window for u in r["event_uids"]}
+    return Linked(trial, paths, checked, scan, hopset, index, arts, links, cmd, t4648, src.hosts_with_rows(scan), by_uid,
+                  (sha_pre, before, after, gate_sha))
+
+
+def linked(trial: str) -> Linked:
+    got = _linked(trial)
+    if got is None:
+        pytest.skip(f"{trial}: trial DB or gate output missing")
+    return got
+
+
+def user_e2e_hops(ld: Linked) -> list:
+    return [h for h in ld.hs.hops if is_user_e2e(h.target_host, h.source_ip, h.members)]
+
+
+def proto_group(h) -> str:
+    return "smb" if h.protocol in ("smb", "smb_service") else h.protocol
+
+
+def krb(ld: Linked, hop_or_members) -> bool:
+    members = hop_or_members.members if hasattr(hop_or_members, "members") else hop_or_members
+    return bool(kerberos_confirm(members, ld.scan.link_rows))
+
+
+def hop_of_followup(ld: Linked, f):
+    return next(h for h in ld.hs.hops if h.hop_id == f.hop_id)
+
+
+def describe(ld: Linked, h) -> str:
+    """Per-hop summary for failure messages and -s output: ids and counts only."""
+    L = ld.links[h.hop_id]
+    sess = {hex_id(k[1]): "+".join(m[:4] for m in ms) for k, ms in L.session_methods.items()}
+    td = sorted({(r.method[:4], r.time_delta_ms) for r in L.rows if r.session_key is not None})
+    return (f"{h.hop_id} {h.protocol} {h.source_ip}->{h.target_host} sessions={sess} all={L.candidate_count_all} "
+            f"counts={L.candidate_counts} td={td} to={L.target_only_reason or '-'} "
+            f"before={L.evidence_before_range} after={L.evidence_after_range}")
+
+
+def key_hop_of(ld: Linked, key: dict, kh: dict):
+    uids = key_logon_uids(ld, key, kh)
+    assert uids, f"{ld.trial} {kh['hop_id']}: no 4624 of the key's logon ID among its target events"
+    hop, is_member = hop_with_uid(ld, uids[0])
+    assert is_member
+    return hop
+
+
+def key_source_lids(ld: Linked, key: dict, kh: dict) -> set[int]:
+    """The key's source session (owner reading): `source_session_logon_id` / `session_evidence.session_id` where present,
+    otherwise the logon ID of the key command's Sysmon 1 events among `agent_event_uids`."""
+    if kh.get("source_session_logon_id"):
+        return {int(kh["source_session_logon_id"], 16)}
+    se = kh.get("session_evidence") or {}
+    if se.get("session_id"):
+        return {int(se["session_id"], 16)}
+    out = set()
+    for u in kh.get("agent_event_uids") or []:
+        e, row = key["event_keys"].get(u), ld.by_uid.get(u)
+        if e and (e["channel"], e["event_id"]) == ("Sysmon", 1) and row is not None:
+            lid = logon_id_int(row.get("session_id"))
+            if lid is not None:
+                out.add(lid)
+    return out
+
+
+def candidate_lids(ld: Linked, hop) -> set[int]:
+    return {k[1] for k in ld.links[hop.hop_id].candidate_sessions}
+
+
+@functools.lru_cache(maxsize=None)
+def keyed_hops() -> tuple:
+    """(trial, key, linked, stitch hop, key hop) for the keyed hops of the six t00 trials that are not background."""
+    out = []
+    for t in DEV_T00:
+        ld, key = linked(t), load_key(t)
+        for kh in key["hops"]:
+            if kh["role"] != "background":
+                out.append((t, key, ld, key_hop_of(ld, key, kh), kh))
+    return tuple(out)
+
+
+# ------------------------------------------------------------------------------------------------ C7 / spec 10.4
+def _tally() -> dict[str, dict[str, int]]:
+    tot = {g: dict(hops=0, sysmon3_port=0, source_4648=0, cmdline_target=0, multi=0, target_only=0, kerberos=0)
+           for g in ("smb", "winrm")}
+    for t in DEV:
+        ld = linked(t)
+        for h in user_e2e_hops(ld):
+            L = ld.links[h.hop_id]
+            c = tot[proto_group(h)]
+            c["hops"] += 1
+            for m in (PORT, E4648, CMD):
+                c[m] += L.candidate_counts[m] > 0
+            c["multi"] += L.candidate_count_all > 1
+            c["target_only"] += bool(L.target_only_reason)
+            c["kerberos"] += krb(ld, h)
+    return tot
+
+
+def test_c7_the_21_user_endpoint_hops_are_14_smb_and_7_winrm():
+    tot = _tally()
+    print(f"C7 {tot}")
+    assert (tot["smb"]["hops"], tot["winrm"]["hops"]) == (14, 7)
+
+
+def test_c7_smb_hops_spec_10_4_at_30_s_look_back_and_15_s_after():
+    c = _tally()["smb"]
+    print(f"C7 smb {c}")
+    assert c["sysmon3_port"] == 0, "the port join links no SMB hop (Sysmon does not log SMB)"
+    assert c["source_4648"] == 2
+    assert c["cmdline_target"] == 9
+    assert c["multi"] == 2                                               # s04 A and B
+    assert c["target_only"] == 5
+    assert c["kerberos"] == 0                                            # NTLM has no LogonGuid
+
+
+def test_c7_winrm_hops_spec_10_4():
+    c = _tally()["winrm"]
+    print(f"C7 winrm {c}")
+    assert c["sysmon3_port"] == 6
+    assert c["source_4648"] == 7
+    assert c["cmdline_target"] == 7
+    assert c["multi"] == 0 and c["target_only"] == 0
+    assert c["kerberos"] == 7
+
+
+def test_c7_the_two_hops_with_more_than_one_candidate_session_are_the_s04_pair():
+    ld, key = linked("s04_t00"), load_key("s04_t00")
+    multi = [(t, h) for t in DEV for h in user_e2e_hops(linked(t)) if linked(t).links[h.hop_id].candidate_count_all > 1]
+    a = key_hop_of(ld, key, next(k for k in key["hops"] if k["hop_id"] == "s04-A-h1"))
+    b = key_hop_of(ld, key, next(k for k in key["hops"] if k["hop_id"] == "s04-B-h1"))
+    assert {h.hop_id for _, h in multi} == {a.hop_id, b.hop_id}
+
+
+def test_c7_the_five_smb_target_only_hops_are_the_four_t00_background_logons_and_the_s02_t01_logon():
+    got = []
+    for t in DEV:
+        ld = linked(t)
+        for h in user_e2e_hops(ld):
+            if proto_group(h) == "smb" and ld.links[h.hop_id].target_only_reason:
+                got.append((t, ld.links[h.hop_id].target_only_reason))
+    print(f"C7 SMB target_only: {got}")
+    assert sorted(t for t, _ in got) == ["s02_t01", "s04_t00", "s05_t00", "s06_t00", "s07_t00"]
+    assert {r for _, r in got} == {"no_evidence_in_range"}
+
+
+def _user_followups(ld: Linked) -> list:
+    out = []
+    for f in ld.hs.followups:
+        hop = hop_of_followup(ld, f)
+        if is_user_e2e(hop.target_host, hop.source_ip, f.logons):
+            out.append((f, hop))
+    return out
+
+
+def _link_followup(ld: Linked, f, hop) -> src.SubjectLinks:
+    subj = src.subject_of(hop.target_host, hop.source_ip, f.logons, PARAMS)
+    return src.link_subject(subj, ld.scan, ld.index.processes, ld.index.sessions, ld.cmd, ld.t4648, ld.hosts, PARAMS,
+                            offsets=ld.checked.clock.offsets)
+
+
+@pytest.mark.parametrize("trial", ["s06_t00", "s06_t01"])
+def test_c7_the_no_artefact_row_follow_up_group_has_4648_command_and_kerberos_but_no_link_row(trial):
+    ld = linked(trial)
+    user = _user_followups(ld)
+    assert len(user) == 1, f"{trial}: {len(user)} user follow-up group(s)"
+    f, hop = user[0]
+    sl = _link_followup(ld, f, hop)
+    print(f"C7 {trial} follow-up of {hop.hop_id}: counts {sl.candidate_counts} "
+          f"sessions {[hex_id(k[1]) for k in sl.candidate_sessions]}")
+    assert sl.candidate_counts[E4648] > 0, f"{trial}: no 4648 for the follow-up group"
+    assert sl.candidate_counts[CMD] > 0, f"{trial}: no command for the follow-up group"
+    assert kerberos_confirm(f.logons, ld.scan.link_rows), f"{trial}: follow-up group not Kerberos-confirmed"
+    # ST-26: build_links has no entry for it and no hop's rows carry its logons
+    fol_uids = {u for lg in f.logons for u in lg.event_uids}
+    assert set(ld.links) == {h.hop_id for h in ld.hs.hops}
+    for L in ld.links.values():
+        assert fol_uids.isdisjoint(L.member_uids)
+        assert fol_uids.isdisjoint(u for r in L.rows for u in r.supporting_event_uids)
+
+
+def test_c7_the_no_artefact_row_is_2_of_2_for_4648_command_and_kerberos():
+    n = n4648 = ncmd = nkrb = 0
+    for trial in ("s06_t00", "s06_t01"):
+        ld = linked(trial)
+        for f, hop in _user_followups(ld):
+            sl = _link_followup(ld, f, hop)
+            n += 1
+            n4648 += sl.candidate_counts[E4648] > 0
+            ncmd += sl.candidate_counts[CMD] > 0
+            nkrb += bool(kerberos_confirm(f.logons, ld.scan.link_rows))
+    assert (n, n4648, ncmd, nkrb) == (2, 2, 2, 2)
+
+
+# ------------------------------------------------------------------------------------------------ C8 / STA-05 (no key)
+def test_c8_where_the_port_join_and_the_command_line_both_find_a_session_they_find_the_same_one_6_of_6():
+    both = same = 0
+    detail = []
+    for t in DEV:
+        ld = linked(t)
+        for h in user_e2e_hops(ld):
+            L = ld.links[h.hop_id]
+            if L.candidate_counts[PORT] and L.candidate_counts[CMD]:
+                both += 1
+                ok = L.methods[PORT].sessions == L.methods[CMD].sessions
+                same += ok
+                detail.append((h.hop_id, ok, [hex_id(k[1]) for k in L.methods[PORT].sessions],
+                               [hex_id(k[1]) for k in L.methods[CMD].sessions]))
+    print(f"C8 both={both} same={same} {detail}")
+    assert (both, same) == (6, 6), f"{[d for d in detail if not d[1]]}"
+
+
+# ------------------------------------------------------------------------------------------------ C9 key source session
+def test_c9_the_key_source_session_is_among_the_candidates_for_11_of_11_keyed_hops_and_the_only_one_for_9():
+    rows, problems = [], []
+    port_hops = []
+    for t, key, ld, hop, kh in keyed_hops():
+        lids = key_source_lids(ld, key, kh)
+        if not lids:
+            problems.append(f"{t} {kh['hop_id']}: the key has no source session")
+            continue
+        cand = candidate_lids(ld, hop)
+        in_ = lids <= cand
+        only_ = in_ and cand == lids
+        rows.append((kh["hop_id"], sorted(hex_id(x) for x in lids), sorted(hex_id(x) for x in cand), in_, only_))
+        if ld.links[hop.hop_id].candidate_counts[PORT]:
+            port_hops.append(kh["hop_id"])
+        print(f"C9 {kh['hop_id']:12s} {describe(ld, hop)}  key={rows[-1][1]} among={in_} only={only_}")
+    among, only = sum(r[3] for r in rows), sum(r[4] for r in rows)
+    print(f"C9 keyed hops with a source session {len(rows)}, among {among}, only {only}; "
+          f"WinRM port joins (reported apart): {port_hops}")
+    assert not problems, problems
+    assert len(rows) == 11
+    assert among == 11, f"key session not among the candidates for {[r[0] for r in rows if not r[3]]}"
+    assert only == 9, f"only candidate for {only} (not 9); not only: {[(r[0], r[2]) for r in rows if not r[4]]}"
+
+
+def test_c9_the_two_exceptions_are_s04_a_and_s04_b_each_with_sessions_0xd6398_and_0x17c46():
+    ld, key = linked("s04_t00"), load_key("s04_t00")
+    for name in ("s04-A-h1", "s04-B-h1"):
+        kh = next(k for k in key["hops"] if k["hop_id"] == name)
+        hop = key_hop_of(ld, key, kh)
+        cand = candidate_lids(ld, hop)
+        assert cand == {0xD6398, 0x17C46}, f"{name}: candidates {sorted(hex_id(x) for x in cand)}"
+    others = [kh["hop_id"] for _, _, ld_, hop, kh in keyed_hops()
+              if kh["hop_id"] not in ("s04-A-h1", "s04-B-h1") and ld_.links[hop.hop_id].candidate_count_all != 1]
+    assert others == [], f"keyed hops with other than one candidate session: {others}"
+
+
+def test_c9_s04_a_sees_bs_command_after_its_logon_and_b_sees_as_before_its_logon():
+    ld, key = linked("s04_t00"), load_key("s04_t00")
+    out = {}
+    for name in ("s04-A-h1", "s04-B-h1"):
+        kh = next(k for k in key["hops"] if k["hop_id"] == name)
+        hop = key_hop_of(ld, key, kh)
+        mine = key_source_lids(ld, key, kh)
+        rows = [r for r in ld.links[hop.hop_id].rows if r.method == CMD and r.session_key is not None]
+        other = [r for r in rows if r.source_session_id not in mine]
+        assert len(other) == 1, f"{name}: {len(other)} command rows of the other session"
+        out[name] = other[0].time_delta_ms
+    print(f"C9 other session's nearest command: {out}")
+    assert 3000 <= out["s04-A-h1"] < 3100, out                       # spec 10.4: A lists B's at +3.05 s
+    assert -1900 < out["s04-B-h1"] <= -1800, out                     # B lists A's at -1.87 s
+
+
+# ------------------------------------------------------------------------------------------------ C10 / STA-06
+def test_c10_the_four_background_key_hops_are_target_only_no_evidence_in_range():
+    seen = []
+    for t in DEV_T00:
+        ld, key = linked(t), load_key(t)
+        for kh in key["hops"]:
+            if kh["role"] != "background":
+                continue
+            hop = key_hop_of(ld, key, kh)
+            L = ld.links[hop.hop_id]
+            seen.append(kh["hop_id"])
+            assert L.target_only_reason == "no_evidence_in_range", f"{kh['hop_id']}: {describe(ld, hop)}"
+            assert L.candidate_count_all == 0 and [r.method for r in L.rows] == ["target_only"]
+    assert sorted(seen) == ["s04-t1", "s05-t1", "s06-t1", "s07-t1"]
+
+
+def test_c10_s06_smb_1_has_evidence_before_range_and_is_linked_only_by_evidence_6_to_7_5_s_after_its_logon():
+    ld, key = linked("s06_t00"), load_key("s06_t00")
+    hop = key_hop_of(ld, key, next(k for k in key["hops"] if k["hop_id"] == "s06-smb-1"))
+    L = ld.links[hop.hop_id]
+    print(f"C10 {describe(ld, hop)}")
+    assert L.evidence_before_range > 0, f"s06-smb-1: before-range evidence {L.evidence_before_range}"
+    cand_rows = [r for r in L.rows if r.session_key is not None]
+    assert cand_rows, "s06-smb-1 has no candidate row"
+    deltas = sorted(r.time_delta_ms for r in cand_rows)
+    assert all(6000 <= d <= 7500 for d in deltas), f"s06-smb-1 deltas {deltas}"
+    assert L.candidate_count_all >= 1 and not L.target_only_reason
+
+
+def test_c10_the_s02_t01_05_34_09_hop_has_no_candidate_and_evidence_before_range():
+    ld = linked("s02_t01")
+    day_us = 86_400_000_000
+    target = 5 * 3600 + 34 * 60 + 9
+    hops = [h for h in user_e2e_hops(ld) if abs((h.first_us % day_us) / 1e6 - target) <= 1.0]
+    assert len(hops) == 1, f"{len(hops)} s02_t01 user hops within 1 s of 05:34:09"
+    L = ld.links[hops[0].hop_id]
+    print(f"C10 {describe(ld, hops[0])}")
+    assert L.candidate_count_all == 0 and L.target_only_reason == "no_evidence_in_range"
+    assert L.evidence_before_range > 0, f"{hops[0].hop_id}: before-range evidence {L.evidence_before_range}"
+
+
+# ------------------------------------------------------------------------------------------------ C11
+def _dc_hops(ld: Linked) -> list:
+    return [h for h in ld.hs.hops if h.target_host == "dc01" and h.source_ip in ENDPOINT_IPS]
+
+
+def test_c11_endpoint_to_dc01_hops_have_no_candidate_session_by_any_method_in_any_trial():
+    n, bad = 0, []
+    for t in DEV:
+        ld = linked(t)
+        for h in _dc_hops(ld):
+            n += 1
+            L = ld.links[h.hop_id]
+            if L.candidate_count_all or any(L.candidate_counts.values()):
+                bad.append((h.hop_id, dict(L.candidate_counts)))
+    print(f"C11 endpoint->dc01 hops {n}")
+    assert n > 100
+    assert bad == [], f"{len(bad)} endpoint->dc01 hop(s) with a candidate session: {bad[:5]}"
+
+
+def test_c11_endpoint_to_dc01_hops_are_kerberos_confirmed_except_exactly_one_s03_t01_machine_account_hop():
+    n, unconfirmed = 0, []
+    for t in DEV:
+        ld = linked(t)
+        for h in _dc_hops(ld):
+            n += 1
+            if not krb(ld, h):
+                unconfirmed.append((t, h.hop_id, h.source_ip, h.machine_account_only, h.member_count))
+    print(f"C11 endpoint->dc01 hops {n}, not Kerberos-confirmed {len(unconfirmed)}: {unconfirmed}")
+    assert len(unconfirmed) == 1, f"{len(unconfirmed)} unconfirmed endpoint->dc01 hops: {unconfirmed}"
+    t, hid, ip, machine_only, _ = unconfirmed[0]
+    assert t == "s03_t01" and ip == EP_IP["ep-02"] and machine_only == 1, f"{t} {hid} {ip} machine_only={machine_only}"
+
+
+def test_c11_the_unconfirmed_hop_has_no_in_window_4769_with_its_guid():
+    ld = linked("s03_t01")
+    hops = [h for h in _dc_hops(ld) if not krb(ld, h)]
+    assert len(hops) == 1
+    guids = {norm_logon_guid(m.logon_guid) for m in hops[0].members} - {None}
+    assert guids, "the unconfirmed hop has no usable LogonGuid"
+    in_window = {norm_logon_guid(r.get("logon_guid")) for r in ld.scan.link_rows
+                 if (r["channel"], r["event_id"], r["host"]) == ("Security", 4769, "dc01")}
+    assert guids.isdisjoint(in_window)
+
+
+def test_c11_s07_t00_has_exactly_5_target_only_source_host_no_logs_hops_all_from_ep_03():
+    ld = linked("s07_t00")
+    nl = [h for h in ld.hs.hops if ld.links[h.hop_id].target_only_reason == "source_host_no_logs"]
+    print(f"C11 s07_t00 source_host_no_logs hops: {len(nl)}")
+    assert len(nl) == 5
+    assert {h.source_ip for h in nl} == {EP_IP["ep-03"]}
+    for h in nl:
+        L = ld.links[h.hop_id]
+        assert [r.method for r in L.rows] == ["target_only"] and L.source_host == "ep-03"
+    others = {t: sum(1 for h in linked(t).hs.hops if linked(t).links[h.hop_id].target_only_reason == "source_host_no_logs")
+              for t in DEV if t != "s07_t00"}
+    print(f"C11 source_host_no_logs hops in the other trials (reported): {others}")
+
+
+# ------------------------------------------------------------------------------------------------ C12 / spec 10.5
+def test_c12_port_join_match_deltas_over_the_winrm_hops_25_matches_corrected_and_raw_ranges():
+    corr, raw = [], []
+    for t in DEV:
+        ld = linked(t)
+        for h in user_e2e_hops(ld):
+            if h.protocol == "winrm":
+                for c, r in ld.links[h.hop_id].methods[PORT].match_deltas_us:
+                    corr.append(c / 1e6)
+                    raw.append(r / 1e6)
+    print(f"C12 port matches {len(corr)}: corrected {min(corr):+.3f}..{max(corr):+.3f}, raw {min(raw):+.3f}..{max(raw):+.3f}")
+    tol = 0.010 + 1e-6                                                   # 10 ms (the spec values are truncated)
+    assert len(corr) == 25, f"{len(corr)} port matches"
+    assert abs(min(corr) - (-2.09)) <= tol and abs(max(corr) - 1.57) <= tol, f"{min(corr):+.3f} {max(corr):+.3f}"
+    assert abs(min(raw) - (-18.87)) <= tol and abs(max(raw) - (-1.21)) <= tol, f"{min(raw):+.3f} {max(raw):+.3f}"
+
+
+def test_c12_the_nearest_command_delta_on_the_keyed_hops_lies_in_minus_6_5_to_plus_6_8_s():
+    deltas = []
+    for t, key, ld, hop, kh in keyed_hops():
+        for r in ld.links[hop.hop_id].rows:
+            if r.method == CMD and r.session_key is not None:
+                deltas.append((r.time_delta_ms, kh["hop_id"]))
+    assert deltas, "no command row on any keyed hop"
+    lo, hi = min(deltas), max(deltas)
+    print(f"C12 nearest command on keyed hops: {lo[0] / 1000:+.2f} s ({lo[1]}) .. {hi[0] / 1000:+.2f} s ({hi[1]})")
+    out = [d for d in deltas if not -6500 <= d[0] <= 6800]
+    assert out == [], f"command deltas outside [-6.5, +6.8] s: {out}"
+
+
+# ------------------------------------------------------------------------------------------------ C15 / ST-01
+@pytest.mark.parametrize("trial", DEV)
+def test_c15_no_evidence_supporting_or_confirm_uid_is_outside_the_window_or_in_the_look_back(trial):
+    ld = linked(trial)
+    in_window = {u for r in ld.scan.in_window + ld.scan.link_rows for u in r["event_uids"]}
+    lookback = {u for r in ld.scan.lookback for u in r["event_uids"]}
+    uids: set[str] = set()
+    for h in ld.hs.hops:
+        L = ld.links[h.hop_id]
+        for r in L.rows:
+            uids.update(r.evidence_uids)
+            uids.update(r.supporting_event_uids)
+            uids.update(r.source_session_logon_uids)
+            uids.update(r.names_event_uids)
+        uids.update(confirm_of(h, ld.scan.link_rows, ld.arts)[1])
+    assert uids and uids <= in_window, f"{trial}: {len(uids - in_window)} uid(s) not in the window"
+    assert uids.isdisjoint(lookback), f"{trial}: {len(uids & lookback)} uid(s) from the look-back"
+    lo, hi = ld.checked.start_us, ld.checked.end_us + US_PER_MS
+    rows = {u: r for r in ld.scan.in_window + ld.scan.link_rows for u in r["event_uids"]}
+    bad = sorted(u for u in uids if not lo <= rows[u]["us"] < hi)
+    assert bad == [], f"{trial}: {len(bad)} uid(s) outside the window by corrected time, e.g. {bad[:5]}"
+
+
+@pytest.mark.parametrize("trial", DEV)
+def test_every_db_sha_is_unchanged_and_one_entry_with_well_formed_rows_exists_per_hop(trial):
+    ld = linked(trial)
+    sha_pre, before, after, gate_sha = ld.sha
+    assert sha_pre == before == after == gate_sha == sha256_file(ld.paths.db)
+    assert set(ld.links) == {h.hop_id for h in ld.hs.hops}
+    for h in ld.hs.hops:
+        L = ld.links[h.hop_id]
+        assert L.rows, f"{h.hop_id}: no link row at all"
+        assert bool(L.target_only_reason) == (L.candidate_count_all == 0)
+        assert (L.rows[-1].method == "target_only") == bool(L.target_only_reason)
+        assert sum(1 for r in L.rows if r.method == "target_only") == int(bool(L.target_only_reason))
+
+
+# ------------------------------------------------------------------------------------------------ ST-02
+def test_st02_s06_t01_ep_01_to_ep_03_winrm_rows_are_clock_unreliable_and_ep_01_to_ep_02_rows_are_not():
+    ld = linked("s06_t01")
+    to3 = [h for h in user_e2e_hops(ld) if h.protocol == "winrm" and h.target_host == "ep-03"
+           and h.source_ip == EP_IP["ep-01"]]
+    to2 = [h for h in user_e2e_hops(ld) if h.protocol == "winrm" and h.target_host == "ep-02"
+           and h.source_ip == EP_IP["ep-01"]]
+    assert to3 and to2, f"s06_t01: {len(to3)} ep-01->ep-03 and {len(to2)} ep-01->ep-02 WinRM hops"
+    for h in to3:
+        flags = [r.clock_unreliable for r in ld.links[h.hop_id].rows]
+        assert flags and set(flags) == {1}, f"{h.hop_id}: {flags}"
+        assert ld.links[h.hop_id].host_clock_unreliable == 1
+    for h in to2:
+        flags = [r.clock_unreliable for r in ld.links[h.hop_id].rows]
+        assert flags and set(flags) == {0}, f"{h.hop_id}: {flags}"
+        assert ld.links[h.hop_id].host_clock_unreliable == 0
+
+
+def test_st02_the_gate_value_is_kept_apart_from_the_stitchers_on_the_ep_01_to_ep_02_hop():
+    ld = linked("s06_t01")
+    to2 = [h for h in user_e2e_hops(ld) if h.target_host == "ep-02" and h.source_ip == EP_IP["ep-01"]]
+    assert to2 and all(h.gate_clock_unreliable == 1 for h in to2)       # the gate marks every row of the trial
+
+
+@pytest.mark.parametrize("trial", [t for t in DEV if t != "s06_t01"])
+def test_st02_report_clock_unreliable_link_rows_of_the_other_trials(trial):
+    """Reported, not asserted: spec 6 names only s06_t01 (`wide` ep-03); other trials are reported for review."""
+    ld = linked(trial)
+    flagged = [(h.hop_id, r.method) for h in user_e2e_hops(ld) for r in ld.links[h.hop_id].rows if r.clock_unreliable]
+    print(f"ST-02 {trial}: clock_unreliable user endpoint link rows {len(flagged)}")
