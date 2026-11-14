@@ -54,8 +54,12 @@ SPEC = REPO / "docs" / "specs" / "03_stitch.md"
 TRIAL = sf.TRIAL
 SRC, TGT, THIRD = "ep-01", "ep-02", "ep-03"
 SRC_IP, TGT_IP, THIRD_IP = "192.168.50.21", "192.168.50.22", "192.168.50.23"
-FILES = ["hop_artefacts.csv", "hop_identity.csv", "links.csv", "run_info.json"]
+FILES = ["hop_artefacts.csv", "hop_identity.csv", "hops.csv", "links.csv", "path_edges.csv", "path_nodes.csv",
+         "paths.csv", "report.md", "run_info.json", "stats.json"]
 CSV_FILES = ["hop_artefacts.csv", "hop_identity.csv", "links.csv"]
+NEW_CSV_FILES = ["hops.csv", "paths.csv", "path_edges.csv", "path_nodes.csv"]
+ALL_CSV_FILES = CSV_FILES + NEW_CSV_FILES
+NON_TABLE_FILES = ["stats.json", "report.md"]
 CMD_A = sf.PLACEHOLDER_COMMAND + " ep-02 payloadxq.exe tail-alpha"
 CMD_B = sf.PLACEHOLDER_COMMAND + " ep-02 tail-bravo-no-names"
 CMD_OUT = sf.PLACEHOLDER_COMMAND + " ep-02 tail-outside-window"
@@ -199,7 +203,7 @@ def ran(tmp_path_factory):
     db_before = sf.sha256_of(fake.paths.db)
     code = run_main(fake)
     folder = out_folder(fake)
-    tables = {n: read_csv(folder / n) for n in CSV_FILES} if folder.exists() else {}
+    tables = {n: read_csv(folder / n) for n in ALL_CSV_FILES} if folder.exists() else {}
     return {"fake": fake, "code": code, "folder": folder, "db_before": db_before,
             "db_after": sf.sha256_of(fake.paths.db), "tables": tables}
 
@@ -335,7 +339,7 @@ def test_link_id_format():
 
 
 # ================================================================================================ 2. end to end
-def test_run_exits_zero_and_writes_exactly_the_four_files(ran):
+def test_run_exits_zero_and_writes_exactly_the_ten_files(ran):
     assert ran["code"] == 0
     names = sorted(p.name for p in ran["folder"].iterdir())
     assert names == FILES, names
@@ -344,9 +348,21 @@ def test_run_exits_zero_and_writes_exactly_the_four_files(ran):
     assert sorted(p.name for p in parent.iterdir()) == [TRIAL]            # no leftover sibling folder
 
 
-def test_no_hops_paths_or_stats_files_yet(ran):
-    for n in ("hops.csv", "paths.csv", "path_edges.csv", "path_nodes.csv", "stats.json", "report.md"):
-        assert not (ran["folder"] / n).exists(), n
+def test_all_ten_files_exist_and_run_info_lists_the_nine_others_with_sha256(ran):
+    folder = ran["folder"]
+    for n in FILES:
+        assert (folder / n).is_file(), n
+    info = json.loads((folder / "run_info.json").read_text(encoding="utf-8"))
+    others = sorted(n for n in FILES if n != "run_info.json")
+    assert len(others) == 9
+    assert sorted(info["files"]) == others
+    for n in others:
+        raw = (folder / n).read_bytes()
+        assert info["files"][n]["sha256"] == hashlib.sha256(raw).hexdigest(), n
+        if n in NON_TABLE_FILES:
+            assert info["files"][n]["rows"] is None, n                      # json / md are not tables
+        else:
+            assert info["files"][n]["rows"] == len(ran["tables"][n]), n
 
 
 def test_csv_headers_equal_the_spec_lists(ran):
@@ -639,8 +655,9 @@ def test_outside_window_event_uid_is_in_no_file(ran, uid):
 
 def test_lookback_uid_appears_only_in_identity_open_or_end_unknown_columns(ran):
     texts = all_text(ran)
-    for n in ("links.csv", "hop_artefacts.csv", "run_info.json"):
-        assert LOOKBACK_UID not in texts[n], n
+    for n in FILES:
+        if n != "hop_identity.csv":
+            assert LOOKBACK_UID not in texts[n], n
     assert LOOKBACK_UID in texts["hop_identity.csv"]
     for r in ran["tables"]["hop_identity.csv"]:
         for col, v in r.items():
@@ -903,3 +920,475 @@ def test_db_hash_mismatch_refusal_also_keeps_an_existing_folder(tmp_path, monkey
 def test_main_requires_a_trial_argument():
     with pytest.raises(SystemExit):
         sm.main([])
+
+
+# ================================================================================================ T7.5 files (task 4)
+def spec_table_columns(heading: str) -> list[str]:
+    """Columns of the spec section 3 table that follows the line starting with `heading` (first cell of each row,
+    split on commas). Parsed from the spec text, not copied from the code."""
+    lines = spec_text().splitlines()
+    start = next(i for i, l in enumerate(lines) if l.startswith(heading))
+    cols: list[str] = []
+    started = False
+    for line in lines[start + 1:]:
+        if not line.startswith("|"):
+            if started:
+                break
+            continue
+        first = line.split("|")[1].strip()
+        if first.startswith("Column") or set(first) <= set("-: "):
+            continue
+        started = True
+        cols += [c.strip().strip("`") for c in first.split(",")]
+    return cols
+
+
+def _paths_nodes_edges_block() -> str:
+    lines = spec_text().splitlines()
+    start = next(i for i, l in enumerate(lines) if l.startswith("**`paths.csv`**, **`path_edges.csv`**"))
+    block: list[str] = []
+    for line in lines[start + 1:]:
+        if not line.strip():
+            break
+        block.append(line)
+    return " ".join(block)
+
+
+def _backtick_columns(text: str) -> list[str]:
+    text = re.sub(r"\([^()]*\)", " ", text)               # drop every parenthetical (value lists, notes)
+    cols: list[str] = []
+    for seg in re.findall(r"`([^`]*)`", text):
+        cols += [c.strip() for c in seg.split(",") if c.strip()]
+    return cols
+
+
+def spec_paths_columns() -> list[str]:
+    block = _paths_nodes_edges_block()
+    part = block.split("`path_edges.csv`:")[0].split("`paths.csv`:")[1]
+    return _backtick_columns(part)
+
+
+def spec_edges_columns() -> list[str]:
+    block = _paths_nodes_edges_block()
+    part = block.split("`path_edges.csv`:")[1].split("`path_nodes.csv`:")[0]
+    return _backtick_columns(part)
+
+
+def spec_nodes_columns() -> list[str]:
+    block = _paths_nodes_edges_block()
+    return _backtick_columns(block.split("`path_nodes.csv`:")[1])
+
+
+def test_spec_parsing_found_the_t75_lists():
+    assert len(spec_table_columns("**`hops.csv`**")) == 43
+    assert spec_table_columns("**`hops.csv`**")[:3] == ["hop_id", "target_host", "source_ip"]
+    assert spec_table_columns("**`hops.csv`**")[-1] == "gate_clock_unreliable"
+    assert spec_paths_columns()[0] == "path_id" and spec_paths_columns()[-1] == "shared_event_with"
+    assert len(spec_paths_columns()) == 10
+    assert spec_edges_columns() == ["path_id", "from_hop_id", "to_hop_id", "link_type", "time_delta_ms",
+                                    "order_within_tolerance", "clock_unreliable"]
+    assert spec_nodes_columns() == ["path_id", "hop_id", "role", "context", "host", "session_id", "event_uid",
+                                    "link_id"]
+
+
+def test_hops_columns_equal_the_spec_list_43_in_spec_order():
+    assert len(out.HOPS_COLUMNS) == 43
+    assert list(out.HOPS_COLUMNS) == spec_table_columns("**`hops.csv`**")
+
+
+def test_paths_columns_equal_the_spec_list():
+    assert list(out.PATHS_COLUMNS) == spec_paths_columns()
+
+
+def test_edges_columns_equal_the_spec_list():
+    assert list(out.EDGES_COLUMNS) == spec_edges_columns()
+
+
+def test_nodes_columns_equal_the_spec_list():
+    assert list(out.NODES_COLUMNS) == spec_nodes_columns()
+
+
+def test_t75_column_tuples_have_no_duplicates():
+    for cols in (out.HOPS_COLUMNS, out.PATHS_COLUMNS, out.EDGES_COLUMNS, out.NODES_COLUMNS):
+        assert len(set(cols)) == len(cols)
+
+
+def test_t75_file_names():
+    assert (out.HOPS_FILE, out.PATHS_FILE, out.EDGES_FILE, out.NODES_FILE) == ("hops.csv", "paths.csv",
+                                                                               "path_edges.csv", "path_nodes.csv")
+    assert out.CHAIN_SEPARATOR == "|"
+
+
+def test_written_headers_equal_the_spec_lists(ran):
+    f = ran["folder"]
+    assert header_of(f / "hops.csv") == spec_table_columns("**`hops.csv`**")
+    assert header_of(f / "paths.csv") == spec_paths_columns()
+    assert header_of(f / "path_edges.csv") == spec_edges_columns()
+    assert header_of(f / "path_nodes.csv") == spec_nodes_columns()
+
+
+# ---------------------------------------------------------------- the chain world
+# Three user hops that chain, plus one hop with no trigger (a non-seed):
+#   A  ep-01 -> ep-02 at 100 s (two members, 0.5 s apart, two accounts)  hop h0001
+#   A2 ep-03 -> ep-02 at 150 s                                            hop h0002
+#   B  ep-02 -> ep-01 at 300 s   (source IP is ep-02's)                   hop h0003   chains from A and from A2
+#   N  ep-03 -> ep-02 at 400 s, no gate trigger (unmatched)               hop h0004   non-seed, no edge
+CHAIN_ROWS = [
+    dict(uid="CA", host=TGT, off=100.0, lid=8000, account="Chain_A1", ip=SRC_IP, port=50000, trig=True),
+    dict(uid="CA-b", host=TGT, off=100.5, lid=8001, account="Chain_A2", ip=SRC_IP, port=50001, trig=True),
+    dict(uid="CA2", host=TGT, off=150.0, lid=8002, account="Chain_C", ip=THIRD_IP, port=50100, trig=True),
+    dict(uid="CB", host=SRC, off=300.0, lid=8003, account="Chain_B", ip=TGT_IP, port=50200, trig=True),
+    dict(uid="CN", host=TGT, off=400.0, lid=8004, account="Chain_N", ip=THIRD_IP, port=50999, trig=False),
+]
+
+
+def chain_repo(tmp_path: Path, name: str = "chain"):
+    rows = [sf.ev(m["uid"], "Security", 4624, host=m["host"], off=m["off"], logon_type=3, target_logon_id=m["lid"],
+                  account_name=m["account"], source_ip=m["ip"], source_port=m["port"],
+                  authentication_package="NTLM", machine_account=0) for m in CHAIN_ROWS]
+    fake = sf.make_repo(tmp_path, rows, name=name)
+    base = {"clock_unreliable": "0", "machine_account": "0"}
+    trig, unmatched = [], []
+    for m in CHAIN_ROWS:
+        r = dict(base, trigger_id=("t-" if m["trig"] else "u-") + m["uid"], host=m["host"],
+                 anchor_logon_uid=m["uid"], trigger_event_uid=m["uid"], target_logon_id=str(m["lid"]),
+                 source_ip=m["ip"], ip_kind=ip_kind(m["ip"]))
+        if m["trig"]:
+            trig.append(dict(r, rule="R4_smb", gate_tier="A", supporting_event_uids=""))
+        else:
+            unmatched.append(r)
+    write_gate_csv(fake.paths.gate_dir / "triggers.csv", trig, ["event_uid"])
+    write_gate_csv(fake.paths.gate_dir / "unmatched_remote.csv", unmatched, ["event_uid"])
+    return fake
+
+
+@pytest.fixture(scope="module")
+def chain(tmp_path_factory):
+    fake = chain_repo(tmp_path_factory.mktemp("stitch_chain"))
+    code = run_main(fake)
+    folder = out_folder(fake)
+    tables = {n: read_csv(folder / n) for n in ALL_CSV_FILES} if folder.exists() else {}
+    stats = json.loads((folder / "stats.json").read_text(encoding="utf-8")) if folder.exists() else {}
+    return {"fake": fake, "code": code, "folder": folder, "tables": tables, "stats": stats}
+
+
+H = {i: f"{TRIAL}-h000{i}" for i in range(1, 5)}
+
+
+def test_chain_world_runs_and_has_four_hops(chain):
+    assert chain["code"] == 0
+    assert [r["hop_id"] for r in chain["tables"]["hops.csv"]] == [H[1], H[2], H[3], H[4]]
+
+
+def test_hops_csv_one_row_per_hop_nothing_lost_or_duplicated(chain, ran):
+    assert len(chain["tables"]["hops.csv"]) == len({r["hop_id"] for r in chain["tables"]["links.csv"]}) == 4
+    ids = [r["hop_id"] for r in ran["tables"]["hops.csv"]]
+    assert ids == sorted(set(ids)) == hop_order(ran["tables"])
+
+
+def test_in_path_equals_is_seed_per_hop_and_in_path_0_hops_equal_stats_list(chain, ran):
+    for c in (chain, ran):
+        rows = c["tables"]["hops.csv"]
+        for r in rows:
+            assert r["in_path"] == r["is_seed"], r["hop_id"]
+            assert r["is_seed"] == ("1" if r["trigger_ids"] else "0"), r["hop_id"]
+        stats = json.loads((c["folder"] / "stats.json").read_text(encoding="utf-8"))
+        assert [r["hop_id"] for r in rows if r["in_path"] == "0"] == stats["hops_in_no_path"]
+    assert [r["hop_id"] for r in chain["tables"]["hops.csv"] if r["in_path"] == "0"] == [H[4]]
+    assert chain["stats"]["non_seed_hops"] == [H[4]]
+
+
+def test_non_seed_hop_is_in_hops_csv_but_in_no_path_file(chain):
+    t = chain["tables"]
+    assert H[4] in {r["hop_id"] for r in t["hops.csv"]}
+    assert H[4] in {r["hop_id"] for r in t["links.csv"]}                 # linked like any other hop (ST-23)
+    assert H[4] not in {h for r in t["paths.csv"] for h in r["hop_ids"].split(";")}
+    assert H[4] not in {r["hop_id"] for r in t["path_nodes.csv"]}
+    assert H[4] not in {r[k] for r in t["path_edges.csv"] for k in ("from_hop_id", "to_hop_id")}
+    row = next(r for r in t["hops.csv"] if r["hop_id"] == H[4])
+    assert (row["is_seed"], row["in_path"], row["chain_parent_count"], row["trigger_ids"]) == ("0", "0", "0", "")
+
+
+@pytest.mark.parametrize("which", ["ran", "chain"])
+def test_member_columns_are_parallel_with_member_count_items(which, ran, chain):
+    rows = (ran if which == "ran" else chain)["tables"]["hops.csv"]
+    cols = ("member_logon_uids", "member_logon_ids", "member_logon_ids_hex", "member_accounts", "member_ports")
+    for r in rows:
+        n = int(r["member_count"])
+        for c in cols:
+            assert len(r[c].split(";")) == n, (r["hop_id"], c)
+        for dec, hx in zip(r["member_logon_ids"].split(";"), r["member_logon_ids_hex"].split(";")):
+            assert int(hx, 16) == int(dec), r["hop_id"]
+
+
+def test_two_member_hop_lists_both_members_in_member_order(chain):
+    r = next(x for x in chain["tables"]["hops.csv"] if x["hop_id"] == H[1])
+    assert r["member_count"] == "2"
+    assert r["member_logon_uids"] == "CA;CA-b"
+    assert r["member_logon_ids"] == "8000;8001"
+    assert r["member_logon_ids_hex"] == "0x1f40;0x1f41"
+    assert r["member_accounts"] == "Chain_A1;Chain_A2"
+    assert r["member_ports"] == "50000;50001"
+    assert r["mixed_account"] == "1"
+    assert r["is_seed"] == "1" and r["trigger_ids"] == "t-CA;t-CA-b"
+
+
+def test_member_accounts_equal_the_db_account_of_each_member_uid(ran, chain):
+    for c in (ran, chain):
+        db = c["fake"].paths.db
+        for r in c["tables"]["hops.csv"]:
+            for uid, acct in zip(r["member_logon_uids"].split(";"), r["member_accounts"].split(";")):
+                assert acct == db_value(db, uid, "account_name"), (r["hop_id"], uid)
+
+
+def test_edges_are_the_two_host_time_edges_into_the_merged_hop(chain):
+    rows = chain["tables"]["path_edges.csv"]
+    assert [(r["from_hop_id"], r["to_hop_id"], r["link_type"]) for r in rows] == [
+        (H[1], H[3], "host_time"), (H[2], H[3], "host_time")]
+    assert [r["time_delta_ms"] for r in rows] == ["200000", "150000"]
+    assert [r["order_within_tolerance"] for r in rows] == ["0", "0"]
+    assert {r["path_id"] for r in rows} == {f"{TRIAL}-p0001"}
+
+
+def test_multi_chain_parent_and_parent_list_in_hops_csv(chain):
+    by = {r["hop_id"]: r for r in chain["tables"]["hops.csv"]}
+    assert (by[H[3]]["chain_parent_count"], by[H[3]]["multi_chain_parent"]) == ("2", "1")
+    assert by[H[3]]["chain_parent_hop_ids"] == f"{H[1]};{H[2]}"
+    for h in (H[1], H[2]):
+        assert (by[h]["chain_parent_count"], by[h]["multi_chain_parent"], by[h]["chain_parent_hop_ids"]) == (
+            "0", "0", "")
+    assert chain["stats"]["multi_chain_parent_hops"] == {H[3]: [H[1], H[2]]}
+
+
+def test_paths_csv_edge_types_spelling_and_merged_from_chains(chain):
+    rows = chain["tables"]["paths.csv"]
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["path_id"] == f"{TRIAL}-p0001"
+    assert r["hop_ids"] == f"{H[1]};{H[2]};{H[3]}"
+    assert r["n_hops"] == "3" and r["isolated"] == "0"
+    assert r["edge_types"] == "host_time:2;session:0"
+    assert r["merged_from"] == f"{H[1]}>{H[3]}|{H[2]}>{H[3]}"
+    assert r["hosts"] == "ep-01>ep-02;ep-03>ep-02;ep-02>ep-01"
+    assert r["seed_trigger_ids"] == "t-CA;t-CA-b;t-CA2;t-CB"
+    assert (r["shared_source_session_with"], r["shared_event_with"]) == ("", "")
+
+
+def test_edge_types_spelled_host_time_n_semicolon_session_m_everywhere(ran, chain):
+    for c in (ran, chain):
+        for r in c["tables"]["paths.csv"]:
+            assert re.fullmatch(r"host_time:\d+;session:\d+", r["edge_types"]), r["edge_types"]
+    assert all(r["edge_types"] == "host_time:0;session:0" for r in ran["tables"]["paths.csv"])
+
+
+def test_merged_from_is_pipe_joined_chains_of_gt_joined_hop_ids(ran, chain):
+    for c in (ran, chain):
+        hop_ids = {r["hop_id"] for r in c["tables"]["hops.csv"]}
+        for r in c["tables"]["paths.csv"]:
+            chains = r["merged_from"].split("|")
+            assert chains and all(chains)
+            seen: set[str] = set()
+            for ch in chains:
+                ids = ch.split(">")
+                assert set(ids) <= hop_ids and len(ids) == len(set(ids))
+                seen |= set(ids)
+            assert seen == set(r["hop_ids"].split(";"))
+    for r in ran["tables"]["paths.csv"]:
+        assert r["merged_from"] == r["hop_ids"] and r["isolated"] == "1"          # one hop, one chain of one
+
+
+def test_every_seed_is_in_exactly_one_paths_row(ran, chain):
+    for c in (ran, chain):
+        in_paths = [h for r in c["tables"]["paths.csv"] for h in r["hop_ids"].split(";")]
+        seeds = sorted(r["hop_id"] for r in c["tables"]["hops.csv"] if r["is_seed"] == "1")
+        assert sorted(in_paths) == seeds
+        assert len(in_paths) == len(set(in_paths))                                  # ST-04: none dropped, none twice
+        for r in c["tables"]["paths.csv"]:
+            assert int(r["n_hops"]) == len(r["hop_ids"].split(";"))
+
+
+def test_path_nodes_belong_to_paths_and_hops_of_the_files(chain):
+    t = chain["tables"]
+    paths = {r["path_id"]: set(r["hop_ids"].split(";")) for r in t["paths.csv"]}
+    assert t["path_nodes.csv"]
+    for r in t["path_nodes.csv"]:
+        assert r["hop_id"] in paths[r["path_id"]]
+        assert r["role"] in {"target_logon", "artefact", "source_evidence", "source_session_event",
+                             "target_session_event"}
+        assert r["context"] in {"0", "1"}
+    members = {u for r in t["hops.csv"] for u in r["member_logon_uids"].split(";")}
+    assert {r["event_uid"] for r in t["path_nodes.csv"] if r["role"] == "target_logon"} == members - {"CN"}
+
+
+def test_link_ids_in_path_nodes_are_links_csv_ids(ran):
+    link_ids = {r["link_id"] for r in ran["tables"]["links.csv"]}
+    nodes = ran["tables"]["path_nodes.csv"]
+    with_link = [r for r in nodes if r["link_id"]]
+    assert with_link
+    assert {r["role"] for r in with_link} <= {"source_evidence", "source_session_event"}
+    assert all(r["link_id"] in link_ids for r in with_link)
+    assert all(r["link_id"] == "" for r in nodes if r["role"] in ("target_logon", "artefact", "target_session_event"))
+
+
+def test_t74_files_are_the_same_bytes_on_a_second_build(ran, tmp_path):
+    again = build_repo(tmp_path, name="again")
+    assert run_main(again) == 0
+    for n in CSV_FILES:
+        assert (out_folder(again) / n).read_bytes() == (ran["folder"] / n).read_bytes(), n
+
+
+# ---------------------------------------------------------------- byte identity of all files but run_info.json
+def test_two_runs_byte_identical_for_every_file_except_run_info(tmp_path):
+    fake = chain_repo(tmp_path)
+    assert run_main(fake) == 0
+    first = {n: (out_folder(fake) / n).read_bytes() for n in FILES}
+    assert run_main(fake) == 0
+    second = {n: (out_folder(fake) / n).read_bytes() for n in FILES}
+    for n in FILES:
+        if n != "run_info.json":
+            assert first[n] == second[n], n
+    assert all(len(first[n]) > 10 for n in FILES)
+
+
+def test_two_runs_byte_identical_on_the_rich_world_too(tmp_path):
+    fake = build_repo(tmp_path)
+    assert run_main(fake) == 0
+    first = {n: (out_folder(fake) / n).read_bytes() for n in FILES}
+    assert run_main(fake) == 0
+    for n in FILES:
+        if n != "run_info.json":
+            assert first[n] == (out_folder(fake) / n).read_bytes(), n
+
+
+# ---------------------------------------------------------------- stats.json (spec section 3)
+@pytest.fixture(scope="module")
+def stats(ran):
+    return json.loads((ran["folder"] / "stats.json").read_text(encoding="utf-8"))
+
+
+def test_stats_json_has_no_timestamp(ran, stats):
+    text = (ran["folder"] / "stats.json").read_text(encoding="utf-8")
+    assert not re.search(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}", text)
+    assert not [k for k in stats if "generated" in k or k.endswith("_utc") or k in ("timestamp", "time")]
+    assert "generated_utc" not in text
+    assert text.endswith("\n") and "\r" not in text
+
+
+def test_stats_json_contains_the_spec_section_3_items(stats):
+    for key in ("files", "hops_by_protocol_and_tier", "hops_by_methods_linked", "target_only_reasons",
+                "hops_in_no_path", "followup_logons", "chain_edges_by_type", "gap_near_threshold",
+                "gap_near_threshold_user_e2e", "system_session_evidence", "removed_by_window", "parameters", "db"):
+        assert key in stats, key
+
+
+def test_stats_files_are_the_row_counts_of_the_seven_csvs(ran, stats):
+    assert sorted(stats["files"]) == sorted(ALL_CSV_FILES)
+    for n in ALL_CSV_FILES:
+        assert stats["files"][n] == len(ran["tables"][n]), n
+    info = json.loads((ran["folder"] / "run_info.json").read_text(encoding="utf-8"))
+    for n, rows in stats["files"].items():
+        assert info["files"][n]["rows"] == rows, n
+
+
+def test_stats_hops_by_protocol_and_tier_and_methods_linked(stats):
+    assert stats["hops_by_protocol_and_tier"] == {"smb": {"A": 0, "B": 1, "C": 0, "D": 4}}
+    assert stats["hops_by_methods_linked"] == {"smb": {"0": 4, "1": 0, "2": 1, "3": 0}}
+    assert stats["hops"] == 5 and stats["seeds"] == 5
+
+
+def test_stats_target_only_reasons_followups_hops_in_no_path(stats):
+    assert stats["target_only_reasons"] == {"no_evidence_in_range": 2, "source_host_no_logs": 1,
+                                            "source_host_unknown": 1}
+    assert stats["hops_in_no_path"] == []
+    assert stats["followup_logons"] == 0
+
+
+def test_stats_chain_edges_by_type(stats, chain):
+    assert stats["chain_edges_by_type"] == {"host_time": 0, "session": 0}
+    assert chain["stats"]["chain_edges_by_type"] == {"host_time": 2, "session": 0}
+
+
+def test_stats_gap_near_threshold_with_user_endpoint_count(stats):
+    assert isinstance(stats["gap_near_threshold"], int) and isinstance(stats["gap_near_threshold_user_e2e"], int)
+    assert 0 <= stats["gap_near_threshold_user_e2e"] <= stats["gap_near_threshold"]
+
+
+def test_stats_system_session_evidence_per_method(stats):
+    assert set(stats["system_session_evidence"]) == {"sysmon3_port", "source_4648", "cmdline_target"}
+    assert all(isinstance(v, int) for v in stats["system_session_evidence"].values())
+
+
+def test_stats_removed_by_window_counts_the_outside_events_and_lists_none(ran, stats):
+    r = stats["removed_by_window"]
+    total = sum(n for c in r.values() for n in c.values())
+    assert total >= 6                                    # OUTW-PROC / SHARE / DUMP / LOGON, PREW-PROC / SHARE at least
+    assert set(r) <= {SRC, TGT, THIRD}
+    text = (ran["folder"] / "stats.json").read_text(encoding="utf-8")
+    for uid in OUT_UIDS:
+        assert uid not in text
+
+
+def test_stats_parameters_and_db_hash(ran, stats):
+    p = stats["parameters"]
+    assert p["order_tol_s"] == 5.0 and p["group_gap_s"] == 2.0
+    assert stats["db"]["sha256_before"] == stats["db"]["sha256_after"] == ran["db_before"]
+    assert stats["trial_id"] == TRIAL
+
+
+# ---------------------------------------------------------------- STT-13 over all ten files (decision 050 item 8)
+def scan_text_all(ran) -> str:
+    """Every file of the folder as text: the CSVs with the account / image columns (049 item 7, plus hops.csv
+    member_accounts, 050 item 8) and the target-side name cells blanked; stats.json, report.md, run_info.json whole
+    (report.md is never blanked)."""
+    parts: list[str] = []
+    names: list[str] = []
+    blank = set(BLANKED) | {"member_accounts"}
+    for n in ALL_CSV_FILES:
+        for r in ran["tables"][n]:
+            for k, v in r.items():
+                if k in blank:
+                    continue
+                if k in NAME_COLUMNS:
+                    names += [x for x in v.split(";") if x]
+                    continue
+                parts.append(v)
+    for n in ("stats.json", "report.md", "run_info.json"):
+        parts.append((ran["folder"] / n).read_text(encoding="utf-8"))
+    text = "\n".join(parts)
+    for nm in sorted(set(names), key=len, reverse=True):
+        text = re.sub(re.escape(nm), "", text, flags=re.IGNORECASE)
+    return text
+
+
+def test_no_twelve_character_command_substring_in_any_of_the_ten_files(ran):
+    commands = db_command_lines(ran["fake"].paths.db)
+    text = scan_text_all(ran).casefold()
+    hits = 0
+    for c in commands:
+        c = c.casefold()
+        hits += sum(1 for i in range(len(c) - 11) if c[i:i + 12] in text)
+    assert len(commands) >= 4
+    assert hits == 0, f"{hits} command substring(s) of 12 characters in the output (count only)"
+
+
+def test_report_md_has_no_blanking_no_account_no_image_no_command_substring(ran):
+    report = (ran["folder"] / "report.md").read_text(encoding="utf-8").casefold()
+    for c in db_command_lines(ran["fake"].paths.db):
+        c = c.casefold()
+        assert not [c[i:i + 12] for i in range(len(c) - 11) if c[i:i + 12] in report]
+    accounts = {m["account"] for m in MEMBERS} | set(SESSION_ACCOUNTS.values()) | {DUMP_ACCOUNT}
+    for a in accounts:
+        assert a.casefold() not in report, "an account name is in report.md"
+    for forbidden in (IMAGE_DUMP, "probereader", "runner.exe", "payloadxq", "syncsvcq"):
+        assert forbidden.casefold() not in report, forbidden
+
+
+def test_member_accounts_column_is_the_only_new_account_text_in_the_t75_csvs(ran):
+    accounts = {m["account"].casefold() for m in MEMBERS} | {a.casefold() for a in SESSION_ACCOUNTS.values()}
+    for n in ("paths.csv", "path_edges.csv", "path_nodes.csv"):
+        text = (ran["folder"] / n).read_text(encoding="utf-8").casefold()
+        for a in accounts:
+            assert a not in text, (n, "holds an account name")
+    hops_text = "\n".join(v for r in ran["tables"]["hops.csv"] for k, v in r.items() if k != "member_accounts")
+    for a in accounts | {DUMP_ACCOUNT.casefold()}:
+        assert a not in hops_text.casefold(), "hops.csv holds an account outside member_accounts"

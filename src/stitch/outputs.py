@@ -1,10 +1,12 @@
-"""T7.4 writer side: rows and CSV text of ``links.csv``, ``hop_artefacts.csv`` and ``hop_identity.csv`` (spec
-03_stitch section 3; ST-01, ST-02, ST-45..ST-50, ST-49, ST-60..ST-64; decisions 038, 049 items 3, 4, 6, 7; D1).
+"""Writer side of the stitch CSVs: rows and CSV text of ``links.csv``, ``hop_artefacts.csv``, ``hop_identity.csv``
+(T7.4) and ``hops.csv``, ``paths.csv``, ``path_edges.csv``, ``path_nodes.csv`` (T7.5) (spec 03_stitch section 3;
+ST-01, ST-02, ST-04, ST-23, ST-45..ST-50, ST-49, ST-60..ST-64, ST-70..ST-74; decisions 038, 049 items 3, 4, 6, 7,
+050 items 6, 8; D1).
 
-WHY a separate pure module: every value of the three files is already decided in the ``LinkIndex`` (T7.3 link
-rows, T7.4 verdicts and identity rows, the artefact set). This module only spells those values as text, in the
-spec's column order and a fixed row order, so the bytes are the same on every run on the same inputs (spec 3).
-It opens no file and no DB; ``stitch.__main__`` writes the text.
+WHY a separate pure module: every value of the files is already decided in the ``LinkIndex`` (T7.3 link rows,
+T7.4 verdicts and identity rows, the artefact set), the ``PathSet`` and the path nodes. This module only spells
+those values as text, in the spec's column order and a fixed row order, so the bytes are the same on every run
+on the same inputs (spec 3). It opens no file and no DB; ``stitch.__main__`` writes the text.
 
 WHY built field by field from named columns and never by dumping dataclasses: a field added to ``LinkRow`` or
 ``IdentityRow`` later (a credential account, a command fragment) can then never reach a file by accident. The
@@ -12,7 +14,8 @@ only text columns are: hosts, uids, method / reason / verdict vocabularies, targ
 and the matched ``name_check_names``, both taken from target-side events, spec 2), and the four account / image
 columns that are DB fields of referenced events (``source_session_account`` and ``account``: a 4624
 ``account_name``; ``dump_source_image`` / ``dump_account``: the Sysmon 10 ``source_image`` / ``account_name``;
-049 item 7). No value comes from a command line.
+049 item 7), plus ``hops.csv`` ``member_accounts`` (each member 4624's ``account_name``, 050 item 8). No value
+comes from a command line.
 
 Cell spelling: None -> empty; lists / tuples -> ``;``-joined in their stored order (None items empty); logon IDs
 as a decimal integer plus a separate hex column (D1); times as ``fmt_us`` text.
@@ -30,15 +33,20 @@ from .hops import Hop
 from .identity import IdentityRow
 from .linkids import link_id, link_sort_key, numbered_link_rows, ordered_link_rows
 from .links import LinkIndex
+from .nodes import PathNode
+from .paths import ChainEdge, HopPathFacts, Path, PathSet, edge_types_text, hop_clock_unreliable, hop_order
 from .source import METHOD_TARGET_ONLY, LinkRow
 from .tiers import ACCOUNT_NONE, HopVerdicts, SessionVerdict
 
 __all__ = ["LINKS_COLUMNS", "ARTEFACT_COLUMNS", "IDENTITY_COLUMNS", "LINKS_FILE", "ARTEFACT_FILE", "IDENTITY_FILE",
            "TIER_NO_SESSION", "BASIS_NO_SESSION", "BASIS_TARGET_ONLY", "cell", "link_id", "ordered_link_rows",
            "link_sort_key", "numbered_link_rows", "link_row", "link_rows", "artefact_row", "artefact_rows",
-           "identity_row", "identity_rows", "csv_text"]
+           "identity_row", "identity_rows", "csv_text", "HOPS_FILE", "PATHS_FILE", "EDGES_FILE", "NODES_FILE",
+           "HOPS_COLUMNS", "PATHS_COLUMNS", "EDGES_COLUMNS", "NODES_COLUMNS", "CHAIN_SEPARATOR", "hop_row",
+           "hop_rows", "path_row", "path_rows", "edge_row", "edge_rows", "node_row", "node_rows"]
 
 LINKS_FILE, ARTEFACT_FILE, IDENTITY_FILE = "links.csv", "hop_artefacts.csv", "hop_identity.csv"
+HOPS_FILE, PATHS_FILE, EDGES_FILE, NODES_FILE = "hops.csv", "paths.csv", "path_edges.csv", "path_nodes.csv"
 
 # Spec 03_stitch section 3, in spec order. WHY tuples here and nowhere else: a test can compare them with the spec,
 # and ``csv_text`` refuses a row whose keys differ, so a column cannot be added or dropped silently.
@@ -61,6 +69,29 @@ IDENTITY_COLUMNS: tuple[str, ...] = (
     "open_session_types", "session_open_before_window", "end_unknown_session_uids", "not_applicable",
     "clock_unreliable",
 )
+HOPS_COLUMNS: tuple[str, ...] = (
+    "hop_id", "target_host", "source_ip", "ip_kind", "source_host", "first_utc", "first_utc_corrected",
+    "last_utc_corrected", "member_count", "member_logon_uids", "member_logon_ids", "member_logon_ids_hex",
+    "member_accounts", "member_ports", "mixed_account", "protocol", "rules", "chain_parent_count",
+    "chain_parent_hop_ids", "multi_chain_parent", "trigger_ids", "is_seed", "in_path", "authentication_packages",
+    "confirm", "confirm_event_uids", "inside_gap_max_ms", "prev_gap_ms", "next_gap_ms", "gap_near_threshold",
+    "splits_at_1s", "merges_at_3s", "service_install_count", "shares_port_with_hops", "followup_logon_uids",
+    "followup_logon_count", "candidate_count", "best_tier", "evidence_before_range", "evidence_after_range",
+    "supporting_span_ms", "clock_unreliable", "gate_clock_unreliable",
+)
+PATHS_COLUMNS: tuple[str, ...] = (
+    "path_id", "hop_ids", "hosts", "n_hops", "seed_trigger_ids", "merged_from", "isolated", "edge_types",
+    "shared_source_session_with", "shared_event_with",
+)
+EDGES_COLUMNS: tuple[str, ...] = (
+    "path_id", "from_hop_id", "to_hop_id", "link_type", "time_delta_ms", "order_within_tolerance", "clock_unreliable",
+)
+NODES_COLUMNS: tuple[str, ...] = (
+    "path_id", "hop_id", "role", "context", "host", "session_id", "event_uid", "link_id",
+)
+# 050 item 1: ``merged_from`` chains are ``|``-joined (each chain is ``h>h``), because ``;`` already separates
+# list items in every other column.
+CHAIN_SEPARATOR = "|"
 
 # 049 item 4: what a row with no session carries (an unresolved process row or the ``target_only`` row).
 TIER_NO_SESSION = "D"
@@ -253,6 +284,151 @@ def identity_rows(li: LinkIndex) -> list[dict[str, str]]:
     """Every identity row in ``li.identity`` order (``identity.build_identity`` already sorts them: hop id,
     account, dump time, dump uid)."""
     return [identity_row(r) for r in li.identity]
+
+
+# ---------------------------------------------------------------- hops.csv (T7.5)
+
+def hop_row(hop: Hop, li: LinkIndex, facts: HopPathFacts) -> dict[str, str]:
+    """One ``hops.csv`` row (spec 3), field by field.
+
+    Member columns are parallel, one item per member in member order: the member's representative uid (its ST-05
+    copies are in ``path_nodes.csv``), the logon ID as a decimal integer and as hex (D1), the 4624
+    ``account_name`` (a DB field, 050 item 8) and the source port. ``candidate_count`` = distinct candidate
+    sessions over all methods (``candidate_count_all``); ``best_tier`` from the T7.4 verdicts (D with no session,
+    ST-49); ``clock_unreliable`` = ``paths.hop_clock_unreliable`` (ST-02 both parts, the edge flag's input).
+    Path columns from ``HopPathFacts`` (ST-72, ST-23). Follow-up logons: their representative uids (ST-26).
+    """
+    sl = li.links.get(hop.hop_id)
+    hv = li.verdicts.get(hop.hop_id)
+    if sl is None or hv is None:
+        raise ValueError(f"{hop.hop_id}: no link rows or no T7.4 verdicts")
+    confirm, confirm_uids = li.confirm[hop.hop_id]
+    values: dict[str, Any] = {
+        "hop_id": hop.hop_id,
+        "target_host": hop.target_host,
+        "source_ip": hop.source_ip,
+        "ip_kind": hop.ip_kind,
+        "source_host": sl.source_host,
+        "first_utc": hop.first_utc,
+        "first_utc_corrected": hop.first_utc_corrected,
+        "last_utc_corrected": hop.last_utc_corrected,
+        "member_count": hop.member_count,
+        "member_logon_uids": [m.uid for m in hop.members],
+        "member_logon_ids": [m.logon_id for m in hop.members],
+        "member_logon_ids_hex": [m.logon_id_hex for m in hop.members],
+        "member_accounts": [m.account for m in hop.members],
+        "member_ports": [m.source_port for m in hop.members],
+        "mixed_account": hop.mixed_account,
+        "protocol": hop.protocol,
+        "rules": hop.rules,
+        "chain_parent_count": facts.chain_parent_count,
+        "chain_parent_hop_ids": facts.chain_parent_hop_ids,
+        "multi_chain_parent": facts.multi_chain_parent,
+        "trigger_ids": hop.trigger_ids,
+        "is_seed": hop.is_seed,
+        "in_path": facts.in_path,
+        "authentication_packages": hop.authentication_packages,
+        "confirm": confirm,
+        "confirm_event_uids": list(confirm_uids),
+        "inside_gap_max_ms": hop.inside_gap_max_ms,
+        "prev_gap_ms": hop.prev_gap_ms,
+        "next_gap_ms": hop.next_gap_ms,
+        "gap_near_threshold": hop.gap_near_threshold,
+        "splits_at_1s": hop.splits_at_1s,
+        "merges_at_3s": hop.merges_at_3s,
+        "service_install_count": li.artefacts.service_install_count.get(hop.hop_id, 0),
+        "shares_port_with_hops": hop.shares_port_with_hops,
+        "followup_logon_uids": [m.uid for m in hop.followups],
+        "followup_logon_count": len(hop.followups),
+        "candidate_count": sl.candidate_count_all,
+        "best_tier": hv.best_tier,
+        "evidence_before_range": sl.evidence_before_range,
+        "evidence_after_range": sl.evidence_after_range,
+        "supporting_span_ms": li.artefacts.supporting_span_ms.get(hop.hop_id),
+        "clock_unreliable": hop_clock_unreliable(hop, sl),
+        "gate_clock_unreliable": hop.gate_clock_unreliable,
+    }
+    return {c: cell(values[c]) for c in HOPS_COLUMNS}
+
+
+def hop_rows(li: LinkIndex, pathset: PathSet) -> list[dict[str, str]]:
+    """Every hop, seed or not, by hop id (= time order, spec 3): no hop is dropped (ST-04). ValueError when a hop
+    has no path facts (``build_paths`` makes them for every hop)."""
+    out: list[dict[str, str]] = []
+    for hop in sorted(li.hopset.hops, key=lambda h: h.hop_id):
+        facts = pathset.hop_facts.get(hop.hop_id)
+        if facts is None:
+            raise ValueError(f"{hop.hop_id}: no path facts")
+        out.append(hop_row(hop, li, facts))
+    return out
+
+
+# ---------------------------------------------------------------- paths.csv, path_edges.csv, path_nodes.csv (T7.5)
+
+def path_row(p: Path) -> dict[str, str]:
+    """One ``paths.csv`` row: lists ``;``-joined (``hosts`` one ``source>target`` per hop, 050 item 6),
+    ``merged_from`` chains ``|``-joined, ``edge_types`` as ``host_time:N;session:M``."""
+    values: dict[str, Any] = {
+        "path_id": p.path_id,
+        "hop_ids": p.hop_ids,
+        "hosts": p.hosts,
+        "n_hops": p.n_hops,
+        "seed_trigger_ids": p.seed_trigger_ids,
+        "merged_from": CHAIN_SEPARATOR.join(p.merged_from),
+        "isolated": p.isolated,
+        "edge_types": edge_types_text(p.edge_types),
+        "shared_source_session_with": p.shared_source_session_with,
+        "shared_event_with": p.shared_event_with,
+    }
+    return {c: cell(values[c]) for c in PATHS_COLUMNS}
+
+
+def path_rows(pathset: PathSet) -> list[dict[str, str]]:
+    """Every path in path-id order (= order of each path's first hop, 050 item 1)."""
+    return [path_row(p) for p in sorted(pathset.paths, key=lambda p: p.path_id)]
+
+
+def edge_row(pid: str, e: ChainEdge) -> dict[str, str]:
+    """One ``path_edges.csv`` row (ST-72). ``supporting_sessions`` is not a spec column and is not written."""
+    values: dict[str, Any] = {
+        "path_id": pid,
+        "from_hop_id": e.from_hop_id,
+        "to_hop_id": e.to_hop_id,
+        "link_type": e.link_type,
+        "time_delta_ms": e.time_delta_ms,
+        "order_within_tolerance": e.order_within_tolerance,
+        "clock_unreliable": e.clock_unreliable,
+    }
+    return {c: cell(values[c]) for c in EDGES_COLUMNS}
+
+
+def edge_rows(li: LinkIndex, pathset: PathSet) -> list[dict[str, str]]:
+    """Every edge with its path id, by (path id, from-hop order, to-hop order). Every edge joins two hops of
+    one path (both ends are chainable seeds of one component), so the row count equals ``pathset.edges``."""
+    order = {h.hop_id: hop_order(h) for h in li.hopset.hops}
+    rows = [(p.path_id, order[e.from_hop_id], order[e.to_hop_id], e) for p in pathset.paths for e in p.edges]
+    return [edge_row(pid, e) for pid, _f, _t, e in sorted(rows, key=lambda r: r[:3])]
+
+
+def node_row(n: PathNode) -> dict[str, str]:
+    """One ``path_nodes.csv`` row (ST-71). ``session_id`` is the decimal logon ID (D1); ``us`` only orders rows
+    and is not a spec column."""
+    values: dict[str, Any] = {
+        "path_id": n.path_id,
+        "hop_id": n.hop_id,
+        "role": n.role,
+        "context": n.context,
+        "host": n.host,
+        "session_id": n.session_id,
+        "event_uid": n.event_uid,
+        "link_id": n.link_id,
+    }
+    return {c: cell(values[c]) for c in NODES_COLUMNS}
+
+
+def node_rows(nodes: Iterable[PathNode]) -> list[dict[str, str]]:
+    """Every node in ``nodes.build_nodes`` order (path, hop order, time, role, uid, link id)."""
+    return [node_row(n) for n in nodes]
 
 
 # ---------------------------------------------------------------- CSV text

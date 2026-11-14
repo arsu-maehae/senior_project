@@ -34,6 +34,8 @@ ST-70..74 fix the path rules, but a few readings are left open: how "maximal cha
    - Follow-up logons' sessions add no nodes. Link ids are the `links.csv` ids, from one shared numbering function.
 8. **STT-13.** `hops.csv` `member_accounts` joins the blanked account columns of 049 item 7, with the same check that each value equals its DB field. `report.md` holds no command, account, image or target-side name text.
 
+9. **IPv4 literals in the STT-13 scan (task 5, proposed; owner to confirm).** Spec §2 says no output file contains any part of a command line. `hops.csv` `source_ip` (a spec column) and the `lab_host_ips` parameters in `stats.json` / `run_info.json` hold the lab IPs. Real command lines name hosts by IP (for example a UNC path to `192.168.50.22`), so they share 12–13 character substrings (`192.168.50.2`) with those files. In 9 of 9 trials these were the only hits. The all-files scan therefore blanks IPv4 literals, like the account and image columns of 049 item 7: they are DB fields (4624 `IpAddress`) and parameters, not command text. `report.md` is scanned with no blanking and has 0 hits.
+
 ## Consequences
 - s05_t00 has one merged path, {s05-t1, s05-h1, s05-h2}, and s05-h2 is flagged `multi_chain_parent` (L-ST2). Every other development seed is its own path.
 - No development result depends on items 2 (boundary), 3 or the tier part of item 7. Synthetic tests (STT-14) cover each of them.

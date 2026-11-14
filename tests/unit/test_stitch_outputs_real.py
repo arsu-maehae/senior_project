@@ -19,6 +19,7 @@ import csv
 import functools
 import io
 import json
+import re
 import sqlite3
 import sys
 from dataclasses import dataclass
@@ -50,6 +51,9 @@ PARAMS = StitchParams()
 ENDPOINTS = {h for h in PARAMS.lab_host_ips if h.startswith("ep-")}
 TABLE_ORDER = ["s02_t00", "s02_t01", "s03_t00", "s03_t01", "s04_t00", "s05_t00", "s06_t00", "s06_t01", "s07_t00"]
 PORT, E4648, CMD, TARGET_ONLY = "sysmon3_port", "source_4648", "cmdline_target", "target_only"
+# T7.5: `python -m stitch` writes ten files (spec 03_stitch section 3)
+TEN_FILES = ["hop_artefacts.csv", "hop_identity.csv", "hops.csv", "links.csv", "path_edges.csv", "path_nodes.csv",
+             "paths.csv", "report.md", "run_info.json", "stats.json"]
 
 # Row counts of 049 / task 3 (table order above).
 LINK_ROWS = dict(zip(TABLE_ORDER, [27, 30, 25, 30, 27, 46, 46, 37, 33]))
@@ -672,7 +676,7 @@ def test_main_twice_exits_0_and_the_three_csvs_are_byte_identical_and_equal_the_
            "hop_identity.csv": out.csv_text(out.IDENTITY_COLUMNS, r.ids)}
     for name, text in mem.items():
         assert one[name] == text.encode("utf-8"), f"{trial}: {name} differs from outputs.csv_text of the in-memory rows"
-    assert w["extra"] == ["hop_artefacts.csv", "hop_identity.csv", "links.csv", "run_info.json"], f"{trial}: files {w['extra']}"
+    assert w["extra"] == sorted(TEN_FILES), f"{trial}: files {w['extra']}"
 
 
 @pytest.mark.parametrize("trial", DEV)
@@ -819,3 +823,119 @@ def test_the_four_blanked_columns_equal_the_db_field_of_the_event_each_row_refer
     print(f"{trial}: dump rows checked {n_img}, identity accounts {n_acc}, session accounts {n_sess}, dump_account case-only differences {case_only}")
     assert bad == [], f"{len(bad)} cell(s) differ from their DB field: " + " | ".join(bad[:10])
     assert case_only == 0, f"{trial}: {case_only} dump_account value(s) equal the DB field only up to case"
+
+
+# ================================================================================================ 5b. STT-13 over all ten files (T7.5)
+ALL_BLANK = dict(BLANK, **{"hops.csv": {"member_accounts"}})        # 049 item 7 plus decision 050 item 8
+WHOLE_TEXT = ("stats.json", "report.md", "run_info.json")
+# An IPv4 literal is an event field (the 4624 IpAddress, `hops.csv` `source_ip`) or lab configuration (`lab_host_ips`
+# in the parameters of stats.json / run_info.json), not command content; a command line that names a lab host by IP
+# shares up to 13 characters of it (`192.168.50.22`). The scan therefore blanks IPv4 literals, nothing else (finding
+# reported to the owner: spec 2 "no part of a command line" cannot be read literally for IP addresses).
+IPV4 = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}")
+
+
+def _folder_bytes(trial: str) -> dict[str, bytes]:
+    written(trial)                                             # runs `python -m stitch` (twice, in process)
+    folder = REPO / "out" / "stitch" / trial
+    return {p.name: p.read_bytes() for p in sorted(folder.iterdir())}
+
+
+def _command_grams(trial: str) -> tuple[set[str], int]:
+    con = _db(trial)
+    try:
+        grams: set[str] = set()
+        n = 0
+        for (c,) in con.execute("select command_line from events_dedup where command_line is not null and command_line != ''"):
+            n += 1
+            grams |= _grams(c.casefold())
+    finally:
+        con.close()
+    return grams, n
+
+
+@pytest.mark.parametrize("trial", DEV)
+def test_all_ten_files_are_written_and_the_run_info_lists_the_other_nine(trial):
+    import hashlib
+    files = _folder_bytes(trial)
+    assert sorted(files) == sorted(TEN_FILES), f"{trial}: files {sorted(files)}"
+    info = json.loads(files["run_info.json"].decode("utf-8"))
+    assert sorted(info["files"]) == sorted(n for n in TEN_FILES if n != "run_info.json")
+    for n, f in info["files"].items():
+        assert f["sha256"] == hashlib.sha256(files[n]).hexdigest(), f"{trial}: {n} sha256"
+        if n in ("stats.json", "report.md"):
+            assert f["rows"] is None, f"{trial}: {n} rows"
+        else:
+            assert f["rows"] == len(_read(files[n])), f"{trial}: {n} rows"
+
+
+@pytest.mark.parametrize("trial", DEV)
+def test_no_12_character_command_substring_in_any_of_the_ten_files_after_blanking(trial):
+    files = _folder_bytes(trial)
+    where: dict[str, set[tuple[str, str]]] = collections.defaultdict(set)     # gram -> (file, column)
+    for name, blob in files.items():
+        if name in WHOLE_TEXT:
+            for line in blob.decode("utf-8").casefold().splitlines():
+                for g in _grams(IPV4.sub("", line)):
+                    where[g].add((name, "<text>"))
+            continue
+        for row in _read(blob):
+            for col, val in row.items():
+                if col in ALL_BLANK.get(name, set()) or not val:
+                    continue
+                for piece in IPV4.sub("", val.casefold()).split(";"):
+                    for g in _grams(piece):
+                        where[g].add((name, col))
+    grams, n_lines = _command_grams(trial)
+    hit = {g: where[g] for g in grams if g in where}
+    cols = collections.Counter(c for v in hit.values() for c in v)
+    assert n_lines > 0
+    assert not hit, f"{trial}: {len(hit)} twelve-character substring(s) of {n_lines} command lines, by (file, column): {dict(cols)}"
+
+
+@pytest.mark.parametrize("trial", DEV)
+def test_hops_csv_member_accounts_are_the_account_name_of_each_member_4624(trial):
+    files = _folder_bytes(trial)
+    rows = _read(files["hops.csv"])
+    con = _db(trial)
+    bad: list[str] = []
+    checked = 0
+    try:
+        for r in rows:
+            uids = r["member_logon_uids"].split(";")
+            accts = r["member_accounts"].split(";")
+            if not (len(uids) == len(accts) == int(r["member_count"])):
+                bad.append(f"{r['hop_id']}: {len(uids)} uids, {len(accts)} accounts, member_count {r['member_count']}")
+                continue
+            for uid, a in zip(uids, accts):
+                row = con.execute("select channel, event_id, account_name from events_dedup where event_uid = ?", (uid,)).fetchone()
+                checked += 1
+                if row is None or (row["channel"], row["event_id"]) != ("Security", 4624) or (row["account_name"] or "") != a:
+                    bad.append(f"{r['hop_id']}: member {uid} account cell differs from the 4624 account_name")
+    finally:
+        con.close()
+    assert checked > 0
+    assert bad == [], f"{trial}: {len(bad)} cell(s): " + " | ".join(bad[:10])
+
+
+@pytest.mark.parametrize("trial", DEV)
+def test_report_md_has_no_blanking_no_command_substring_and_no_account_or_image_text(trial):
+    files = _folder_bytes(trial)
+    report = files["report.md"].decode("utf-8").casefold()
+    grams, n_lines = _command_grams(trial)
+    hits = sum(1 for g in grams if g in report)
+    assert n_lines > 0
+    assert hits == 0, f"{trial}: {hits} twelve-character command substring(s) in report.md (count only)"
+    cells: set[str] = set()
+    for r in _read(files["hops.csv"]):
+        cells |= {a for a in r["member_accounts"].split(";") if a}
+    for r in _read(files["hop_identity.csv"]):
+        cells |= {r["account"], r["dump_account"], r["dump_source_image"]} - {""}
+    for r in _read(files["links.csv"]):
+        cells |= {r["source_session_account"]} - {""}
+        cells |= {n for n in r["name_check_names"].split(";") if n}
+    for r in _read(files["hop_artefacts.csv"]):
+        cells |= {n for n in r["names"].split(";") if n}
+    assert cells
+    leaked = sorted(c for c in cells if c.casefold() in report)
+    assert leaked == [], f"{trial}: {len(leaked)} account / image / name cell value(s) appear in report.md (count only)"
