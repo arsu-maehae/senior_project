@@ -23,6 +23,7 @@ sys.path.insert(0, str(REPO / "src"))
 from answer_key.db import sha256_file  # noqa: E402
 from clock_offset import params as co_params  # noqa: E402
 from gate.timeutil import US_PER_MS  # noqa: E402
+from stitch.artefacts import build_artefacts  # noqa: E402
 from stitch.check_index import check_text, run_check  # noqa: E402
 from stitch.cmdtext import read_4648_targets, read_command_results, target_name_forms  # noqa: E402
 from stitch.hops import build_hops  # noqa: E402
@@ -498,3 +499,223 @@ def test_hops_are_identical_across_two_builds_and_the_db_is_unchanged(trial):
     assert view(ld.hs.hops) == view(again.hops)
     gate_sha = json.loads((ld.paths.gate_dir / "stats.json").read_text(encoding="utf-8"))["db"]["sha256_after"]
     assert sha256_file(ld.paths.db) == gate_sha
+
+
+# ================================================================================================ T7.3 task 3: artefacts
+# Plan section 5 C6, spec 03_stitch STA-04 and 10.3 on the nine development trials. Artefacts are built once per trial from
+# the cached hops (`_hopped`) and a fresh session index. Messages carry counts, ids, uids and target-side names only.
+REMOTE_INSTALLS = {"s02_t00": 0, "s02_t01": 1, "s03_t00": 0, "s03_t01": 0, "s04_t00": 2, "s05_t00": 1, "s06_t00": 1,
+                   "s06_t01": 1, "s07_t00": 2}
+# Ties: the spec says the nearest copy is 50-182 ms before the install, measured to the 4697. The code measures to the
+# EARLIEST event of the install (decision 048 reading), which gives 50-181 ms on the development trials, so the test accepts
+# 40-200 ms. Task 0 values: s04_t00 87 and 50, s05_t00 130, s07_t00 122 and 118, s02_t01 181.
+TIE_DELTA_MS = (40, 200)
+
+
+@functools.lru_cache(maxsize=None)
+def _artefacted(trial: str):
+    ld = _hopped(trial)
+    if ld is None:
+        return None
+    sessions = build_index(trial, ld.scan, PARAMS).sessions
+    return build_artefacts(ld.hs, ld.scan, sessions, ld.gate, PARAMS)
+
+
+def artefacts(trial: str):
+    got = _artefacted(trial)
+    if got is None:
+        pytest.skip(f"{trial}: trial DB or gate output missing")
+    return got
+
+
+def remote_installs(art) -> list:
+    """Installs that are a hop artefact: by a member's 4697, or a 7045 alone attached through a tie."""
+    return [i for i in art.installs if i.hop_id is not None or i.tie_hop_ids]
+
+
+@pytest.mark.parametrize("trial", DEV)
+def test_c6_remote_installs_per_trial_each_with_a_4697_and_a_7045(trial):
+    art = artefacts(trial)
+    remote = remote_installs(art)
+    assert len(remote) == REMOTE_INSTALLS[trial], f"{trial}: {len(remote)} remote installs"
+    assert all(i.uids_4697 and i.uids_7045 for i in remote), f"{trial}: a remote install lacks its 4697 or its 7045"
+    rows = [r for r in art.rows if r.kind == "service_install"]
+    assert sorted(r.ref_id for r in rows) == sorted(i.install_id for i in remote)
+    assert all(r.method == "logon_id" and r.confidence_tier == "A" for r in rows)
+    print(f"C6 {trial}: remote installs {len(remote)} of {len(art.installs)}, "
+          f"names {sorted(i.service_name for i in remote)}")
+
+
+def test_c6_eight_remote_installs_over_the_nine_trials():
+    assert sum(len(remote_installs(artefacts(t))) for t in DEV) == sum(REMOTE_INSTALLS.values()) == 8
+
+
+def test_c6_exactly_six_installs_have_a_tied_burst_each_exactly_one_just_before_the_install():
+    tied = []
+    for t in DEV:
+        art = artefacts(t)
+        per_install: dict[str, list] = {}
+        for tie in art.ties:
+            per_install.setdefault(tie.install_id, []).append(tie)
+        for iid, ties in per_install.items():
+            assert len(ties) == 1 and ties[0].candidate_count == 1, f"{t} {iid}: {len(ties)} tied bursts"
+            lo, hi = TIE_DELTA_MS
+            assert lo <= ties[0].delta_ms <= hi, f"{t} {iid}: copy {ties[0].delta_ms} ms before the install"
+            assert ties[0].method == "file_name_time"
+            tied.append((t, iid, ties[0].delta_ms))
+        assert {i.install_id for i in remote_installs(art)} >= set(per_install), f"{t}: a tie of a non-remote install"
+    print(f"C6 ties (trial, install, ms): {tied}")
+    assert len(tied) == 6, f"{len(tied)} installs with a tie"
+    assert sorted(t for t, _, _ in tied) == ["s02_t01", "s04_t00", "s04_t00", "s05_t00", "s07_t00", "s07_t00"]
+
+
+@pytest.mark.parametrize("trial", ["s06_t00", "s06_t01"])
+def test_c6_the_benignmon_install_has_no_tie_and_no_same_name_burst(trial):
+    art = artefacts(trial)
+    benign = [i for i in art.installs if "benignmon" in i.service_name.lower()]
+    assert len(benign) == 1, f"{trial}: {len(benign)} BenignMon installs"
+    inst = benign[0]
+    assert inst.hop_id is not None and inst.binary_key
+    assert not [t for t in art.ties if t.install_id == inst.install_id]
+    assert inst.untied_same_name_bursts == []
+    same = [b.burst_id for b in art.bursts if any(name == inst.binary_key for name, _ in b.file_writes)]
+    assert same == [], f"{trial}: {len(same)} burst(s) write {inst.binary_name}"
+    row = next(r for r in art.rows if r.ref_id == inst.install_id)
+    assert row.untied_same_name_bursts == []
+
+
+def _user_share_sessions(art) -> dict[str, list]:
+    out: dict[str, list] = {}
+    for b in art.bursts:
+        if not b.member_machine_account:
+            out.setdefault(b.member_uid, []).append(b)
+    return out
+
+
+def test_c6_13_user_share_sessions_and_exactly_one_with_more_than_one_burst():
+    per_trial, multi = {}, []
+    for t in DEV:
+        art = artefacts(t)
+        sessions = _user_share_sessions(art)
+        per_trial[t] = len(sessions)
+        assert art.counts["user_share_sessions"] == len(sessions)
+        multi += [(t, uid, len(bs)) for uid, bs in sessions.items() if len(bs) > 1]
+    print(f"C6 user share sessions per trial {per_trial}; with several bursts {multi}")
+    assert sum(per_trial.values()) == 13
+    assert len(multi) == 1 and multi[0][0] == "s07_t00" and multi[0][2] == 2
+
+
+def test_c6_the_multi_burst_session_is_s07_t00_logon_0x49cdfa_with_bursts_at_about_0_and_95_3_s():
+    ld, art = hopped("s07_t00"), artefacts("s07_t00")
+    bursts = sorted((b for b in art.bursts if b.logon_id_hex == "0x49cdfa"), key=lambda b: b.first_us_raw)
+    assert len(bursts) == 2
+    member = next(m for h in ld.hs.hops for m in h.members if m.uid == bursts[0].member_uid)
+    assert bursts[1].member_uid == bursts[0].member_uid == member.uid
+    starts = [(b.first_us_raw - member.us_raw) / 1e6 for b in bursts]
+    assert 0 <= starts[0] < 2.0, f"first burst {starts[0]} s after the 4624"
+    assert 94.5 <= starts[1] <= 96.0, f"second burst {starts[1]} s after the 4624"
+    assert not member.machine_account
+
+
+def _s07_key_hops():
+    ld, key = hopped("s07_t00"), load_key("s07_t00")
+    out = {}
+    for kh in key["hops"]:
+        if kh["hop_id"] in ("s07-h-x", "s07-h-y"):
+            out[kh["hop_id"]] = hop_with_uid(ld, key_logon_uids(ld, key, kh)[0])[0]
+    assert set(out) == {"s07-h-x", "s07-h-y"}
+    return out
+
+
+def _burst_rows(art, hop) -> list:
+    return [r for r in art.rows if r.hop_id == hop.hop_id and r.kind == "share_burst"]
+
+
+def test_c6_sta04_y_holds_the_ypay_copy_logged_under_x_and_x_holds_only_its_own_copy():
+    art = artefacts("s07_t00")
+    hops = _s07_key_hops()
+    x, y = hops["s07-h-x"], hops["s07-h-y"]
+    assert x.hop_id != y.hop_id
+    yr = [r for r in _burst_rows(art, y) if "ypay.exe" in [n.lower() for n in r.names]]
+    assert len(yr) == 1, f"{len(yr)} Ypay.exe burst rows on Y's hop"
+    r = yr[0]
+    assert (r.method, r.confidence_tier) == ("file_name_time", "B")
+    assert r.logged_under_hop_id == x.hop_id and r.hop_id == y.hop_id and r.candidate_count == 1
+    xr = _burst_rows(art, x)
+    assert len(xr) == 1, f"{len(xr)} burst rows on X's hop"
+    assert [n.lower() for n in xr[0].names] == ["xpay.exe"]
+    assert (xr[0].method, xr[0].confidence_tier) == ("logon_id", "A")
+    assert not any("ypay.exe" in [n.lower() for n in rr.names] for rr in xr)
+    assert not any(u in rr.event_uids for rr in art.rows if rr.hop_id == x.hop_id for u in r.event_uids)
+
+
+def test_c6_sta04_x_and_y_each_have_exactly_one_install_and_they_differ():
+    art = artefacts("s07_t00")
+    hops = _s07_key_hops()
+    installs = {}
+    for name, h in hops.items():
+        rows = [r for r in art.rows if r.hop_id == h.hop_id and r.kind == "service_install"]
+        assert len(rows) == 1, f"{name}: {len(rows)} install rows"
+        assert art.service_install_count[h.hop_id] == 1
+        installs[name] = rows[0]
+    assert installs["s07-h-x"].ref_id != installs["s07-h-y"].ref_id
+    assert installs["s07-h-x"].event_uids != installs["s07-h-y"].event_uids
+    names = {n.lower() for n in installs["s07-h-x"].names} | {n.lower() for n in installs["s07-h-y"].names}
+    assert {"xpay.exe", "ypay.exe"} <= names
+    # each install is tied to a copy; the Y install's tied burst is the one logged under X's logon
+    ties = {t.install_id: t for t in art.ties}
+    assert set(ties) >= {installs["s07-h-x"].ref_id, installs["s07-h-y"].ref_id}
+    assert ties[installs["s07-h-y"].ref_id].logged_under_hop_id == hops["s07-h-x"].hop_id
+    assert ties[installs["s07-h-x"].ref_id].logged_under_hop_id == hops["s07-h-x"].hop_id
+
+
+@pytest.mark.parametrize("trial", DEV)
+def test_every_gate_supporting_uid_of_a_hop_is_held_by_an_artefact_row_or_was_moved(trial):
+    art = artefacts(trial)
+    left = {h: v for h, v in art.gate_support_not_attached.items() if v}
+    assert left == {}, f"{trial}: {sum(len(v) for v in left.values())} supporting uid(s) unattached on {sorted(left)}"
+    assert art.counts["hops_with_gate_support_not_attached"] == 0
+
+
+@pytest.mark.parametrize("trial", DEV)
+def test_no_hop_has_more_than_one_install_and_counts_agree_with_the_rows(trial):
+    art, ld = artefacts(trial), hopped(trial)
+    assert set(art.service_install_count) == {h.hop_id for h in ld.hs.hops}
+    assert max(art.service_install_count.values()) <= 1, f"{trial}: a hop with more than one install"
+    for h in ld.hs.hops:
+        assert art.service_install_count[h.hop_id] == sum(1 for r in art.rows
+                                                          if r.hop_id == h.hop_id and r.kind == "service_install")
+    assert art.counts["hops_with_more_than_one_install"] == 0
+
+
+@pytest.mark.parametrize("trial", DEV)
+def test_every_artefact_uid_is_in_the_window_and_every_row_is_well_formed(trial):
+    art, ld = artefacts(trial), hopped(trial)
+    in_window = {u for r in ld.scan.in_window + ld.scan.link_rows for u in r["event_uids"]}
+    lookback = {u for r in ld.scan.lookback for u in r["event_uids"]}
+    uids = [u for r in art.rows for u in r.event_uids]
+    assert set(uids) <= in_window, f"{trial}: {len(set(uids) - in_window)} artefact uid(s) not in the window"
+    assert set(uids).isdisjoint(lookback)
+    hop_ids = {h.hop_id for h in ld.hs.hops}
+    assert {r.hop_id for r in art.rows} <= hop_ids
+    keys = [(r.hop_id, r.kind, tuple(r.event_uids), r.ref_id) for r in art.rows]
+    assert len(keys) == len(set(keys)), f"{trial}: a duplicated artefact row"
+    assert [(r.hop_id, r.first_us_raw, r.kind, r.event_uids[0]) for r in art.rows] == sorted(
+        (r.hop_id, r.first_us_raw, r.kind, r.event_uids[0]) for r in art.rows)
+    for r in art.rows:
+        assert r.supporting_span_ms >= 0 and r.candidate_count >= 1 and r.confidence_tier in ("A", "B", "C")
+    assert all(art.supporting_span_ms[h] is None or art.supporting_span_ms[h] >= 0 for h in hop_ids)
+    held = {r.hop_id for r in art.rows}
+    assert {h for h, v in art.supporting_span_ms.items() if v is None} == hop_ids - held
+    # every follow-up group is exactly one row
+    assert sum(1 for r in art.rows if r.kind == "followup_logon") == len(ld.hs.followups)
+
+
+@pytest.mark.parametrize("trial", DEV)
+def test_artefacts_are_identical_across_two_builds(trial):
+    ld, art = hopped(trial), artefacts(trial)
+    again = build_artefacts(ld.hs, ld.scan, build_index(trial, ld.scan, PARAMS).sessions, ld.gate, PARAMS)
+    view = lambda a: ([(r.hop_id, r.kind, r.method, r.confidence_tier, r.candidate_count, r.time_delta_ms,  # noqa: E731
+                        r.supporting_span_ms, r.event_uids, r.ref_id) for r in a.rows],
+                      [(t.install_id, t.burst_id, t.hop_id, t.delta_ms) for t in a.ties], a.counts)
+    assert view(art) == view(again)

@@ -50,6 +50,10 @@ Spec 03_stitch fixes the T7.3 rules but leaves some implementation readings open
    - WinRM 91 and inbound 3389 (`ip_time`): the `gate_tier` of the pairing gate row.
    - Follow-up logons (`port_reuse`): **C**.
 10. **Installs** are paired with `gate.classify.pair_services` (GT-12). A share or service event belongs to a member only when it is in the window and in the member's own session (the same session key).
+    *Added in task 3:*
+    - **Install facts.** The install pairing tolerance is the gate's own `service_pair_s` (5 s, imported, not copied). The install time is the earlier of its 4697 and 7045; the 7045 is logged 0.7–3.1 ms first in every development install. Measured to it, the copy-to-install gap is 50–181 ms; §10.3's "50–182 ms" was measured to the 4697. Service name and path come from the 4697, and from the 7045 only when the 4697 path is blank.
+    - **Ties.** A burst ties on its last same-name write. A tied burst is attached to every hop whose install it ties, and stays on its own hop only if one of those installs belongs to its own hop. `candidate_count` is 1 for a `logon_id` row, and the install's number of tied bursts for a moved one.
+    - **Other rows.** One `winrm_91` / `rdp_connection` row per gate trigger row and kind. `wsmprovhost` needs the member's own session, like shares and installs. A follow-up row's `time_delta_ms` is measured from the hop's first member, and follow-up rows count in the hop span.
 11. **Kerberos** (ST-47): equal GUIDs, compared lower-case without braces, with an in-window dc01 4769. An all-zero GUID never confirms. A match outside the window is counted, not used. It never sets a session.
 12. **Out-of-range evidence** (ST-42) is counted from in-window events only.
 13. **Truncated target logs (owner answer on s06_t01; narrowed after the pre-check).**
