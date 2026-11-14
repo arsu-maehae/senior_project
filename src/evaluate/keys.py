@@ -259,7 +259,8 @@ def key_sessions(key_hop: Mapping[str, Any], event_keys: Mapping[str, Mapping[st
         epochs = epochs_of_logon_id(rows, bounds)
         uid, source = _direct_uid(key_hop, lid), "direct"
         if uid is None:
-            times = [iso_to_us(event_keys[u]["time_utc"]) for u in commands if (event_keys.get(u) or {}).get("time_utc")]
+            times = [iso_to_us(event_keys[u]["time_utc"]) for u in commands
+                     if (event_keys.get(u) or {}).get("time_utc")]
             uid = lookup_session_uid(rows, bounds, min(times)) if times else None
             source = "lookup" if uid is not None else "none"
         out.append(KeySession(host, lid, uid, source, tuple(commands), epochs))

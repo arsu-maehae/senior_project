@@ -14,21 +14,35 @@ import io
 import json
 import re
 import sqlite3
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 from .params import (APPROVED_KEYS_REL, BOOT_CHANNEL, BOOT_SHUTDOWN_IDS, BOOT_STARTUP_IDS, DB_REL, DB_SUFFIX,
-                     DEVELOPMENT_TRIALS, KEY_LOCK_HEADER, KEY_LOCK_REL, SPLIT_DEVELOPMENT, SPLIT_TEST, STITCH_FILES,
-                     STITCH_RUN_INFO, TRIAL_ID_PATTERN)
+                     DEVELOPMENT_TRIALS, KEY_LOCK_HEADER, KEY_LOCK_REL, PROTOCOL_GROUPS, SPLIT_DEVELOPMENT,
+                     SPLIT_TEST, STITCH_FILES, STITCH_RUN_INFO, TRIAL_ID_PATTERN)
 
 __all__ = ["EvalError", "StitchData", "KeyData", "EventRow", "LogonRow", "BootRow", "check_trial_allowed",
            "sha256_file", "sha256_bytes", "load_stitch", "key_path", "load_key", "check_key_lock", "db_path",
            "open_db_ro", "check_db_hash", "check_db_unchanged", "query_events", "query_logons", "query_boots",
-           "repo_relative"]
+           "repo_relative", "validate_stitch_rows", "validate_key_data"]
 
 _TRIAL_RE = re.compile(TRIAL_ID_PATTERN)
 _SHA_RE = re.compile(r"[0-9a-f]{64}")
+_INT_RE = re.compile(r"-?[0-9]+")
+_HEX_RE = re.compile(r"(0[xX])?[0-9a-fA-F]+")  # what keys.parse_hex accepts
+# The stitch columns the evaluation reads (spec 03 section 3); a header without one of them is refused.
+_HOP_COLUMNS: tuple[str, ...] = ("hop_id", "target_host", "source_host", "member_count", "member_logon_uids",
+                                 "member_logon_ids", "member_accounts", "protocol", "is_seed", "in_path",
+                                 "candidate_count", "best_tier", "evidence_before_range", "evidence_after_range",
+                                 "clock_unreliable")
+_LINK_COLUMNS: tuple[str, ...] = ("hop_id", "method", "session_methods", "source_host", "source_session_id",
+                                  "source_session_logon_uid", "confidence_tier", "link_rank", "tie",
+                                  "target_only_reason")
+_IDENTITY_COLUMNS: tuple[str, ...] = ("hop_id", "account", "dump_event_uid", "dump_account", "gap_ms", "order_ok",
+                                      "order_within_tolerance", "order_within_uncertainty", "open_session_uids",
+                                      "end_unknown_session_uids", "not_applicable")
 _VIEW = "events_dedup"
 _CHUNK = 500  # WHY: SQLite's default limit on bound parameters is 999; 500 leaves room.
 
@@ -142,9 +156,18 @@ def repo_relative(path: Path, repo: Path) -> str:
 
 # ---------------------------------------------------------------- stitch files (051 item 2)
 
-def _parse_csv(data: bytes) -> tuple[dict[str, str], ...]:
-    """CSV bytes (UTF-8) to a tuple of row dicts, text as written."""
-    return tuple(dict(r) for r in csv.DictReader(io.StringIO(data.decode("utf-8"), newline="")))
+def _parse_csv(name: str, data: bytes) -> tuple[dict[str, str], ...]:
+    """CSV bytes (UTF-8) to a tuple of row dicts, text as written; EvalError for undecodable text, a CSV syntax
+    error, or a row whose field count differs from the header (DictReader would give a ``None`` key or value)."""
+    try:
+        rows = tuple(dict(r) for r in csv.DictReader(io.StringIO(data.decode("utf-8"), newline="")))
+    except (UnicodeDecodeError, csv.Error) as exc:
+        raise EvalError(f"refused: stitch file {name} is not readable CSV ({exc})") from None
+    for i, r in enumerate(rows, start=1):
+        if None in r or any(v is None for v in r.values()):
+            raise EvalError(f"refused: stitch file {name} data row {i} has a field count that differs from the "
+                            f"header")
+    return rows
 
 
 def _expected_sha(run_info: Mapping[str, Any], name: str) -> str:
@@ -174,6 +197,8 @@ def load_stitch(stitch_dir: Path) -> StitchData:
         run_info = json.loads(raw[STITCH_RUN_INFO].decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise EvalError(f"refused: stitch run_info.json is not JSON ({exc})") from None
+    if not isinstance(run_info, dict) or not isinstance(run_info.get("files"), dict):
+        raise EvalError("refused: stitch run_info.json is not an object with a files map")
     shas = {n: sha256_bytes(b) for n, b in raw.items()}
     for name in STITCH_FILES:
         if name == STITCH_RUN_INFO:
@@ -184,11 +209,95 @@ def load_stitch(stitch_dir: Path) -> StitchData:
         stats = json.loads(raw["stats.json"].decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise EvalError(f"refused: stitch stats.json is not JSON ({exc})") from None
-    return StitchData(stitch_dir=d, file_sha256=dict(sorted(shas.items())), hops=_parse_csv(raw["hops.csv"]),
-                      links=_parse_csv(raw["links.csv"]), hop_artefacts=_parse_csv(raw["hop_artefacts.csv"]),
-                      hop_identity=_parse_csv(raw["hop_identity.csv"]), paths=_parse_csv(raw["paths.csv"]),
-                      path_edges=_parse_csv(raw["path_edges.csv"]), path_nodes=_parse_csv(raw["path_nodes.csv"]),
+    csvs = {n: _parse_csv(n, raw[n]) for n in STITCH_FILES if n.endswith(".csv")}
+    validate_stitch_rows(csvs["hops.csv"], csvs["links.csv"], csvs["hop_identity.csv"])
+    return StitchData(stitch_dir=d, file_sha256=dict(sorted(shas.items())), hops=csvs["hops.csv"],
+                      links=csvs["links.csv"], hop_artefacts=csvs["hop_artefacts.csv"],
+                      hop_identity=csvs["hop_identity.csv"], paths=csvs["paths.csv"],
+                      path_edges=csvs["path_edges.csv"], path_nodes=csvs["path_nodes.csv"],
                       stats=stats, run_info=run_info)
+
+
+# ---------------------------------------------------------------- stitch row contract (051 item 2, reading 10)
+
+def _need_columns(name: str, header: Sequence[str] | None, columns: Sequence[str]) -> None:
+    """Every column the evaluation reads must be in the file's header."""
+    if header is None:
+        return
+    missing = [c for c in columns if c not in header]
+    if missing:
+        raise EvalError(f"refused: stitch file {name} lacks column(s) {', '.join(missing)}")
+
+
+def _is_int(cell: str) -> bool:
+    """True when the text is a (signed) decimal integer."""
+    return _INT_RE.fullmatch(cell) is not None
+
+
+def _bad(name: str, row_no: int, column: str, value: str, want: str) -> EvalError:
+    """A refusal naming the file, data row, column and the expected form (values here are ids or numbers)."""
+    return EvalError(f"refused: stitch file {name} data row {row_no}: {column} {value!r} is not {want}")
+
+
+def _check_int_cells(name: str, i: int, row: Mapping[str, str], columns: Sequence[str]) -> None:
+    """Integer-or-empty cells."""
+    for c in columns:
+        if row[c] != "" and not _is_int(row[c]):
+            raise _bad(name, i, c, row[c], "an integer or empty")
+
+
+def _check_hops(rows: Sequence[Mapping[str, str]]) -> None:
+    """hops.csv: unique hop ids, a protocol of the ST-22 vocabulary, integer range counts, and parallel member
+    lists with decimal logon IDs (the ST-25 match reads them pairwise)."""
+    name = "hops.csv"
+    _need_columns(name, list(rows[0]) if rows else None, _HOP_COLUMNS)
+    seen: set[str] = set()
+    for i, r in enumerate(rows, start=1):
+        if r["hop_id"] == "" or r["hop_id"] in seen:
+            raise _bad(name, i, "hop_id", r["hop_id"], "a unique non-empty id")
+        seen.add(r["hop_id"])
+        if r["protocol"] not in PROTOCOL_GROUPS:
+            raise _bad(name, i, "protocol", r["protocol"],
+                       "a protocol of the ST-22 vocabulary (" + ", ".join(PROTOCOL_GROUPS) + ")")
+        _check_int_cells(name, i, r, ("evidence_before_range", "evidence_after_range"))
+        uids = [x for x in r["member_logon_uids"].split(";") if x]
+        ids = [x for x in r["member_logon_ids"].split(";") if x]
+        if len(uids) != len(ids) or not all(_is_int(x) for x in ids):
+            raise _bad(name, i, "member_logon_ids", r["member_logon_ids"],
+                       "a list of decimal ids parallel to member_logon_uids")
+
+
+def _check_links(rows: Sequence[Mapping[str, str]]) -> None:
+    """links.csv: a session id is decimal or empty (it is compared as an integer)."""
+    name = "links.csv"
+    _need_columns(name, list(rows[0]) if rows else None, _LINK_COLUMNS)
+    for i, r in enumerate(rows, start=1):
+        _check_int_cells(name, i, r, ("source_session_id",))
+
+
+def _check_identity(rows: Sequence[Mapping[str, str]]) -> None:
+    """hop_identity.csv: integer gap and order flags where present, and a gap on every row the key rule can
+    select (a dump row with ``order_ok`` = 1)."""
+    name = "hop_identity.csv"
+    _need_columns(name, list(rows[0]) if rows else None, _IDENTITY_COLUMNS)
+    for i, r in enumerate(rows, start=1):
+        _check_int_cells(name, i, r, ("gap_ms", "order_within_tolerance", "order_within_uncertainty"))
+        if r["dump_event_uid"] and r["order_ok"] == "1" and r["gap_ms"] == "":
+            raise _bad(name, i, "gap_ms", "", "set (a dump row with order_ok = 1 needs a gap)")
+
+
+def validate_stitch_rows(hops: Sequence[Mapping[str, str]], links: Sequence[Mapping[str, str]],
+                         identity: Sequence[Mapping[str, str]]) -> None:
+    """Refuse stitch rows the evaluation cannot read, before any analysis (051 item 2; reading 10).
+
+    WHY here and not in the pure modules: a value outside the spec 03 contract (an unknown protocol, a
+    non-numeric logon ID) means the folder is not what the evaluation was written for. The run must stop with a
+    refusal and write nothing, not crash halfway with a traceback. The pure modules keep their own ValueError as
+    a last guard for callers that skip this check.
+    """
+    _check_hops(hops)
+    _check_links(links)
+    _check_identity(identity)
 
 
 # ---------------------------------------------------------------- key and key lock (051 items 2, 9)
@@ -259,6 +368,7 @@ def load_key(repo: Path, trial: str, split: str, key_lock_path: Path | None = No
     if not isinstance(data, dict) or data.get("trial_id") != trial:
         got = data.get("trial_id") if isinstance(data, dict) else None
         raise EvalError(f"refused: approved key trial_id {got!r} differs from the trial {trial}")
+    validate_key_data(data)
     sha = sha256_bytes(raw)
     lock = "not_required"
     if split == SPLIT_TEST:
@@ -267,6 +377,82 @@ def load_key(repo: Path, trial: str, split: str, key_lock_path: Path | None = No
         lock = "locked"
     rel = (APPROVED_KEYS_REL / f"{trial}.yaml").as_posix()
     return KeyData(path_rel=rel, sha256=sha, lock=lock, data=data)
+
+
+def _key_bad(where: str, what: str) -> EvalError:
+    """A refusal for a key field the evaluation cannot read (no value text: keys hold command text)."""
+    return EvalError(f"refused: approved key {where}: {what}")
+
+
+def _is_hex(value: Any) -> bool:
+    """A logon ID as the key writes it (``0x...`` text) or an integer."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return True
+    return isinstance(value, str) and _HEX_RE.fullmatch(value.strip()) is not None
+
+
+def _is_uid_list(value: Any) -> bool:
+    """A list of uid strings."""
+    return isinstance(value, list) and all(isinstance(u, str) for u in value)
+
+
+def _is_iso_utc(value: Any) -> bool:
+    """ISO-8601 text with a zone (what ``keys.iso_to_us`` accepts)."""
+    if not isinstance(value, str):
+        return False
+    try:
+        dt = datetime.fromisoformat(value.strip())
+    except ValueError:
+        return False
+    return dt.tzinfo is not None and dt.utcoffset() is not None
+
+
+def _check_key_hop(i: int, kh: Any) -> None:
+    """One key hop: the fields the ST-25 match and the key-session reading parse (051 items 3, 4)."""
+    where = f"hop {i}"
+    if not isinstance(kh, dict):
+        raise _key_bad(where, "not an object")
+    if not _is_hex(kh.get("target_logon_id")):
+        raise _key_bad(where, "target_logon_id is not a hex logon ID")
+    if not _is_uid_list(kh.get("target_event_uids", [])):
+        raise _key_bad(where, "target_event_uids is not a list of uids")
+    if kh.get("agent_event_uids") is not None and not _is_uid_list(kh["agent_event_uids"]):
+        raise _key_bad(where, "agent_event_uids is not a list of uids")
+    if kh.get("source_session_logon_id") and not _is_hex(kh["source_session_logon_id"]):
+        raise _key_bad(where, "source_session_logon_id is not a hex logon ID")
+    se = kh.get("session_evidence")
+    if se is not None:
+        if not isinstance(se, dict):
+            raise _key_bad(where, "session_evidence is not an object")
+        if se.get("session_id") and not _is_hex(se["session_id"]):
+            raise _key_bad(where, "session_evidence.session_id is not a hex logon ID")
+        if se.get("command_event_uids") is not None and not _is_uid_list(se["command_event_uids"]):
+            raise _key_bad(where, "session_evidence.command_event_uids is not a list of uids")
+    ie = kh.get("identity_expected")
+    if ie is not None and (isinstance(ie, bool) or ie not in (0, 1)):
+        raise _key_bad(where, "identity_expected is not 0, 1 or null")
+
+
+def validate_key_data(data: Mapping[str, Any]) -> None:
+    """Refuse a key the evaluation cannot read, before any DB access (051 item 2 spirit; reading 10).
+
+    WHY: a malformed key (a logon ID that is not hex, an event time with no zone) would otherwise stop the run
+    halfway with a traceback; a refusal says which field and writes nothing. Values are not echoed, because key
+    fields can hold command text.
+    """
+    hops = data.get("hops", [])
+    if not isinstance(hops, list):
+        raise _key_bad("hops", "not a list")
+    ek = data.get("event_keys", {})
+    if not isinstance(ek, dict):
+        raise _key_bad("event_keys", "not an object")
+    for i, kh in enumerate(hops, start=1):
+        _check_key_hop(i, kh)
+    for uid, e in ek.items():
+        if not isinstance(e, dict):
+            raise _key_bad(f"event_keys[{uid}]", "not an object")
+        if "time_utc" in e and not _is_iso_utc(e["time_utc"]):
+            raise _key_bad(f"event_keys[{uid}]", "time_utc is not ISO-8601 text with a zone")
 
 
 # ---------------------------------------------------------------- DB (read-only)
@@ -282,13 +468,17 @@ def open_db_ro(path: Path) -> sqlite3.Connection:
     p = Path(path)
     if not p.is_file():
         raise EvalError(f"refused: DB {p.as_posix()} is missing")
-    return sqlite3.connect(f"file:{p.as_posix()}?mode=ro", uri=True)
+    try:
+        return sqlite3.connect(f"file:{p.as_posix()}?mode=ro", uri=True)
+    except sqlite3.Error as exc:
+        raise EvalError(f"refused: DB {p.as_posix()} cannot be opened read-only ({exc})") from None
 
 
 def check_db_hash(sha: str, stitch_run_info: Mapping[str, Any], key: KeyData | None) -> None:
     """The DB must be the one the stitcher read (``run_info.db.sha256_after``) and, if keyed, the one the key was
     built from (``db_sha256``) (051 item 2). Pure."""
-    want = (stitch_run_info.get("db") or {}).get("sha256_after")
+    db = stitch_run_info.get("db")
+    want = db.get("sha256_after") if isinstance(db, Mapping) else None
     if sha != want:
         raise EvalError(f"refused: DB SHA-256 {sha} differs from stitch run_info db.sha256_after {want}")
     if key is not None and sha != key.data.get("db_sha256"):
@@ -307,6 +497,28 @@ def _chunks(items: list[str]) -> Iterable[list[str]]:
         yield items[i:i + _CHUNK]
 
 
+def _rows(conn: sqlite3.Connection, query: str, params: Sequence[Any]) -> list[tuple]:
+    """Run one read-only query; a SQLite error (no ``events_dedup`` view, a damaged file) is a refusal."""
+    try:
+        return conn.execute(query, list(params)).fetchall()
+    except sqlite3.Error as exc:
+        raise EvalError(f"refused: DB query failed ({exc})") from None
+
+
+def _db_time(utc: Any, uid: Any) -> str:
+    """A DB ``event_utc`` the evaluation can parse (ISO text with a zone); else a refusal naming the uid."""
+    if not _is_iso_utc(utc):
+        raise EvalError(f"refused: DB event {uid} has an unreadable event_utc")
+    return str(utc)
+
+
+def _db_int(value: Any, column: str, uid: Any) -> int:
+    """A DB integer column (the view types it INTEGER); else a refusal naming the uid."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise EvalError(f"refused: DB event {uid} has a non-integer {column}")
+    return value
+
+
 def query_events(conn: sqlite3.Connection, uids: Iterable[str]) -> dict[str, EventRow]:
     """uid -> (host, channel, event_id, event_utc, session_id) from ``events_dedup``; absent uids are absent.
 
@@ -318,8 +530,9 @@ def query_events(conn: sqlite3.Connection, uids: Iterable[str]) -> dict[str, Eve
     for part in _chunks(wanted):
         q = (f"SELECT event_uid, host, channel, event_id, event_utc, session_id FROM {_VIEW} "
              f"WHERE event_uid IN ({','.join('?' * len(part))}) ORDER BY event_uid")
-        for uid, host, channel, eid, utc, sid in conn.execute(q, part):
-            out.setdefault(uid, EventRow(uid, host, channel, int(eid), utc, None if sid is None else int(sid)))
+        for uid, host, channel, eid, utc, sid in _rows(conn, q, part):
+            out.setdefault(uid, EventRow(uid, host, channel, _db_int(eid, "event_id", uid), _db_time(utc, uid),
+                                         None if sid is None else _db_int(sid, "session_id", uid)))
     return out
 
 
@@ -327,7 +540,8 @@ def query_logons(conn: sqlite3.Connection, host: str, logon_id: int) -> list[Log
     """Every Security 4624 of ``host`` that opens ``logon_id`` (``target_logon_id``), in logged-time order."""
     q = (f"SELECT event_uid, event_utc, target_logon_id FROM {_VIEW} WHERE host = ? AND channel = 'Security' "
          f"AND event_id = 4624 AND target_logon_id = ? ORDER BY event_utc, event_uid")
-    return [LogonRow(u, t, int(lid)) for u, t, lid in conn.execute(q, (host, int(logon_id)))]
+    return [LogonRow(u, _db_time(t, u), _db_int(lid, "target_logon_id", u))
+            for u, t, lid in _rows(conn, q, (host, int(logon_id)))]
 
 
 def query_boots(conn: sqlite3.Connection, host: str) -> list[BootRow]:
@@ -335,4 +549,5 @@ def query_boots(conn: sqlite3.Connection, host: str) -> list[BootRow]:
     ids = sorted(BOOT_STARTUP_IDS | BOOT_SHUTDOWN_IDS)
     q = (f"SELECT event_uid, event_id, event_utc FROM {_VIEW} WHERE host = ? AND channel = ? "
          f"AND event_id IN ({','.join('?' * len(ids))}) ORDER BY event_utc, event_uid")
-    return [BootRow(u, int(e), t) for u, e, t in conn.execute(q, (host, BOOT_CHANNEL, *ids))]
+    return [BootRow(u, _db_int(e, "event_id", u), _db_time(t, u))
+            for u, e, t in _rows(conn, q, (host, BOOT_CHANNEL, *ids))]

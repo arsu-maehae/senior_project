@@ -417,7 +417,8 @@ def _keyed_counts(r: Mapping[str, str]) -> dict[str, int]:
 def _hop_counts(r: Mapping[str, str]) -> dict[str, int]:
     """The hop-scope counts one fact row contributes."""
     return {"hops": 1, "seeds": int(r["is_seed"] == "1"), "target_only": int(r["target_only_reason"] != ""),
-            "port_cmd_both": int(r["port_cmd_agree"] in ("yes", "no")), "port_cmd_agree": int(r["port_cmd_agree"] == "yes")}
+            "port_cmd_both": int(r["port_cmd_agree"] in ("yes", "no")),
+            "port_cmd_agree": int(r["port_cmd_agree"] == "yes")}
 
 
 def _add(acc: dict[tuple[str, str, str], dict[str, int]], key: tuple[str, str, str], counts: Mapping[str, int]) -> None:
