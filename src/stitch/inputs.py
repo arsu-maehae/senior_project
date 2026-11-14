@@ -12,7 +12,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator, Mapping
+from typing import Any, Callable, Iterator, Mapping, TypeVar
 
 from answer_key.db import open_ro, sha256_file
 from gate import inputs as gate_inputs
@@ -28,7 +28,10 @@ from .params import ALLOWED_TRIALS, GATE_FILES, GATE_OUT_REL, SCAN_COLUMNS, SPEC
 from .scan import ScanResult, scan_rows
 
 __all__ = ["StitchError", "TrialPaths", "CheckedInputs", "trial_paths", "check_allowed", "load_scan",
-           "check_allowlist", "missing_gate_files", "window_row_differences", "missing_db_columns"]
+           "load_link_inputs", "check_allowlist", "missing_gate_files", "window_row_differences",
+           "missing_db_columns"]
+
+T = TypeVar("T")
 
 # WHY the gate's defaults: the clock-only list and the CO-17 date must be exactly what the gate refused with.
 _GATE = GateParams()
@@ -246,6 +249,39 @@ def check_db_hash(db_sha: str, stats: Mapping[str, Any], clock: ClockFiles) -> N
         raise StitchError(f"refused: {reason}")
 
 
+def _read_db(checked: CheckedInputs, paths: TrialPaths,
+             extra: Callable[[sqlite3.Connection, ScanResult], T] | None) -> tuple[ScanResult, T | None, str, str]:
+    """The one hash bracket around every DB read: hash and check (spec 2), open read-only, check the
+    columns, scan, run ``extra`` on the same open connection, close, and prove the DB unchanged.
+
+    WHY ``extra`` runs inside: T7.3 reads command text by uid (``cmdtext``, decision 048 item 1) for uids
+    it only knows after the scan; reading them in the same read-only connection, between the same two
+    hashes, means every byte the stitcher read comes from the DB the gate read.
+    """
+    db = Path(paths.db)
+    if not db.is_file():
+        raise StitchError(f"refused: trial DB not found: {db}")
+    before = sha256_file(db)
+    check_db_hash(before, checked.gate_stats, checked.clock)
+    result: T | None = None
+    try:
+        con = open_ro(db)
+        try:
+            check_db_columns(con)
+            scan = scan_rows(iter_scan_rows(con), checked.start_us, checked.end_us, checked.clock.offsets,
+                             checked.clock.changes if checked.clock.changes is not None else ())
+            if extra is not None:
+                result = extra(con, scan)
+        finally:
+            con.close()
+    except sqlite3.Error as exc:
+        raise StitchError(f"cannot read {VIEW} from {db}: {exc}") from exc
+    after = sha256_file(db)
+    if after != before:
+        raise StitchError(f"trial DB changed while open: {db}")
+    return scan, result, before, after
+
+
 def load_scan(checked: CheckedInputs, paths: TrialPaths,
               params: StitchParams = StitchParams()) -> tuple[ScanResult, str, str]:
     """Hash the DB and check it (spec 2), open it read-only, check its columns, stream ``SCAN_COLUMNS``
@@ -254,22 +290,20 @@ def load_scan(checked: CheckedInputs, paths: TrialPaths,
     Returns (scan, sha256 before, sha256 after). Raises StitchError on a missing DB, a hash mismatch, a
     missing column, any SQLite error, or a DB whose hash changed while open.
     """
-    db = Path(paths.db)
-    if not db.is_file():
-        raise StitchError(f"refused: trial DB not found: {db}")
-    before = sha256_file(db)
-    check_db_hash(before, checked.gate_stats, checked.clock)
-    try:
-        con = open_ro(db)
-        try:
-            check_db_columns(con)
-            scan = scan_rows(iter_scan_rows(con), checked.start_us, checked.end_us, checked.clock.offsets,
-                             checked.clock.changes if checked.clock.changes is not None else ())
-        finally:
-            con.close()
-    except sqlite3.Error as exc:
-        raise StitchError(f"cannot read {VIEW} from {db}: {exc}") from exc
-    after = sha256_file(db)
-    if after != before:
-        raise StitchError(f"trial DB changed while open: {db}")
+    scan, _, before, after = _read_db(checked, paths, None)
     return scan, before, after
+
+
+def load_link_inputs(checked: CheckedInputs, paths: TrialPaths,
+                     extra: Callable[[sqlite3.Connection, ScanResult], T],
+                     params: StitchParams = StitchParams()) -> tuple[ScanResult, T, str, str]:
+    """``load_scan`` plus ``extra(con, scan)`` on the same read-only connection, inside the same hash
+    bracket (T7.3; decision 048 item 1).
+
+    ``extra`` typically builds the index and hop probes from ``scan`` and calls
+    ``cmdtext.read_command_results`` / ``read_4648_targets``. Returns (scan, extra's result, sha256 before,
+    sha256 after). Same refusals as ``load_scan``; an SQLite error raised inside ``extra`` is a StitchError
+    too, and the connection is closed in every case.
+    """
+    scan, result, before, after = _read_db(checked, paths, extra)
+    return scan, result, before, after  # type: ignore[return-value]  # extra is not None here

@@ -27,6 +27,8 @@ Spec 03_stitch fixes the T7.3 rules but leaves some implementation readings open
    - For a 4648 it returns only the target texts.
    - Its matcher is written from the spec: boundary-aware, case-insensitive, with `-EncodedCommand` decoding used for matching only. It is tested on the `log_check` boundary cases. A development-only script reports, as counts and uids, where it and `log_check` disagree on the nine trials.
    - `src/stitch` never imports `log_check` or `answer_key.build` / `finish` / `verify` / `overlap` / `targets`, and a fresh-interpreter test checks this.
+   - **Name boundary (ST-46 data side; STT-07 "a name inside a longer file name does not match"; added in task 1).** Host names keep the FQDN rule: a following `.label` is allowed, `.digit` is not. File and service names use a stricter right boundary: no word character, no `-`, and no `.` followed by a word character. So `Xpay` is not found in `Xpay.exe`, and `Xpay.exe` is not found in `Xpay.exe.config`, but `Xpay.exe` is found at the end of a sentence.
+   - **What `CmdResult` returns.** Every requested Sysmon 1 / 4688 uid of the requested host gets a result. `has_command` = 0 marks a 4688 with no command line logged (28–44 % of 4688 rows, spec §2). `undecodable` is set per event. `names_found` covers every probed target of the host; T7.4 keeps only the names found in the session's own evidence for this hop (ST-46).
 2. **The scan is extended, not rebuilt.**
    - Non-command columns are added to `SCAN_COLUMNS`.
    - In-window 5140, 5145, 4697, 4648, dc01 4769, 7045 and WinRM 91 rows go to a separate `link_rows` list, collapsed per ST-05 with their own counters.

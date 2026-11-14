@@ -1,5 +1,5 @@
 """One pure pass over the event rows: window flag (ST-01), corrected time and clock flag (ST-02), the kinds
-T7.2 keeps, the identity look-back view, and near-duplicate collapse (ST-05).
+T7.2 keeps, the identity look-back view, the T7.3 link kinds, and near-duplicate collapse (ST-05).
 
 WHY pure: the DB reading lives in ``inputs.load_scan``; this module takes any iterable of row mappings, so a
 test can feed synthetic rows and get exactly what the real run would get. Nothing here opens a file.
@@ -18,7 +18,7 @@ from .params import BOOT_CHANNEL, BOOT_SHUTDOWN_IDS, BOOT_STARTUP_IDS, LOG_CLEAR
 
 __all__ = ["StitchError", "ScanResult", "scan_rows", "in_window", "is_logon", "is_logoff", "is_boot",
            "is_log_clear", "is_sysmon1", "is_sec4688", "is_sysmon_attached", "is_window_kind",
-           "is_lookback_kind"]
+           "is_lookback_kind", "is_link_kind", "collapse_near_duplicates", "LINK_KINDS"]
 
 Row = dict[str, Any]
 
@@ -90,6 +90,24 @@ def is_window_kind(row: Mapping) -> bool:
     return is_lookback_kind(row) or is_sysmon1(row) or is_sec4688(row) or is_sysmon_attached(row)
 
 
+# T7.3 link kinds (decision 048 item 2): target-side artefacts (5140 / 5145 shares, 4697 / 7045 installs, WinRM
+# 91), source-side 4648 (ST-42) and Kerberos 4769 (ST-47). 4769 is kept on every host here; the dc01
+# restriction is applied where it is read, so this predicate stays a pure channel/event test.
+LINK_KINDS: frozenset[tuple[str, int]] = frozenset({
+    ("Security", 5140), ("Security", 5145), ("Security", 4697), ("Security", 4648), ("Security", 4769),
+    ("System", 7045), ("WinRM", 91),
+})
+
+
+def is_link_kind(row: Mapping) -> bool:
+    """A T7.3 link kind (``LINK_KINDS``). Disjoint from ``is_window_kind`` by construction.
+
+    WHY a separate predicate and list: adding these kinds to ``is_window_kind`` would change the T7.2
+    ``in_window`` list and every T7.2 count; kept apart, ``t72_index.json`` stays byte-identical (048 item 2).
+    """
+    return (row.get("channel"), row.get("event_id")) in LINK_KINDS
+
+
 # ---------------------------------------------------------------- result
 
 @dataclass
@@ -102,7 +120,13 @@ class ScanResult:
     every kind are counted in ``removed_by_window`` (host -> "Channel/eid" -> n), also those kept in
     ``lookback``. ``near_duplicate_groups`` counts ST-05 groups of two or more kept rows;
     ``near_duplicate_split_by_window`` counts those whose members lie on both sides of the window start
-    (the kept row is the earliest, so such a group is placed by its earliest copy).
+    (the kept row is the earliest, so such a group is placed by its earliest copy). These counts cover the
+    T7.2 kinds only.
+
+    ``link_rows`` holds the in-window rows of the link kinds (``is_link_kind``; decision 048 item 2), sorted
+    like ``in_window``; they are in neither ``in_window`` nor ``lookback``. They are collapsed (ST-05) in a
+    separate call with their own counters ``link_near_duplicate_groups`` and
+    ``link_near_duplicate_split_by_window``, so every T7.2 field keeps its T7.2 value.
     """
     in_window: list[Row] = field(default_factory=list)
     lookback: list[Row] = field(default_factory=list)
@@ -111,6 +135,9 @@ class ScanResult:
     kept_lookback_by_type: dict[str, int] = field(default_factory=dict)
     near_duplicate_groups: int = 0
     near_duplicate_split_by_window: int = 0
+    link_rows: list[Row] = field(default_factory=list)
+    link_near_duplicate_groups: int = 0
+    link_near_duplicate_split_by_window: int = 0
 
 
 # ---------------------------------------------------------------- per-row steps
@@ -190,26 +217,48 @@ def _sort_key(row: Mapping) -> tuple[int, str]:
 
 # ---------------------------------------------------------------- the pass
 
+def _collapse_links(link_seen: list[Row]) -> tuple[list[Row], int, int]:
+    """ST-05 over the link kinds alone; returns (in-window representatives sorted, groups, split groups).
+
+    ``link_seen`` holds the in-window link rows plus the PRE-window ones. WHY the pre-window copies: the
+    T7.2 rule places a near-duplicate group by its earliest copy, so a group with a copy before the window
+    start is not an in-window event; the same must hold for link rows. The pre-window rows are only used
+    for this placement and are never returned (link rows are never kept before the window, ST-01).
+    """
+    collapsed, groups, split = collapse_near_duplicates(link_seen)
+    kept = sorted((r for r in collapsed if r["in_window"]), key=_sort_key)
+    return kept, groups, split
+
+
 def scan_rows(rows: Iterable[Mapping], start_us: int, end_us: int, offsets: Offsets | None,
               changes: ClockChanges | Iterable = ()) -> ScanResult:
-    """ST-01, ST-02, ST-05 in one pass: keep in-window T7.2 kinds and pre-window look-back kinds, count the rest.
+    """ST-01, ST-02, ST-05 in one pass: keep in-window T7.2 kinds and pre-window look-back kinds, keep
+    in-window link kinds apart (``link_rows``), count the rest.
 
     A row after the window is only counted, never kept. A pre-window row is kept in ``lookback`` only when
-    it is a 4624, 4634, 4647, boot or 1102 (ST-63); a pre-window Sysmon 1 is never kept (owner Q13b).
+    it is a 4624, 4634, 4647, boot or 1102 (ST-63); a pre-window Sysmon 1 is never kept (owner Q13b); a
+    pre-window link row is never kept (it only places its near-duplicate group, ``_collapse_links``).
+    ``removed_by_window`` counts every out-of-window row of every kind, link kinds included, as in T7.2.
     Raises StitchError for a row without a parseable ``event_utc``.
     """
     res = ScanResult()
     kept: list[Row] = []
+    link_seen: list[Row] = []
     for raw in rows:
         res.loaded_total += 1
         row = kept_row(raw, start_us, end_us, offsets, changes)
         if row["in_window"]:
             if is_window_kind(row):
                 kept.append(row)
+            elif is_link_kind(row):
+                link_seen.append(row)
             continue
         _bump(res.removed_by_window, str(row.get("host")), event_key(row))
         if row["us"] < start_us and is_lookback_kind(row):
             kept.append(row)
+        elif row["us"] < start_us and is_link_kind(row):
+            link_seen.append(row)
+    res.link_rows, res.link_near_duplicate_groups, res.link_near_duplicate_split_by_window =         _collapse_links(link_seen)
     collapsed, res.near_duplicate_groups, res.near_duplicate_split_by_window = collapse_near_duplicates(kept)
     collapsed.sort(key=_sort_key)
     res.in_window = [r for r in collapsed if r["in_window"]]

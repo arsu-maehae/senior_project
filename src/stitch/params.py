@@ -28,14 +28,19 @@ SPEC_DB_COLUMNS: tuple[str, ...] = (
     "field_values_json",
 )
 
-# What T7.2 actually selects. WHY no command_line / field_values_json: T7.2 is event level only, so no
-# command text can reach code, tests, outputs or reports (plan T7.2 limits; spec 00 LC-13).
+# What the scan selects. WHY no command text columns: the scan is event level only, so no command text can
+# reach the index, tests, outputs or reports (plan T7.2 limits; spec 00 LC-13). Command text and the 4648
+# JSON fields are read by uid in ``cmdtext.py`` only (decision 048 item 1). The last seven columns are the
+# non-command fields of the T7.3 link kinds (048 item 2): GUID (ST-47), share / service artefacts (ST-30..33),
+# 4648 target and subject (ST-42).
 SCAN_COLUMNS: tuple[str, ...] = (
     "event_uid", "host", "channel", "event_id", "record_id", "event_utc", "logon_type", "account_name",
     "target_logon_id", "target_linked_logon_id", "subject_logon_id", "session_id", "process_guid",
     "parent_process_guid", "process_id", "image", "parent_image", "source_image", "target_image",
     "machine_account", "authentication_package", "source_ip", "source_port", "destination_ip",
     "destination_port", "initiated",
+    "logon_guid", "share_name", "relative_target_name", "service_name", "service_image_path",
+    "destination_host", "subject_account",
 )
 
 _FORBIDDEN_SCAN = {"command_line", "field_values_json"}
@@ -43,6 +48,13 @@ if _FORBIDDEN_SCAN & set(SCAN_COLUMNS):  # WHY at import: a later edit must neve
     raise ImportError(f"SCAN_COLUMNS must not contain {sorted(_FORBIDDEN_SCAN & set(SCAN_COLUMNS))}")
 if not set(SCAN_COLUMNS) <= set(SPEC_DB_COLUMNS):
     raise ImportError(f"SCAN_COLUMNS not in spec section 2: {sorted(set(SCAN_COLUMNS) - set(SPEC_DB_COLUMNS))}")
+
+# T7.3 vocabularies (spec 03_stitch section 3, ST-30..ST-43; decision 048). WHY here: later modules and the
+# check file must spell each value the same way, and a test can compare them with the spec.
+METHODS: tuple[str, ...] = ("sysmon3_port", "source_4648", "cmdline_target", "target_only")
+ARTEFACT_KINDS: tuple[str, ...] = ("share_burst", "service_install", "winrm_host", "winrm_91", "rdp_connection",
+                                   "followup_logon")
+TARGET_ONLY_REASONS: tuple[str, ...] = ("source_host_unknown", "source_host_no_logs", "no_evidence_in_range")
 
 # Decision 046: the stitcher runs on the nine development trials only, until T10. Imported, never copied.
 ALLOWED_TRIALS: tuple[str, ...] = DEVELOPMENT_TRIALS
