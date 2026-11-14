@@ -74,7 +74,7 @@ Never tune code or weights on the test set.
 - [x] 7.2 *(done 2026-11-14: src/stitch/ inputs, scan, sessions, processes, index, check_index; decisions 046 (development allowlist) and 047 (session model, amended by the owner); spec ST-10/§5/STT-11 amended; counts in out/stitch_check/<trial>/t72_index.json; no spec output file yet, the outputs of spec §3 start in 7.3)* Sessions per host (Logon ID); process trees (ProcessGuid)
 - [x] 7.3 *(done 2026-11-14: src/stitch/ cmdtext, hops, artefacts, source, confirm, links, check_links; decision 048; counts in out/stitch_check/<trial>/t73_links.json; spec §3 files start in 7.4/7.5)* Cross-host links per protocol (Correction I); Kerberos confirmation
 - [x] 7.4 *(done 2026-11-14: src/stitch/ tiers, identity, outputs, `python -m stitch`; decision 049; spec 03 amended by 049 (not_applicable source_host_no_logs, L-ST4, STT-13 note); out/stitch/<trial>/ links.csv, hop_artefacts.csv, hop_identity.csv, run_info.json on the 9 dev trials; hops.csv, paths, stats.json, report.md follow in 7.5)* Every link records method, candidate count, time gap, confidence
-- [ ] 7.5 Candidate paths from triggers; merge on shared nodes; never drop isolated paths
+- [~] 7.5 Candidate paths from triggers; merge on shared nodes; never drop isolated paths
 - [ ] 7.6 Link accuracy vs development keys (on t01: after T6b)
 - [ ] 7.7 Tests + stage review (includes: an event outside the trial's window never reaches the stitcher as an anchor, trigger or path node; exception, decision 039: a source-host session open logged before the window may be looked up for the identity check only)
 **Done when:** the attack path is among the candidates in every development trial.
