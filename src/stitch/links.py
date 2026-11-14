@@ -28,6 +28,7 @@ from .artefacts import KIND_BURST, KIND_INSTALL, ArtefactSet, build_artefacts
 from .cmdtext import CmdResult, TargetForms, match_4648, read_4648_targets, read_command_results, target_name_forms
 from .confirm import CONFIRM_KERBEROS, CONFIRM_SERVICE, confirm_of
 from .hops import Hop, HopSet, build_hops
+from .identity import IdentityRow, build_identity, lsass_reads
 from .index import TrialIndex, build_index
 from .inputs import CheckedInputs, GateRows, TrialPaths, check_allowed, load_link_inputs, read_gate_rows, trial_paths
 from .params import METHODS, TARGET_ONLY_REASONS, StitchParams
@@ -100,8 +101,10 @@ class LinkIndex:
     ``links``: hop id -> ``SubjectLinks`` (follow-up groups have none, ST-26). ``confirm``: hop id ->
     (``confirm`` label, ``confirm_event_uids``) (ST-47). ``data_limits``: host -> ``HostLimit`` (048 item 13).
     ``counts``: the JSON-ready counts block of ``link_counts``. ``verdicts`` (T7.4): hop id -> ``HopVerdicts``
-    (account match, name check, tier, rank per candidate session; ``tiers.all_verdicts``). WHY a keyword default:
-    the T7.3 constructions and the T7.3 check file stay unchanged; the verdicts are only added on top.
+    (account match, name check, tier, rank per candidate session; ``tiers.all_verdicts``). ``identity`` (T7.4):
+    the ``hop_identity.csv`` facts, one ``IdentityRow`` per (hop, account, LSASS read on the source host), in file
+    order (``identity.build_identity``). WHY keyword defaults: the T7.3 constructions and the T7.3 check file stay
+    unchanged; the verdicts and identity rows are only added on top.
     """
     trial_id: str
     hopset: HopSet
@@ -111,6 +114,7 @@ class LinkIndex:
     data_limits: dict[str, HostLimit]
     counts: dict[str, Any]
     verdicts: dict[str, HopVerdicts] = field(default_factory=dict)
+    identity: list[IdentityRow] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------- command probes and uids
@@ -362,7 +366,12 @@ def assemble(trial_id: str, con: sqlite3.Connection, scan: ScanResult, gate_rows
              checked: CheckedInputs, params: StitchParams = StitchParams()) -> LinkIndex:
     """The ``extra`` step of ``inputs.load_link_inputs``: index, hops, artefacts, command facts (read on ``con``),
     links (ST-40..44), confirmations (ST-47), data limits (048 item 13; owner instruction 2026-11-14), counts
-    and the T7.4 verdicts (ST-45, ST-46, ST-48, ST-50; ``tiers.all_verdicts``, pure, after the links).
+    the T7.4 verdicts (ST-45, ST-46, ST-48, ST-50; ``tiers.all_verdicts``, pure, after the links) and the T7.4
+    identity rows (ST-60..ST-64; ``identity.build_identity``, pure). The identity rows get from the links only each
+    hop's source host and ``target_only`` reason, never a linked session (decision 013); the LSASS reads are the
+    gate's ``R1_lsass`` supporting rows joined to the scan (ST-61), and the sessions are read through the
+    look-back view (ST-63, decision 039) after ``build_links`` added its unknown-open sessions (which have no
+    account and so never count as open for identity).
 
     ``checked`` supplies the clock offsets (ST-02 host part of ``clock_unreliable``) and the window end. The
     index's ``SessionIndex`` is mutated by ``source.by_4648`` (unknown-open 4648 sessions, as documented there).
@@ -379,8 +388,10 @@ def assemble(trial_id: str, con: sqlite3.Connection, scan: ScanResult, gate_rows
                          sessions=index.sessions)
     counts = link_counts(scan, hopset, arts, links, confirm, limits)
     verdicts = all_verdicts(hopset, links, arts.rows)
+    reads = lsass_reads(gate_rows.supporting, scan)
+    identity = build_identity(hopset, links, reads, index.sessions, checked.clock.offsets, params)
     return LinkIndex(trial_id=trial_id, hopset=hopset, artefacts=arts, links=links, confirm=confirm,
-                     data_limits=limits, counts=counts, verdicts=verdicts)
+                     data_limits=limits, counts=counts, verdicts=verdicts, identity=identity)
 
 
 def run_links_checked(repo: Path, trial_id: str, params: StitchParams = StitchParams()
