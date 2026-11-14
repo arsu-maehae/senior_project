@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from clock_offset.correct import Offsets
 from gate.classify import norm_ip
 from gate.timeutil import delta_ms, seconds_to_us
 
@@ -42,7 +43,7 @@ from .tiers import HopVerdicts, all_verdicts
 __all__ = ["LinkIndex", "HostLimit", "assemble", "run_links", "run_links_checked", "command_probes",
            "names_by_target", "process_uids_by_host", "link_4648_uids", "last_security_events", "data_limits",
            "link_counts", "EVIDENCE_METHODS", "REASON_EVIDENCE_AFTER", "REASON_UNKNOWN_SESSION_PROCESS",
-           "LIMIT_REASONS", "unknown_session_processes_after"]
+           "LIMIT_REASONS", "unknown_session_processes_after", "event_times"]
 
 Row = Mapping[str, Any]
 
@@ -105,6 +106,16 @@ class LinkIndex:
     the ``hop_identity.csv`` facts, one ``IdentityRow`` per (hop, account, LSASS read on the source host), in file
     order (``identity.build_identity``). WHY keyword defaults: the T7.3 constructions and the T7.3 check file stay
     unchanged; the verdicts and identity rows are only added on top.
+
+    T7.5 adds three fields, filled by ``assemble`` only and read by the path stage, never by T7.2..T7.4 logic:
+    ``index``: the ``TrialIndex`` already built for the links (``ProcessIndex.events_of_session`` and the
+    members' ``session_key``s give the source / target session-event nodes, ST-71). ``offsets``: the trial's
+    clock offsets (``checked.clock.offsets``), so a node cutoff can be taken on the corrected basis (decision 050
+    item 7, ST-02). ``event_us``: uid -> corrected time (µs) of every kept in-window row (``scan.in_window`` and
+    ``scan.link_rows``, every ST-05 copy uid), so path nodes can be sorted by time without re-reading the DB.
+    WHY carried here and not rebuilt: the path stage must reuse exactly the index, offsets and times the links
+    were built from (T7.5 builds on the T7.4 in-memory result and never recomputes it). None / empty for
+    hand-built indexes that do not need them.
     """
     trial_id: str
     hopset: HopSet
@@ -115,6 +126,9 @@ class LinkIndex:
     counts: dict[str, Any]
     verdicts: dict[str, HopVerdicts] = field(default_factory=dict)
     identity: list[IdentityRow] = field(default_factory=list)
+    index: TrialIndex | None = None
+    offsets: Offsets | None = None
+    event_us: dict[str, int] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------- command probes and uids
@@ -145,6 +159,21 @@ def process_uids_by_host(processes: ProcessIndex) -> dict[str, list[str]]:
     for p in processes.processes.values():
         out.setdefault(p.host, set()).update(p.sysmon1_uids + p.sec4688_uids)
     return {h: sorted(u) for h, u in sorted(out.items())}
+
+
+def event_times(scan: ScanResult) -> dict[str, int]:
+    """uid -> corrected time (µs, ``row["us"]``) of every uid (ST-05 copies included) of ``scan.in_window`` and
+    ``scan.link_rows``, sorted by uid. Pure.
+
+    WHY these two lists only: they are the in-window rows (ST-01), and path nodes may only name in-window events;
+    the look-back rows (ST-63) never become nodes. WHY every copy uid: a node or evidence list may name any copy of
+    a collapsed group, and each copy carries the kept row's time.
+    """
+    out: dict[str, int] = {}
+    for r in list(scan.in_window) + list(scan.link_rows):
+        for u in _row_uids(r):
+            out[u] = r["us"]
+    return dict(sorted(out.items()))
 
 
 def link_4648_uids(scan: ScanResult) -> list[str]:
@@ -374,6 +403,7 @@ def assemble(trial_id: str, con: sqlite3.Connection, scan: ScanResult, gate_rows
     account and so never count as open for identity).
 
     ``checked`` supplies the clock offsets (ST-02 host part of ``clock_unreliable``) and the window end. The
+    index, the offsets and the in-window event times are also kept on the result for the T7.5 path stage. The
     index's ``SessionIndex`` is mutated by ``source.by_4648`` (unknown-open 4648 sessions, as documented there).
     """
     index: TrialIndex = build_index(trial_id, scan, params)
@@ -391,7 +421,8 @@ def assemble(trial_id: str, con: sqlite3.Connection, scan: ScanResult, gate_rows
     reads = lsass_reads(gate_rows.supporting, scan)
     identity = build_identity(hopset, links, reads, index.sessions, checked.clock.offsets, params)
     return LinkIndex(trial_id=trial_id, hopset=hopset, artefacts=arts, links=links, confirm=confirm,
-                     data_limits=limits, counts=counts, verdicts=verdicts, identity=identity)
+                     data_limits=limits, counts=counts, verdicts=verdicts, identity=identity, index=index,
+                     offsets=checked.clock.offsets, event_us=event_times(scan))
 
 
 def run_links_checked(repo: Path, trial_id: str, params: StitchParams = StitchParams()

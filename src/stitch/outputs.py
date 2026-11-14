@@ -28,15 +28,15 @@ from gate.timeutil import fmt_us
 from .artefacts import ArtefactRow, row_order
 from .hops import Hop
 from .identity import IdentityRow
+from .linkids import link_id, link_sort_key, numbered_link_rows, ordered_link_rows
 from .links import LinkIndex
-from .params import METHODS
-from .sessions import SessionKey
 from .source import METHOD_TARGET_ONLY, LinkRow
 from .tiers import ACCOUNT_NONE, HopVerdicts, SessionVerdict
 
 __all__ = ["LINKS_COLUMNS", "ARTEFACT_COLUMNS", "IDENTITY_COLUMNS", "LINKS_FILE", "ARTEFACT_FILE", "IDENTITY_FILE",
            "TIER_NO_SESSION", "BASIS_NO_SESSION", "BASIS_TARGET_ONLY", "cell", "link_id", "ordered_link_rows",
-           "link_row", "link_rows", "artefact_row", "artefact_rows", "identity_row", "identity_rows", "csv_text"]
+           "link_sort_key", "numbered_link_rows", "link_row", "link_rows", "artefact_row", "artefact_rows",
+           "identity_row", "identity_rows", "csv_text"]
 
 LINKS_FILE, ARTEFACT_FILE, IDENTITY_FILE = "links.csv", "hop_artefacts.csv", "hop_identity.csv"
 
@@ -66,10 +66,6 @@ IDENTITY_COLUMNS: tuple[str, ...] = (
 TIER_NO_SESSION = "D"
 BASIS_NO_SESSION, BASIS_TARGET_ONLY = "no_session", "target_only"
 
-_METHOD_ORDER: dict[str, int] = {m: i for i, m in enumerate(METHODS)}
-# Row groups of a hop, in link-id order: candidate sessions, unresolved process rows, the target_only row.
-_GROUP_SESSION, _GROUP_UNRESOLVED, _GROUP_TARGET_ONLY = 0, 1, 2
-
 
 # ---------------------------------------------------------------- cells
 
@@ -95,33 +91,8 @@ def _fmt_time(us: int | None) -> str:
 
 # ---------------------------------------------------------------- links.csv
 
-def link_id(hop_id: str, n: int) -> str:
-    """``<hop_id>-l<NN>``: 1-based, at least 2 digits, more when a hop has 100 rows or more (spec 3)."""
-    return f"{hop_id}-l{n:02d}"
-
-
-def _link_sort_key(r: LinkRow, sv: Mapping[SessionKey, SessionVerdict]) -> tuple:
-    """Link-id order inside one hop (T7.4 task 3): session rows by (``link_rank``, method order, session key);
-    then unresolved rows by (method order, reason); then the ``target_only`` row.
-
-    WHY rank first: link ids then read best-first, like the ranking itself; method and session key only make the
-    order total. Time is not a key (Q14), as for the rank.
-    """
-    method = _METHOD_ORDER.get(r.method, len(_METHOD_ORDER))
-    if r.method == METHOD_TARGET_ONLY:
-        return (_GROUP_TARGET_ONLY, 0, 0, ())
-    if r.session_key is None:
-        return (_GROUP_UNRESOLVED, method, r.session_unresolved_reason, ())
-    verdict = sv.get(r.session_key)
-    if verdict is None:
-        raise ValueError(f"link row of session {r.session_key!r} has no T7.4 verdict")
-    return (_GROUP_SESSION, verdict.link_rank, method, r.session_key)
-
-
-def ordered_link_rows(rows: Iterable[LinkRow], verdicts: HopVerdicts) -> list[LinkRow]:
-    """The hop's link rows in link-id order (``_link_sort_key``). ValueError for a session row with no verdict
-    (T7.4 builds one for every candidate session, so a gap means a broken run)."""
-    return sorted(rows, key=lambda r: _link_sort_key(r, verdicts.sessions))
+# ``link_id``, ``link_sort_key``, ``ordered_link_rows`` and ``numbered_link_rows`` live in ``linkids`` (T7.5): the
+# same numbering names link rows in ``path_nodes.csv``. They are imported above and re-exported in ``__all__``.
 
 
 def _session_fields(sv: SessionVerdict) -> dict[str, Any]:
@@ -198,15 +169,12 @@ def link_row(lid: str, hop_id: str, r: LinkRow, hv: HopVerdicts, member_count: i
 
 
 def _hop_link_rows(hop: Hop, li: LinkIndex) -> list[dict[str, str]]:
-    """All ``links.csv`` rows of one hop, numbered in link-id order. A hop with no links or no verdicts is a
-    broken run (T7.3 / T7.4 build both for every hop) and raises ValueError instead of writing a partial file."""
-    sl = li.links.get(hop.hop_id)
-    hv = li.verdicts.get(hop.hop_id)
-    if sl is None or hv is None:
-        raise ValueError(f"{hop.hop_id}: no link rows or no T7.4 verdicts")
-    rows = ordered_link_rows(sl.rows, hv)
-    return [link_row(link_id(hop.hop_id, i), hop.hop_id, r, hv, len(hop.members))
-            for i, r in enumerate(rows, start=1)]
+    """All ``links.csv`` rows of one hop, numbered in link-id order (``linkids.numbered_link_rows``). A hop with
+    no links or no verdicts is a broken run (T7.3 / T7.4 build both for every hop) and raises ValueError there,
+    before any row is built, instead of writing a partial file."""
+    numbered = numbered_link_rows(hop, li)
+    hv = li.verdicts[hop.hop_id]
+    return [link_row(lid, hop.hop_id, r, hv, len(hop.members)) for lid, r in numbered]
 
 
 def link_rows(li: LinkIndex) -> list[dict[str, str]]:
