@@ -1,4 +1,4 @@
-"""CLI: ``python -m clock_offset [--trials T ...] [--repo PATH]`` (cwd=src).
+"""CLI: ``python -m clock_offset [--trials T ...] [--repo PATH]``; run from the repository root after ``pip install -e .`` (see README).
 
 Writes ``data/processed/<trial>.clock_offsets.csv``, ``data/processed/<trial>.clock_changes.csv`` and
 ``out/clock_offset/<trial>/`` (spec 08 section 3; owner D5, D6). Reads the trial DBs (read-only, hash

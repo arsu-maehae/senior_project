@@ -1,5 +1,5 @@
 """CLI: ``python -m gate --trial T [--db PATH] [--windows PATH] [--out DIR] [--repo PATH] [--offsets PATH]
-[--clock-changes PATH]`` (cwd=src).
+[--clock-changes PATH]``; run from the repository root after ``pip install -e .`` (see README).
 
 Writes ``out/gate/<trial_id>/`` (spec 02_gate section 3). Reads the trial DB read-only (view
 ``events_dedup``, hash before = after), the trial's row of ``data/trial_windows.csv`` and the trial's

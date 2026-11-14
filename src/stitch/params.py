@@ -79,6 +79,9 @@ GATE_OUT_REL = "out/gate"
 # T7.2 development check output (plan section 2): counts only, never a spec 3 file.
 CHECK_OUT_REL = "out/stitch_check"
 
+# Spec 03_stitch section 3: the stage output folder ``out/stitch/<trial_id>/`` (T7.4 task 3 writes the first files).
+STITCH_OUT_REL = "out/stitch"
+
 _GATE_DEFAULTS = GateParams()
 
 

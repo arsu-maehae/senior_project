@@ -1,4 +1,5 @@
-"""CLI: ``python -m trial_window [--trials T ...] [--repo PATH] [--operator-times PATH] [--out PATH]`` (cwd=src).
+"""CLI: ``python -m trial_window [--trials T ...] [--repo PATH] [--operator-times PATH] [--out PATH]``;
+run from the repository root after ``pip install -e .`` (see README).
 
 Writes ``data/trial_windows.csv`` (spec 02_gate 2.1) on the corrected time basis (T6b.2, decision 043).
 Reads only the trial DBs (read-only, hash before = after), ``data/manifest.csv``, the optional operator

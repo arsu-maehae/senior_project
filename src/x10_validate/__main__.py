@@ -1,4 +1,4 @@
-"""``python -m x10_validate`` (run with ``src`` on the path, e.g. cwd=src or PYTHONPATH=src)."""
+"""``python -m x10_validate``; run from the repository root after ``pip install -e .`` (see README)."""
 from __future__ import annotations
 
 import sys

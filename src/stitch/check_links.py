@@ -1,4 +1,5 @@
-"""Development check of T7.3: ``python -m stitch.check_links --trial <id> [--repo PATH]`` (cwd=src or PYTHONPATH=src).
+"""Development check of T7.3: ``python -m stitch.check_links --trial <id> [--repo PATH]``;
+run from the repository root after ``pip install -e .`` (see README).
 
 Runs ``links.run_links_checked`` (ST-00 with the development allowlist first, then one read-only hash bracket around
 the scan, the command facts and the assembly) and writes ``out/stitch_check/<trial_id>/t73_links.json``: counts,

@@ -12,7 +12,7 @@ The report (``clock_events.csv``, ``clock_scan.json``) and the trial flag ``cloc
 are a data-quality signal: the scan derives no parameter and is never used to tune (CO-19 scope).
 
 Layout: pure functions (records -> hits; hits + DB rows -> changes, rows, report) first, then the file
-reading, then the standalone CLI ``python -m clock_offset.scan [--trials ...]`` (cwd=src), which writes only
+reading, then the standalone CLI ``python -m clock_offset.scan [--trials ...]`` (run from the repository root after ``pip install -e .`` (see README)), which writes only
 the two files under ``out/clock_offset/<trial>/``. run.py calls the same pure builder as part of the step.
 """
 from __future__ import annotations

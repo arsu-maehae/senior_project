@@ -72,6 +72,18 @@ Task 0 applied the readings below as a read-only prototype on the nine developme
    - **Q9 stays open.** Every R1 row is listed (system, service and domain accounts; before and after the move), with `dump_source_image` and `dump_account` from its in-window Sysmon 10 row. `end_unknown` sessions are listed apart from open ones. No value is computed and no read is chosen.
 7. **STT-13 on the spec output files.** The spec's image and account columns (`dump_source_image`, `dump_account`, `account`, `source_session_account`) hold DB field values that can also occur inside command lines (`rundll32.exe` is 12 characters). The substring scan blanks those columns. A second test checks that every value in them equals the DB field of the event its row references (the dump's Sysmon 10 `source_image` / `account_name`; the member and session 4624 `account_name`). This shows they carry no command text.
 
+## Output conventions (task 3, 2026-11-14; no rule change)
+- **`link_id`** = `<hop_id>-l<NN>` (two digits, more when needed), numbered per hop in this order:
+  - session rows by (`link_rank`, method order `sysmon3_port`, `source_4648`, `cmdline_target`, session key);
+  - then unresolved rows by (method order, reason);
+  - then the `target_only` row.
+
+  `links.csv` is ordered by hop id (time order), then link number. Numbers are compared as numbers, so `-l100` follows `-l99`.
+- **Hop-level columns on rows with no session.** `candidate_count_all` and `candidate_count_account` carry the hop's value. `account_match_members` repeats `none` once per hop member.
+- **`hop_identity.csv`** writes only the spec columns. The row's `move_uid` and the open sessions' hex ids stay in memory for T9 and the tests. Parallel lists are `;`-joined, and a NULL item is an empty item.
+- **STT-13.** On the nine development trials, after blanking the image and account columns of reading 7, 60 twelve-character substrings of command lines remain in the files. Every one lies inside a target-side name (artefact `names`, `name_check_names`), which STT-13 allows. Hits outside target-side names: 0.
+- **`run_info.json`** holds the tool version, trial, `generated_utc` (the only time-varying value, and run_info is exempt from byte-identity), the parameters, the DB path and SHA-256 before / after, the gate stats SHA-256, the window summary, and per file its SHA-256 and row count. A DB hash that differs after the run is a refusal (exit 2, nothing written; spec §2).
+
 ## Consequences
 - No development tier, rank or identity value depends on readings 1, 3, 4 or 6. Synthetic tests (STT-06..09, STT-15) cover each one.
 - T9 receives every LSASS read and both session lists, so it can settle Q9 in its own spec.

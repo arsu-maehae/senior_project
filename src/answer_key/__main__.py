@@ -1,4 +1,5 @@
-"""CLI: ``python -m answer_key build|verify --trial s02_t00`` (run with src on the path / cwd=src).
+"""CLI: ``python -m answer_key build|verify --trial s02_t00``;
+run from the repository root after ``pip install -e .`` (see README).
 
 Drafts are written as JSON, which is valid YAML 1.2 (PyYAML is not installed), to
 ``ground_truth/drafts/<trial>.yaml`` only; verify writes ``out/answer_key/<trial>/``.

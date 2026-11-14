@@ -1,4 +1,5 @@
-"""Development check of T7.2: ``python -m stitch.check_index --trial <id> [--repo PATH]`` (cwd=src or PYTHONPATH=src).
+"""Development check of T7.2: ``python -m stitch.check_index --trial <id> [--repo PATH]``;
+run from the repository root after ``pip install -e .`` (see README).
 
 Runs ST-00 (``check_allowed``), the read-only scan (``load_scan``) and the index (``build_index``), and writes
 ``out/stitch_check/<trial_id>/t72_index.json``: counts only, no names, images or command text, sorted keys, no

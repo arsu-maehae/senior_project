@@ -38,7 +38,7 @@ if TYPE_CHECKING:  # WHY type-only: importing ``inputs`` at run time would pull 
 __all__ = ["ShareBurst", "Install", "Tie", "ArtefactRow", "ArtefactSet", "MemberIndex", "build_artefacts",
            "share_bursts", "installs", "tie_copies", "attach_bursts", "install_rows", "other_artefacts",
            "followup_rows", "binary_file_name", "base_name", "SERVICE_PAIR_S", "METHOD_LOGON_ID",
-           "METHOD_FILE_NAME_TIME", "METHOD_IP_TIME", "TIER_LOGON_ID", "TIER_FILE_NAME_TIME"]
+           "METHOD_FILE_NAME_TIME", "METHOD_IP_TIME", "TIER_LOGON_ID", "TIER_FILE_NAME_TIME", "row_order"]
 
 Row = Mapping[str, Any]
 
@@ -608,6 +608,11 @@ class ArtefactSet:
 def _row_order(r: ArtefactRow) -> tuple[str, int, str, str]:
     """Spec 3 order inside the file: hop id, first event (target clock), kind, first uid."""
     return r.hop_id, r.first_us_raw, r.kind, r.event_uids[0] if r.event_uids else ""
+
+
+# Public name of the file order for the writer (``outputs.artefact_rows``, T7.4 task 3). WHY an alias and not a
+# copy: ``hop_artefacts.csv`` must use exactly the order ``build_artefacts`` sorts by, from one definition.
+row_order = _row_order
 
 
 def _hop_spans(hops: Sequence[Hop], rows: Sequence[ArtefactRow]) -> dict[str, int | None]:
