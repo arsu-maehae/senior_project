@@ -46,7 +46,7 @@ EVTX → JSONL → normalise → SQLite (one DB per trial) → gate → stitch �
 - For every non-trivial choice, write a decision record (`/decision-record`) with the evidence: log counts, spec rule, paper section. No undocumented decisions.
 - Stop early only if: data is missing or wrong, a locked decision looks wrong, an answer key needs human approval, or a test on answer-key events fails and the fix is unclear.
 - After each small task: tests pass → `git commit` (never push) → one line in docs/PROGRESS.md.
-- Before any commit that changes `src/` or `tests/`, run the full suite including slow tests (`python -m pytest`, no `-m` filter); do not commit if it fails.
+- Before an intermediate commit that changes `src/` or `tests/`, run the fast suite (`python -m pytest -m "not slow"`). Before the last commit of each PLAN step, and before any push, run the full suite including slow tests (`python -m pytest`, no `-m` filter). Do not commit if the suite fails.
 - At the end of a big task: run `/stage-review` where a stage was built, then report: what was built, decisions made, test results, open questions.
 
 ## Who may edit what

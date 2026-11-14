@@ -176,3 +176,39 @@ def snapshot(root: Path) -> dict[str, str]:
     for p in sorted(root.rglob("*")):
         out[p.relative_to(root).as_posix()] = "<dir>" if p.is_dir() else sha256_of(p)
     return out
+
+
+# ------------------------------------------------------------------------------------------------ STT-13 scan helper
+# Owner ruling (T7.5): an IPv4 address is exempt from the "no part of a command line" scan ONLY as a bare address.
+# A command window (12 characters, case-folded) found in an output text is exempt only if, at EVERY position where it
+# occurs, the window lies wholly inside one bare IPv4 literal: the full dotted quad (each octet 0-255), bounded by the
+# start / end of the text or by a character that is neither a digit nor '.'. Anything longer (an IP plus a share path,
+# a port, a prefix, extra digits, a second address) is not exempt.
+import re as _re  # noqa: E402
+
+GRAM = 12
+_OCTET = r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
+IPV4_TOKEN = _re.compile(rf"(?<![\d.]){_OCTET}(?:\.{_OCTET}){{3}}(?![\d.])")
+
+
+def command_grams(commands: Sequence[str]) -> set[str]:
+    """Every 12-character window of every command, case-folded."""
+    out: set[str] = set()
+    for c in commands:
+        c = c.casefold()
+        out.update(c[i:i + GRAM] for i in range(len(c) - GRAM + 1))
+    return out
+
+
+def window_is_exempt(spans: Sequence[tuple[int, int]], start: int) -> bool:
+    """True when the window [start, start + GRAM) lies wholly inside one bare IPv4 token span."""
+    return any(s <= start and start + GRAM <= e for s, e in spans)
+
+
+def non_exempt_hits(text: str, grams: set[str]) -> list[int]:
+    """Start positions of the command windows found in `text` (case-folded) that are NOT exempt (see above). One
+    call = one cell piece or one line, so 'start / end of the text' is the piece's own start / end. Every position is
+    checked, so a window that is exempt at one occurrence and not at another is reported at the second."""
+    t = text.casefold()
+    spans = [m.span() for m in IPV4_TOKEN.finditer(t)]
+    return [i for i in range(len(t) - GRAM + 1) if t[i:i + GRAM] in grams and not window_is_exempt(spans, i)]

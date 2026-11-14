@@ -30,7 +30,9 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import stitch_fixtures as sf  # noqa: E402
 from answer_key.db import sha256_file  # noqa: E402
 from clock_offset import params as co_params  # noqa: E402
 from stitch import __main__ as stitch_main  # noqa: E402
@@ -828,11 +830,9 @@ def test_the_four_blanked_columns_equal_the_db_field_of_the_event_each_row_refer
 # ================================================================================================ 5b. STT-13 over all ten files (T7.5)
 ALL_BLANK = dict(BLANK, **{"hops.csv": {"member_accounts"}})        # 049 item 7 plus decision 050 item 8
 WHOLE_TEXT = ("stats.json", "report.md", "run_info.json")
-# An IPv4 literal is an event field (the 4624 IpAddress, `hops.csv` `source_ip`) or lab configuration (`lab_host_ips`
-# in the parameters of stats.json / run_info.json), not command content; a command line that names a lab host by IP
-# shares up to 13 characters of it (`192.168.50.22`). The scan therefore blanks IPv4 literals, nothing else (finding
-# reported to the owner: spec 2 "no part of a command line" cannot be read literally for IP addresses).
-IPV4 = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}")
+# Owner ruling: an IPv4 address is exempt from the scan only as a bare address (stitch_fixtures.non_exempt_hits): a
+# command window that lies wholly inside a full dotted-quad token, bounded by a non-digit non-dot character, at every
+# position where it occurs. Nothing is blanked in the output text for the IPs.
 
 
 def _folder_bytes(trial: str) -> dict[str, bytes]:
@@ -869,28 +869,60 @@ def test_all_ten_files_are_written_and_the_run_info_lists_the_other_nine(trial):
             assert f["rows"] == len(_read(files[n])), f"{trial}: {n} rows"
 
 
-@pytest.mark.parametrize("trial", DEV)
-def test_no_12_character_command_substring_in_any_of_the_ten_files_after_blanking(trial):
-    files = _folder_bytes(trial)
-    where: dict[str, set[tuple[str, str]]] = collections.defaultdict(set)     # gram -> (file, column)
+def _scan_files(files: dict[str, bytes], grams: set[str]) -> dict[tuple[str, str], int]:
+    """(file, column) -> number of non-exempt command windows, over all files of one folder: CSVs cell piece by cell
+    piece with the account / image / member_accounts columns blanked (049 item 7, 050 item 8), the text files line by
+    line, nothing else blanked."""
+    found: collections.Counter = collections.Counter()
     for name, blob in files.items():
         if name in WHOLE_TEXT:
-            for line in blob.decode("utf-8").casefold().splitlines():
-                for g in _grams(IPV4.sub("", line)):
-                    where[g].add((name, "<text>"))
+            for line in blob.decode("utf-8").splitlines():
+                n = len(sf.non_exempt_hits(line, grams))
+                if n:
+                    found[(name, "<text>")] += n
+            continue
+        if not name.endswith(".csv"):
             continue
         for row in _read(blob):
             for col, val in row.items():
                 if col in ALL_BLANK.get(name, set()) or not val:
                     continue
-                for piece in IPV4.sub("", val.casefold()).split(";"):
-                    for g in _grams(piece):
-                        where[g].add((name, col))
+                for piece in val.split(";"):
+                    n = len(sf.non_exempt_hits(piece, grams))
+                    if n:
+                        found[(name, col)] += n
+    return dict(found)
+
+
+@pytest.mark.parametrize("trial", DEV)
+def test_no_12_character_command_substring_in_any_of_the_ten_files_after_blanking(trial):
+    files = _folder_bytes(trial)
     grams, n_lines = _command_grams(trial)
-    hit = {g: where[g] for g in grams if g in where}
-    cols = collections.Counter(c for v in hit.values() for c in v)
     assert n_lines > 0
-    assert not hit, f"{trial}: {len(hit)} twelve-character substring(s) of {n_lines} command lines, by (file, column): {dict(cols)}"
+    found = _scan_files(files, grams)
+    assert not found, f"{trial}: non-exempt 12-character command windows of {n_lines} command lines, by (file, column): {found}"
+
+
+def test_the_scan_fails_on_an_injected_ip_plus_share_string_in_a_temp_copy(tmp_path):
+    """The real-data scan must catch an IP followed by a share path (a bare IP is exempt, an IP with a share path is
+    not). The injection goes into a temp copy of the folder; out/ is never touched."""
+    trial = "s02_t00"
+    files = _folder_bytes(trial)
+    grams, _n = _command_grams(trial)
+    injected = r"\\192.168.50.22\ADMIN$".casefold()
+    if not any(injected[i:i + 12] in grams for i in range(len(injected) - 11)):
+        pytest.skip("no command line of the trial holds the injected string")
+    assert _scan_files(files, grams) == {}, "baseline scan is not clean"
+    copy = tmp_path / trial
+    copy.mkdir()
+    for n, blob in files.items():
+        (copy / n).write_bytes(blob)
+    (copy / "report.md").write_bytes(files["report.md"] + ("\n" + injected + "\n").encode("utf-8"))
+    got = _scan_files({p.name: p.read_bytes() for p in copy.iterdir()}, grams)
+    assert got.get(("report.md", "<text>"), 0) >= 1, f"injected string not caught: {got}"
+    # a bare address on its own line is still exempt
+    (copy / "report.md").write_bytes(files["report.md"] + b"\n192.168.50.22\n")
+    assert _scan_files({p.name: p.read_bytes() for p in copy.iterdir()}, grams) == {}
 
 
 @pytest.mark.parametrize("trial", DEV)

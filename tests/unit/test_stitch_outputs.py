@@ -1392,3 +1392,86 @@ def test_member_accounts_column_is_the_only_new_account_text_in_the_t75_csvs(ran
     hops_text = "\n".join(v for r in ran["tables"]["hops.csv"] for k, v in r.items() if k != "member_accounts")
     for a in accounts | {DUMP_ACCOUNT.casefold()}:
         assert a not in hops_text.casefold(), "hops.csv holds an account outside member_accounts"
+
+
+# ---------------------------------------------------------------- the IPv4 exemption of the command scan (owner ruling)
+# A command window is exempt only when, at every position where it occurs, it lies wholly inside a bare IPv4 literal
+# (full dotted quad, each octet 0-255, bounded by the text ends or a character that is neither a digit nor '.').
+def _hits(text: str, *commands: str) -> list[int]:
+    return sf.non_exempt_hits(text, sf.command_grams(list(commands)))
+
+
+SHARE_CMD = r"copy x \\192.168.50.22\ADMIN$\a.exe"
+
+
+def test_bare_ip_cell_is_exempt():
+    assert _hits("192.168.50.22", SHARE_CMD) == []
+    assert _hits("10.0.0.1", "ping 10.0.0.1 now") == []                      # a shorter bare IP has no 12-char window
+
+
+def test_the_helper_does_find_a_non_ip_command_window():
+    assert _hits("xx payloadxq.exe yy", "run payloadxq.exe now") != []
+    assert _hits("nothing in common here", SHARE_CMD) == []
+
+
+def test_ip_followed_by_a_share_path_is_not_exempt():
+    # the window "68.50.22\ADMI" crosses the end of the address
+    assert _hits(r"192.168.50.22\ADMIN", SHARE_CMD) != []
+    assert _hits(r"\\192.168.50.22\ADMIN$", SHARE_CMD) != []
+
+
+def test_ip_preceded_by_backslashes_is_not_exempt():
+    assert _hits(r"\\192.168.50.22", SHARE_CMD) != []
+
+
+def test_ip_followed_by_a_port_is_not_exempt():
+    # ':' is neither a digit nor a dot, so the token ends there, but the window with ":5985" crosses its end
+    cmd = "Enter-PSSession 192.168.50.22:5985 -Credential"
+    assert _hits("192.168.50.22:5985", cmd) != []
+    assert _hits("192.168.50.22", cmd) == []                                 # the bare address alone is fine
+
+
+def test_ip_inside_a_longer_token_is_not_exempt():
+    assert _hits("x192.168.50.22", "run x192.168.50.22 now") != []
+    assert _hits("host192.168.50.22", "ping host192.168.50.22") != []
+
+
+def test_ip_with_extra_digits_is_not_a_bare_ip():
+    assert _hits("192.168.50.2210", "ping 192.168.50.2210") != []            # fourth octet of four digits
+    assert _hits("192.168.50.256", "ping 192.168.50.256") != []              # octet above 255
+    assert _hits("192.168.50.22.1", "ping 192.168.50.22.1") != []            # five octets
+
+
+def test_window_of_digits_and_dots_spanning_two_adjacent_addresses_is_not_exempt():
+    cmd = "list 192.168.50.2.192.168.50.3 end"
+    assert _hits("192.168.50.2.192.168.50.3", cmd) != []
+    assert _hits("192.168.50.2 192.168.50.3", "list 192.168.50.2 192.168.50.3 end") != []   # window spans the space
+
+
+def test_two_separate_bare_addresses_cells_are_each_exempt():
+    assert _hits("192.168.50.21", "a 192.168.50.21 b") == []
+    assert _hits("192.168.50.23", "a 192.168.50.23 b") == []
+
+
+def test_exempt_at_one_occurrence_but_not_at_another_fails():
+    text = r"192.168.50.22 and then 192.168.50.22\ADMIN"
+    assert _hits(text, SHARE_CMD) != []
+    only_bare = "192.168.50.22 and then 192.168.50.22"
+    assert _hits(only_bare, SHARE_CMD) == []
+
+
+def test_window_inside_the_address_but_bounded_by_quotes_of_a_json_line():
+    # a JSON line holds the bare address between quotes: the quote is a non-digit, non-dot boundary character
+    assert _hits('  "ep-01": "192.168.50.21",', "x 192.168.50.21 y") == []
+    # but a command that has the quote next to the address makes the window with the quote a hit
+    assert _hits('  "ep-01": "192.168.50.21",', 'x "192.168.50.21" y') != []
+
+
+def test_matching_is_case_insensitive():
+    assert _hits("RUN PAYLOADXQ.EXE", "run payloadxq.exe") != []
+
+
+def test_command_grams_are_twelve_characters_and_casefolded():
+    g = sf.command_grams(["ABCDEFGHIJKLMN"])
+    assert g == {"abcdefghijkl", "bcdefghijklm", "cdefghijklmn"}
+    assert sf.command_grams(["short"]) == set()
