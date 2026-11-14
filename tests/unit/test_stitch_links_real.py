@@ -1245,3 +1245,669 @@ def test_st02_report_clock_unreliable_link_rows_of_the_other_trials(trial):
     ld = linked(trial)
     flagged = [(h.hop_id, r.method) for h in user_e2e_hops(ld) for r in ld.links[h.hop_id].rows if r.clock_unreliable]
     print(f"ST-02 {trial}: clock_unreliable user endpoint link rows {len(flagged)}")
+
+
+# ================================================================================================ T7.3 task 5: links, check file
+# Plan section 5 C1, C13-C16 and spec 03_stitch STT-12, STT-13, STA-07 and 10.4 on the nine development trials. Written from
+# the plan, decision 048 (items 1, 6, 11, 13 as amended) and the spec, not from the implementation. The sensitivity runs call
+# `links.run_links` with a `dataclasses.replace` copy of `StitchParams` and are cached per (trial, parameter). Messages carry
+# counts, hop ids, hex session IDs and uids only, never command text or account names.
+import builtins  # noqa: E402
+import contextlib  # noqa: E402
+import dataclasses  # noqa: E402
+import os  # noqa: E402
+import pathlib  # noqa: E402
+import sqlite3  # noqa: E402
+import subprocess  # noqa: E402
+
+from stitch import check_links as cl  # noqa: E402
+from stitch.links import run_links  # noqa: E402
+
+SRC_DIR = REPO / "src"
+OUT_ROOT = REPO / "out" / "stitch_check"
+
+
+@contextlib.contextmanager
+def _watch_fs(needle: str, monkeypatch):
+    """Record every filesystem or sqlite call whose first argument contains `needle`, then delegate."""
+    seen: list[str] = []
+
+    def wrap(obj, name):
+        orig = getattr(obj, name)
+
+        def inner(*args, **kw):
+            try:
+                text = str(args[0]) if args else ""
+            except Exception:  # noqa: BLE001
+                text = ""
+            if needle in text:
+                seen.append(f"{name}({text})")
+            return orig(*args, **kw)
+        monkeypatch.setattr(obj, name, inner)
+
+    with monkeypatch.context():
+        wrap(builtins, "open")
+        for n in ("stat", "lstat", "scandir", "listdir"):
+            wrap(os, n)
+        for n in ("exists", "isfile", "isdir"):
+            wrap(os.path, n)
+        for n in ("stat", "exists", "is_file", "is_dir", "open", "read_bytes", "read_text", "mkdir", "iterdir"):
+            wrap(pathlib.Path, n)
+        wrap(sqlite3, "connect")
+        yield seen
+
+
+def _listing() -> list[str] | None:
+    return sorted(p.name for p in OUT_ROOT.iterdir()) if OUT_ROOT.is_dir() else None
+
+
+@functools.lru_cache(maxsize=None)
+def _check_data(trial: str) -> dict:
+    """The check-file dict of one development trial (built once; nothing written)."""
+    assert trial in DEV, trial
+    _paths_or_skip(trial)
+    return cl.run_check(REPO, trial)
+
+
+def _all_strings(value: Any) -> list[str]:
+    """Every scalar of a parsed JSON value as text, keys left out (a key name is the schema's, not data)."""
+    out: list[str] = []
+    if isinstance(value, dict):
+        for v in value.values():
+            out.extend(_all_strings(v))
+    elif isinstance(value, list):
+        for v in value:
+            out.extend(_all_strings(v))
+    elif value is not None and not isinstance(value, bool):
+        out.append(str(value))
+    return out
+
+
+def _all_keys(value: Any) -> set[str]:
+    out: set[str] = set()
+    if isinstance(value, dict):
+        for k, v in value.items():
+            out.add(str(k))
+            out |= _all_keys(v)
+    elif isinstance(value, list):
+        for v in value:
+            out |= _all_keys(v)
+    return out
+
+
+# ------------------------------------------------------------------------------------------------ C1
+def test_c1_s02_t02_is_refused_by_the_cli_with_exit_2_and_no_folder_is_created():
+    assert "s02_t02" not in DEV
+    listing = _listing()
+    proc = subprocess.run([sys.executable, "-m", "stitch.check_links", "--trial", "s02_t02"], cwd=str(SRC_DIR),
+                          capture_output=True, text=True, timeout=120)
+    assert proc.returncode == 2, f"exit {proc.returncode}"
+    assert proc.stderr.startswith("refused:") and proc.stdout == ""
+    assert not (OUT_ROOT / "s02_t02").exists()
+    assert _listing() == listing
+
+
+@pytest.mark.parametrize("trial", ["s03_t05", "s07_t10", "s06_t02"])
+def test_c1_other_test_trials_are_refused_before_any_file_of_them_is_opened(trial, monkeypatch):
+    assert trial not in DEV
+    listing = _listing()
+    with _watch_fs(trial, monkeypatch) as seen:
+        code = cl.main(["--trial", trial, "--repo", str(REPO)])
+    assert code == 2
+    assert seen == [], f"{trial}: {len(seen)} filesystem call(s) on a path of the refused trial"
+    assert not (OUT_ROOT / trial).exists()
+    assert _listing() == listing
+
+
+@pytest.mark.parametrize("trial", DEV)
+def test_c1_check_links_twice_gives_byte_identical_files_and_leaves_db_and_t72_index_unchanged(trial):
+    paths = _paths_or_skip(trial)
+    t72 = REPO / CHECK_REL / trial / "t72_index.json"
+    t72_before = t72.read_bytes() if t72.is_file() else None
+    sha_pre = sha256_file(paths.db)
+    out = REPO / CHECK_REL / trial / "t73_links.json"
+    assert cl.main(["--trial", trial, "--repo", str(REPO)]) == 0
+    first = out.read_bytes()
+    assert cl.main(["--trial", trial, "--repo", str(REPO)]) == 0
+    second = out.read_bytes()
+    assert first == second, f"{trial}: two runs differ ({len(first)} / {len(second)} bytes)"
+    assert first == check_text(_check_data(trial)).encode("utf-8")
+    assert first.endswith(b"\n") and b"\r" not in first
+    data = json.loads(first)
+    assert data["trial_id"] == trial
+    assert data["db"]["sha256_before"] == data["db"]["sha256_after"] == _gate_sha_after(paths) == sha_pre
+    assert sha256_file(paths.db) == sha_pre
+    assert [p.name for p in out.parent.iterdir() if p.suffix == ".tmp"] == []
+    if t72_before is not None:
+        assert t72.read_bytes() == t72_before, f"{trial}: t72_index.json changed"
+
+
+# ------------------------------------------------------------------------------------------------ STT-13
+MIN_SUB = 12
+
+
+def _db_values(db: pathlib.Path, sql: str) -> list[tuple]:
+    con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
+    try:
+        return [tuple(r) for r in con.execute(sql)]
+    finally:
+        con.close()
+
+
+def _allowed_strings(data: dict) -> set[str]:
+    """Not command text: target-side names listed in the file, lab IPs (parameters and `source_ip` values)."""
+    allowed: set[str] = set()
+    for a in data["artefacts"]:
+        allowed.update(n for n in a["names"] if n)
+    for h in data["hops"]:
+        if h["source_ip"]:
+            allowed.add(h["source_ip"])
+        for r in h["links"]:
+            allowed.update(n for n in r["names_found"] if n)
+    allowed.update(str(v) for v in data["parameters"]["lab_host_ips"].values())
+    return {a.lower() for a in allowed if len(a) >= 3}
+
+
+def _strip(text: str, allowed: set[str]) -> list[str]:
+    """Lower-case `text`, replace every allowed string (longest first) by a separator, return the pieces of length >= 12."""
+    s = text.lower()
+    for a in sorted(allowed, key=len, reverse=True):
+        s = s.replace(a, "\x00")
+    return [p for p in s.split("\x00") if len(p) >= MIN_SUB]
+
+
+def _grams(pieces: list[str]) -> set[str]:
+    return {p[i:i + MIN_SUB] for p in pieces for i in range(len(p) - MIN_SUB + 1)}
+
+
+def _stt13_hits(trial: str) -> tuple[list[str], int, int]:
+    """(uids of commands sharing a 12-character substring with the file, commands read, 12-grams of the file)."""
+    data = _check_data(trial)
+    allowed = _allowed_strings(data)
+    grams = _grams(_strip("\x00".join(_all_strings(data)), allowed))     # string and number values, no keys
+    db = trial_paths(REPO, trial).db
+    rows = _db_values(db, "SELECT event_uid, command_line FROM events_dedup "
+                          "WHERE command_line IS NOT NULL AND command_line != ''")
+    hit_uids, seen = [], {}
+    for uid, cmd in rows:
+        if cmd not in seen:
+            seen[cmd] = any(g in grams for g in _grams(_strip(cmd, allowed)))
+        if seen[cmd]:
+            hit_uids.append(uid)
+    return sorted(hit_uids), len(rows), len(grams)
+
+
+@pytest.mark.parametrize("trial", DEV)
+def test_stt13_no_command_line_substring_of_12_or_more_characters_is_in_the_check_file(trial):
+    """Method: take every string / number VALUE of the parsed t73_links.json (keys are the schema's, left out); lower-case
+    it; cut out the allowed strings (target-side names listed in the file, lab IPs of the parameters, `source_ip` values);
+    apply the same cut to every `command_line` of the trial DB (read-only); then search for any common 12-character substring.
+    A hit is reported as a count and uids only."""
+    hits, n_cmd, n_grams = _stt13_hits(trial)
+    print(f"STT-13 {trial}: command lines read {n_cmd}, file 12-grams {n_grams}, commands with a common 12-gram {len(hits)}")
+    assert n_cmd > 0
+    assert hits == [], f"{trial}: {len(hits)} command line(s) share a 12-character substring with t73_links.json, e.g. {hits[:5]}"
+
+
+def test_stt13_the_matcher_catches_a_leak_and_lets_allowed_names_and_ips_through():
+    allowed = {"xpay.exe", "192.168.50.22"}
+    file_grams = _grams(_strip("Invoke-Thing -Secret abc123 and 192.168.50.22 and Xpay.exe", allowed))
+    leak = "powershell -x Invoke-Thing -Secret abc123 -y"
+    assert any(g in file_grams for g in _grams(_strip(leak, allowed))), "a 12-character leak is not found"
+    ok = "copy Xpay.exe \\\\192.168.50.22\\c$"
+    assert not any(g in file_grams for g in _grams(_strip(ok, allowed)))
+    assert _strip("192.168.50.22xpay.exe192.168.50.22", allowed) == []
+
+
+@pytest.mark.parametrize("trial", DEV)
+def test_stt13_no_account_name_and_no_image_path_of_the_db_is_a_value_in_the_check_file(trial):
+    data = _check_data(trial)
+    values = _all_strings(data)
+    low_values = {v.lower() for v in values}
+    db = trial_paths(REPO, trial).db
+    accounts = {str(a).strip() for (a,) in _db_values(
+        db, "SELECT account_name FROM events_dedup UNION SELECT subject_account FROM events_dedup") if a is not None}
+    accounts = {a for a in accounts if a}
+    assert accounts, f"{trial}: no account in the DB"
+    as_value = sorted(a for a in accounts if a.lower() in low_values)
+    assert as_value == [], f"{trial}: {len(as_value)} account name(s) are a JSON string value"
+    joined = "\x00".join(values)
+    cased = [a for a in accounts if len(a) >= 5 and a in joined]
+    assert cased == [], f"{trial}: {len(cased)} account name(s) of 5+ characters occur inside a JSON string value"
+    images: set[str] = set()
+    for col in ("image", "parent_image", "source_image", "target_image"):
+        images.update(str(v).strip() for (v,) in _db_values(db, f"SELECT DISTINCT {col} FROM events_dedup") if v)
+    paths_ = {i.lower() for i in images if "\\" in i or "/" in i}
+    assert paths_, f"{trial}: no image path in the DB"
+    jl = joined.lower()
+    found = sorted(p for p in paths_ if p in jl)
+    assert found == [], f"{trial}: {len(found)} image path(s) occur in the check file"
+
+
+@pytest.mark.parametrize("trial", DEV)
+def test_stt13_no_key_of_the_check_file_names_an_account_image_or_command_field(trial):
+    keys = _all_keys(_check_data(trial))
+    exact = {"account", "accounts", "command", "cmd", "command_line", "image", "images"}
+    parts = ("account_name", "subject_account", "session_account", "credential", "image", "command_line", "password",
+             "user_name", "username")
+    bad = sorted(k for k in keys if k.lower() in exact or any(p in k.lower() for p in parts))
+    assert bad == [], f"{trial}: forbidden-looking key(s) {bad}"
+
+
+# ------------------------------------------------------------------------------------------------ C15 on the check file
+@pytest.mark.parametrize("trial", DEV)
+def test_c15_every_uid_of_the_check_file_is_in_the_window_and_none_is_from_the_look_back(trial):
+    data, ld = _check_data(trial), linked(trial)
+    uids: set[str] = set()
+    for h in data["hops"]:
+        uids.update(h["member_logon_uids"])
+        uids.update(h["followup_logon_uids"])
+        uids.update(h["confirm_event_uids"])
+        for r in h["links"]:
+            uids.update(r["supporting_event_uids"])
+            uids.update(r["source_session_logon_uid"])
+    for a in data["artefacts"]:
+        uids.update(a["event_uids"])
+        if a["member_logon_uid"]:
+            uids.add(a["member_logon_uid"])
+    for lm in data["data_limits"].values():
+        uids.add(lm["last_security_event_uid"])
+        for v in lm["evidence_after_event_uids"].values():
+            uids.update(v)
+    rows = {u: r for r in ld.scan.in_window + ld.scan.link_rows for u in r["event_uids"]}
+    lookback = {u for r in ld.scan.lookback for u in r["event_uids"]}
+    assert uids, f"{trial}: no uid in the check file"
+    missing = sorted(uids - set(rows))
+    assert missing == [], f"{trial}: {len(missing)} uid(s) of the check file are in no in-window row, e.g. {missing[:5]}"
+    assert uids.isdisjoint(lookback), f"{trial}: {len(uids & lookback)} uid(s) from the look-back"
+    lo, hi = ld.checked.start_us, ld.checked.end_us + US_PER_MS
+    bad = sorted(u for u in uids if not lo <= rows[u]["us"] < hi)
+    assert bad == [], f"{trial}: {len(bad)} uid(s) outside the window by corrected time, e.g. {bad[:5]}"
+
+
+# ------------------------------------------------------------------------------------------------ C16
+def test_c16_s06_t01_ep_03_is_listed_with_its_last_security_event_72_s_before_the_window_end():
+    data = _check_data("s06_t01")
+    assert "ep-03" in data["data_limits"], f"hosts listed: {sorted(data['data_limits'])}"
+    lm = data["data_limits"]["ep-03"]
+    clock = lm["last_security_utc"]
+    hh, mm, ss = (int(x) for x in clock[11:19].split(":"))
+    frac = float("0" + clock[19:].rstrip("Z")) if clock[19:].rstrip("Z") else 0.0
+    secs = hh * 3600 + mm * 60 + ss + frac
+    print(f"C16 s06_t01 ep-03: last Security {clock} (corrected {lm['last_security_utc_corrected']}), "
+          f"{lm['ms_before_window_end']} ms before the window end, evidence after {lm['evidence_after']}, "
+          f"data_limitation {lm['data_limitation']}, hops near the end {lm['hops_near_end']}")
+    assert abs(secs - (6 * 3600 + 23 * 60 + 26)) <= 1.0, f"last Security event at {clock}"
+    assert 70000 <= lm["ms_before_window_end"] <= 74000
+    # 048 item 13 as amended: the label is a consistent function of the evidence counts, never a verdict
+    assert lm["data_limitation"] == int(sum(lm["evidence_after"].values()) > 0)
+    for m, n in lm["evidence_after"].items():
+        assert n == len(lm["evidence_after_event_uids"][m])
+    if not lm["data_limitation"]:
+        assert lm["hops_near_end"] == []
+
+
+@pytest.mark.parametrize("trial", DEV)
+def test_c16_every_host_label_is_consistent_with_its_evidence_and_is_reported(trial):
+    data = _check_data(trial)
+    labelled = []
+    for host, lm in data["data_limits"].items():
+        assert lm["data_limitation"] == int(sum(lm["evidence_after"].values()) > 0), f"{trial} {host}"
+        assert set(lm["evidence_after"]) == {"sysmon3_port", "source_4648", "cmdline_target"}
+        assert lm["ms_before_window_end"] is not None
+        if lm["data_limitation"]:
+            labelled.append((host, lm["evidence_after"], lm["hops_near_end"]))
+        else:
+            assert lm["hops_near_end"] == []
+    assert data["counts"]["data_limitation_hosts"] == sorted(h for h, lm in data["data_limits"].items()
+                                                              if lm["data_limitation"])
+    print(f"C16 {trial}: hosts listed {sorted(data['data_limits'])}, labelled data_limitation {labelled}")
+
+
+# ------------------------------------------------------------------------------------------------ C13 / STA-07
+def _view(li) -> dict[str, dict]:
+    """Per hop: candidate sessions (hex IDs) per method and the target_only reason."""
+    out = {}
+    for h in li.hopset.hops:
+        L = li.links[h.hop_id]
+        by_m: dict[str, tuple] = {}
+        for m in (PORT, E4648, CMD):
+            by_m[m] = tuple(sorted({r.source_session_id_hex for r in L.rows if r.method == m and r.session_key is not None}))
+        out[h.hop_id] = {"methods": by_m, "reason": L.target_only_reason,
+                         "all": tuple(sorted({x for v in by_m.values() for x in v}))}
+    return out
+
+
+@functools.lru_cache(maxsize=None)
+def _sens(trial: str, items: tuple):
+    assert trial in DEV, trial
+    _paths_or_skip(trial)
+    li, before, after = run_links(REPO, trial, dataclasses.replace(PARAMS, **dict(items)))
+    assert before == after
+    return li
+
+
+def sens(trial: str, **kw):
+    return _sens(trial, tuple(sorted(kw.items())))
+
+
+def sens_diff(trial: str, **kw) -> dict[str, tuple[dict, dict]]:
+    """{hop id: (baseline view, changed view)} for the hops whose candidate sessions differ. The hop set is equal (the
+    parameters of these runs do not touch grouping)."""
+    base, v = _view(sens(trial)), _view(sens(trial, **kw))
+    assert set(base) == set(v), f"{trial}: the hop set changed"
+    return {h: (base[h], v[h]) for h in base if base[h] != v[h]}
+
+
+def all_diffs(**kw) -> dict[str, dict]:
+    return {t: d for t in DEV for d in [sens_diff(t, **kw)] if d}
+
+
+def smb1_hop_id() -> str:
+    ld, key = linked("s06_t00"), load_key("s06_t00")
+    return key_hop_of(ld, key, next(k for k in key["hops"] if k["hop_id"] == "s06-smb-1")).hop_id
+
+
+def s02_t01_05_34_09_hop_id() -> str:
+    ld = linked("s02_t01")
+    day_us = 86_400_000_000
+    target = 5 * 3600 + 34 * 60 + 9
+    hops = [h for h in user_e2e_hops(ld) if abs((h.first_us % day_us) / 1e6 - target) <= 1.0]
+    assert len(hops) == 1
+    return hops[0].hop_id
+
+
+def test_c13_the_unchanged_parameters_give_the_same_links_as_the_cached_baseline():
+    for t in DEV:
+        base = _view(sens(t))
+        ld = linked(t)
+        assert set(base) == set(ld.links)
+        for h, v in base.items():
+            L = ld.links[h]
+            assert v["reason"] == L.target_only_reason
+            assert v["all"] == tuple(sorted({hex_id(k[1]) for k in L.candidate_sessions}))
+
+
+@pytest.mark.parametrize("after_s", [10.0, 30.0])
+def test_c13_after_side_10_and_30_s_give_the_same_links_as_15_s_on_all_nine_trials(after_s):
+    diffs = all_diffs(link_after_s=after_s)
+    assert diffs == {}, f"after {after_s} s changes hops {[(t, sorted(d)) for t, d in diffs.items()]}"
+
+
+def test_c13_after_side_5_s_makes_only_s06_smb_1_target_only():
+    diffs = all_diffs(link_after_s=5.0)
+    smb1 = smb1_hop_id()
+    print(f"C13 after 5 s: changed hops { {t: sorted(d) for t, d in diffs.items()} }")
+    assert {t: sorted(d) for t, d in diffs.items()} == {"s06_t00": [smb1]}
+    before, after = diffs["s06_t00"][smb1]
+    assert before["reason"] == "" and before["all"]
+    assert after["reason"] == "no_evidence_in_range" and after["all"] == ()
+
+
+def test_c13_look_back_120_s_adds_only_the_s02_t01_05_34_09_candidate_at_about_minus_92_s():
+    diffs = all_diffs(link_lookback_s=120.0)
+    hop = s02_t01_05_34_09_hop_id()
+    print(f"C13 look-back 120 s: changed hops { {t: sorted(d) for t, d in diffs.items()} }")
+    assert {t: sorted(d) for t, d in diffs.items()} == {"s02_t01": [hop]}
+    before, after = diffs["s02_t01"][hop]
+    assert before["all"] == () and before["reason"] == "no_evidence_in_range"
+    assert len(after["all"]) == 1 and after["reason"] == ""
+    L = sens("s02_t01", link_lookback_s=120.0).links[hop]
+    deltas = [r.time_delta_ms for r in L.rows if r.session_key is not None]
+    print(f"C13 look-back 120 s: new session {after['all']}, time_delta_ms {deltas}")
+    assert deltas and all(-93500 <= d <= -91500 for d in deltas), f"time_delta_ms {deltas}"
+
+
+def test_c13_look_back_300_s_gives_the_s03_t00_winrm_hop_a_second_candidate_session():
+    diffs = all_diffs(link_lookback_s=300.0)
+    ld, key = linked("s03_t00"), load_key("s03_t00")
+    winrm = key_hop_of(ld, key, next(k for k in key["hops"] if k["hop_id"] == "s03-h1")).hop_id
+    print(f"C13 look-back 300 s: changed hops { {t: sorted(d) for t, d in diffs.items()} }")
+    assert "s03_t00" in diffs, "no hop of s03_t00 changes at a 300 s look-back (spec 10.4 says a second session appears)"
+    assert sorted(diffs["s03_t00"]) == [winrm], f"s03_t00 changed hops {sorted(diffs['s03_t00'])}, expected only {winrm}"
+    before, after = diffs["s03_t00"][winrm]
+    assert len(before["all"]) == 1 and len(after["all"]) == 2 and set(before["all"]) < set(after["all"])
+    (new,) = set(after["all"]) - set(before["all"])
+    L = sens("s03_t00", link_lookback_s=300.0).links[winrm]
+    deltas = sorted(r.time_delta_ms for r in L.rows if r.session_key is not None and r.source_session_id_hex == new)
+    print(f"C13 look-back 300 s: s03_t00 {winrm} new session {new}, time_delta_ms {deltas}")
+    assert deltas and all(-176000 <= d <= -170000 for d in deltas), f"time_delta_ms {deltas} (spec: command at -173 s)"
+    # nothing is lost anywhere (a wider range only adds); the s02_t01 hop of the 120 s run is the only other change
+    for t, d in diffs.items():
+        for hop, (b, a) in d.items():
+            assert set(b["all"]) <= set(a["all"]), f"{t} {hop}: a session is lost at 300 s"
+    assert sorted(set(diffs) - {"s03_t00"}) == ["s02_t01"] and sorted(diffs["s02_t01"]) == [s02_t01_05_34_09_hop_id()]
+
+
+def _winrm_user_hops(ld):
+    return [h for h in user_e2e_hops(ld) if h.protocol == "winrm"]
+
+
+@pytest.mark.parametrize("port_s", [2.0, 10.0])
+def test_c13_port_join_at_2_and_10_s_links_6_of_7_winrm_hops_and_changes_no_hop_link(port_s):
+    n_hops = n_port = 0
+    for t in DEV:
+        ld, li = linked(t), sens(t, port_join_s=port_s)
+        for h in _winrm_user_hops(ld):
+            n_hops += 1
+            n_port += li.links[h.hop_id].candidate_counts[PORT] > 0
+    assert (n_hops, n_port) == (7, 6), f"port join at {port_s} s: {n_port} of {n_hops} WinRM hops"
+    assert all_diffs(port_join_s=port_s) == {}
+
+
+def _followup_port_join(ld, f, hop, params):
+    subj = src.subject_of(hop.target_host, hop.source_ip, f.logons, params)
+    return src.port_join(subj, ld.scan, ld.index.processes, params)
+
+
+def test_c13_port_join_at_10_s_joins_one_follow_up_group_and_links_none():
+    counts = {}
+    deltas = []
+    for port_s in (2.0, 5.0, 10.0):
+        p = dataclasses.replace(PARAMS, port_join_s=port_s)
+        n = 0
+        for t in ("s06_t00", "s06_t01"):
+            ld = linked(t)
+            for f, hop in _user_followups(ld):
+                res = _followup_port_join(ld, f, hop, p)
+                if res.evidence:
+                    n += 1
+                    if port_s == 10.0:
+                        deltas += [c / 1e6 for c, _ in res.match_deltas_us]
+        counts[port_s] = n
+    print(f"C13 follow-up groups joined by the port join at 2 / 5 / 10 s: {counts}, corrected deltas {deltas}")
+    assert counts == {2.0: 0, 5.0: 0, 10.0: 1}
+    # spec 10.4: "-9.4 s" (the nearest match, -9.43 s); the group's other match is -9.58 s
+    assert deltas and all(-9.6 <= d <= -9.3 for d in deltas), f"deltas {deltas} (spec: -9.4 s)"
+    # ST-26: the follow-up group has no link rows in any run
+    for t in ("s06_t00", "s06_t01"):
+        li = sens(t, port_join_s=10.0)
+        fol = {u for f in li.hopset.followups for lg in f.logons for u in lg.event_uids}
+        assert fol and all(fol.isdisjoint(r.supporting_event_uids) for L in li.links.values() for r in L.rows)
+
+
+def _raw_scan(scan):
+    """A copy of the scan whose Sysmon 3 rows carry us = us_raw (the logged time)."""
+    rows = [dict(r, us=r["us_raw"]) if (r["channel"], r["event_id"]) == ("Sysmon", 3) else r for r in scan.in_window]
+    return dataclasses.replace(scan, in_window=rows)
+
+
+def test_c13_port_join_on_raw_times_at_5_s_links_3_of_7_winrm_hops():
+    res = {}
+    for port_s in (2.0, 5.0):
+        p = dataclasses.replace(PARAMS, port_join_s=port_s)
+        joined, per_trial = 0, {}
+        for t in DEV:
+            ld = linked(t)
+            scan2 = _raw_scan(ld.scan)
+            for h in _winrm_user_hops(ld):
+                members = [dataclasses.replace(m, us=m.us_raw) for m in h.members]
+                subj = src.Subject(h.target_host, src.source_host_of(h.source_ip, PARAMS.lab_host_ips), tuple(members))
+                ok = bool(src.port_join(subj, scan2, ld.index.processes, p).evidence)
+                joined += ok
+                per_trial.setdefault(t, []).append(int(ok))
+        res[port_s] = (joined, per_trial)
+    print(f"C13 raw-time port join: ±2 s {res[2.0][0]} of 7 {res[2.0][1]}; ±5 s {res[5.0][0]} of 7 {res[5.0][1]}")
+    assert res[5.0][0] == 3, f"raw ±5 s: {res[5.0][0]} of 7 WinRM hops {res[5.0][1]} (spec 10.4 says 3 of 7)"
+    failing = sorted(t for t, v in res[5.0][1].items() if 0 in v)
+    assert {"s03_t01", "s06_t01"} <= set(failing), f"trials with a raw-time failure at ±5 s: {failing}"
+
+
+def _groups_for_4648(ld):
+    """The 21 user endpoint hops and the 2 follow-up groups, as (label, Subject)."""
+    out = [(h.hop_id, src.hop_subject(h, PARAMS)) for h in user_e2e_hops(ld)]
+    for f, hop in _user_followups(ld):
+        out.append((f"{hop.hop_id}+fu", src.subject_of(hop.target_host, hop.source_ip, f.logons, PARAMS)))
+    return out
+
+
+def _n_4648_groups(params) -> tuple[int, int]:
+    """(groups with a 4648 candidate session, groups examined) over the 21 user hops and the 2 follow-up groups."""
+    n = total = 0
+    for t in DEV:
+        ld = linked(t)
+        sessions = build_index(t, ld.scan, PARAMS).sessions  # a fresh index: by_4648 may add unknown-open sessions
+        for _label, subj in _groups_for_4648(ld):
+            total += 1
+            n += bool(src.by_4648(subj, ld.scan, ld.t4648, sessions, params).sessions)
+    return n, total
+
+
+def test_c13_4648_alone_at_symmetric_2_5_10_s_loses_3_1_0_of_the_11_groups_that_have_one_at_minus_120_plus_10():
+    wide, total = _n_4648_groups(dataclasses.replace(PARAMS, link_lookback_s=120.0, link_after_s=10.0))
+    lost = {}
+    for s in (2.0, 5.0, 10.0):
+        n, tot = _n_4648_groups(dataclasses.replace(PARAMS, link_lookback_s=s, link_after_s=s))
+        assert tot == total == 23
+        lost[s] = wide - n
+    print(f"C13 4648 alone: groups with one at [-120, +10] s: {wide} of {total}; lost at ±2 / ±5 / ±10 s: {lost}")
+    assert wide == 11, f"{wide} groups have a 4648 candidate at [-120, +10] s (spec: 11)"
+    assert (lost[2.0], lost[5.0], lost[10.0]) == (3, 1, 0), f"lost {lost} (spec: 3 / 1 / 0)"
+
+
+def _hop_ids_of(hopset, uids):
+    out = set()
+    for h in hopset.hops:
+        for m in h.members + h.followups:
+            if set(uids) & set(m.event_uids):
+                out.add(h.hop_id)
+    return out
+
+
+def _hops_at(trial: str, gap_s: float):
+    ld = hopped(trial)
+    p = dataclasses.replace(PARAMS, group_gap_s=gap_s)
+    return build_hops(trial, ld.gate, ld.scan, build_index(trial, ld.scan, p).sessions, p)
+
+
+def test_c13_grouping_gap_1_s_splits_the_s03_t01_winrm_hop_and_2_and_5_s_keep_it():
+    """At 1 s the inside gap of 1.33 s splits the five logons. The second part has no trigger row and re-uses the first
+    part's ports, so ST-26 attaches it to the first part as follow-up logons: the SPLIT shows as a smaller hop (3 members) plus
+    a follow-up group of 2 logons, not as a second hop. Both readings (a second hop, or the follow-up) are accepted as a split."""
+    ld = linked("s03_t01")
+    cand = [h for h in ld.hs.hops if h.protocol == "winrm" and h.member_count == 5 and h.inside_gap_max_ms is not None
+            and 1300 <= h.inside_gap_max_ms < 1340]
+    assert len(cand) == 1
+    uids = [u for m in cand[0].members for u in m.event_uids]
+    shape = {}
+    for g in (1.0, 2.0, 5.0):
+        hs = _hops_at("s03_t01", g)
+        member_in = {h.hop_id: sum(1 for m in h.members if set(m.event_uids) & set(uids)) for h in hs.hops}
+        member_in = {k: v for k, v in member_in.items() if v}
+        follow = sum(len(f.logons) for f in hs.followups if any(set(lg.event_uids) & set(uids) for lg in f.logons))
+        shape[g] = (sorted(member_in.values()), follow)
+    print(f"C13 s03_t01 five-member WinRM hop: (members of the hop(s) holding them, follow-up logons) at gap 1 / 2 / 5 s: {shape}")
+    assert shape[2.0] == ([5], 0) and shape[5.0] == ([5], 0)
+    assert shape[1.0] != ([5], 0) and sum(shape[1.0][0]) + shape[1.0][1] == 5, f"gap 1 s: {shape[1.0]}"
+
+
+def test_c13_grouping_gap_5_s_merges_s04_a_and_b_into_one_hop_and_1_and_2_s_keep_them_apart():
+    ld, key = linked("s04_t00"), load_key("s04_t00")
+    uids = {}
+    for name in ("s04-A-h1", "s04-B-h1"):
+        kh = next(k for k in key["hops"] if k["hop_id"] == name)
+        uids[name] = key_logon_uids(ld, key, kh)
+        assert uids[name]
+    n = {}
+    for g in (1.0, 2.0, 5.0):
+        hs = _hops_at("s04_t00", g)
+        a, b = _hop_ids_of(hs, uids["s04-A-h1"]), _hop_ids_of(hs, uids["s04-B-h1"])
+        assert len(a) == 1 and len(b) == 1, f"gap {g}: A in {sorted(a)}, B in {sorted(b)}"
+        n[g] = len(a | b)
+    print(f"C13 s04 A+B: hops holding them at gap 1 / 2 / 5 s: {n}")
+    assert n == {1.0: 2, 2.0: 2, 5.0: 1}
+
+
+def test_c13_044_kill_criterion_no_keyed_hop_needs_evidence_outside_minus_30_plus_15_s():
+    """The key session of each of the 11 keyed hops is a candidate, and its nearest evidence lies inside
+    [first member - 30 s, last member + 15 s]; widening the look-back to 300 s does not remove any key session."""
+    rows = []
+    for t, key, ld, hop, kh in keyed_hops():
+        lids = key_source_lids(ld, key, kh)
+        if not lids:
+            continue
+        L = ld.links[hop.hop_id]
+        span_ms = round((hop.last_us - hop.first_us) / 1000)
+        wide = sens(t, link_lookback_s=300.0).links[hop.hop_id]
+        for lid in lids:
+            mine = [r for r in L.rows if r.session_key is not None and r.source_session_id == lid]
+            assert mine, f"{kh['hop_id']}: the key session {hex_id(lid)} has no link row"
+            nearest = min((r.time_delta_ms for r in mine), key=abs)
+            rows.append((kh["hop_id"], hex_id(lid), nearest))
+            assert -30000 <= nearest <= 15000 + span_ms, f"{kh['hop_id']}: nearest evidence {nearest} ms"
+            assert lid in {k[1] for k in wide.candidate_sessions}, f"{kh['hop_id']}: key session lost at 300 s"
+    print(f"C13 key sessions and nearest evidence (ms): {rows}")
+    assert len({r[0] for r in rows}) == 11
+
+
+# ------------------------------------------------------------------------------------------------ C14
+SMB_NAMED_KEYED = ["s02-h1", "s04-A-h1", "s04-B-h1", "s05-h1", "s06-smb-1", "s07-h-x", "s07-h-y"]
+
+
+def test_c14_key_session_names_found_for_the_7_keyed_smb_hops_and_none_for_the_winrm_hops():
+    smb, winrm, report = {}, {}, []
+    for t, key, ld, hop, kh in keyed_hops():
+        lids = key_source_lids(ld, key, kh)
+        if not lids:
+            continue
+        L = ld.links[hop.hop_id]
+        names = {n for r in L.rows if r.session_key is not None and r.source_session_id in lids for n in r.names_found}
+        name_uids = {u for r in L.rows if r.session_key is not None and r.source_session_id in lids
+                     for u in r.names_event_uids}
+        report.append((kh["hop_id"], hop.protocol, len(names), len(name_uids)))
+        (winrm if hop.protocol == "winrm" else smb)[kh["hop_id"]] = (names, name_uids)
+    print(f"C14 (keyed hop, protocol, names found, naming events): {report}")
+    assert sorted(smb) == sorted(SMB_NAMED_KEYED), f"keyed SMB hops with a source session: {sorted(smb)}"
+    empty = sorted(h for h, (names, _) in smb.items() if not names)
+    assert empty == [], f"key session without a target-side name in its command evidence: {empty}"
+    assert all(u for _, u in smb.values())
+    assert len(winrm) == 4
+    named = sorted(h for h, (names, _) in winrm.items() if names)
+    assert named == [], f"WinRM keyed hops with names found (WinRM hops have no names): {named}"
+
+
+# ------------------------------------------------------------------------------------------------ STT-12 on the check file
+def test_stt12_check_file_s06_t01_ep_03_hops_are_clock_unreliable_and_the_ep_01_to_ep_02_hop_is_not():
+    data = _check_data("s06_t01")
+    ep1 = EP_IP["ep-01"]
+    to3 = [h for h in data["hops"] if h["protocol"] == "winrm" and h["target_host"] == "ep-03" and h["source_ip"] == ep1
+           and h["source_host"] == "ep-01"]
+    to2 = [h for h in data["hops"] if h["protocol"] == "winrm" and h["target_host"] == "ep-02" and h["source_ip"] == ep1
+           and h["source_host"] == "ep-01"]
+    assert to3 and to2, f"{len(to3)} ep-01->ep-03 and {len(to2)} ep-01->ep-02 WinRM hop records"
+    assert all(h["clock_unreliable"] == 1 for h in to3) and all(r["clock_unreliable"] == 1 for h in to3 for r in h["links"])
+    assert all(h["clock_unreliable"] == 0 for h in to2) and all(r["clock_unreliable"] == 0 for h in to2 for r in h["links"])
+    assert all(h["gate_clock_unreliable"] == 1 for h in to2)           # kept apart from the stitcher's own flag
+
+
+@pytest.mark.parametrize("trial", DEV)
+def test_check_file_counts_agree_with_its_rows_and_every_hop_has_a_link_row(trial):
+    data = _check_data(trial)
+    c, hops = data["counts"], data["hops"]
+    assert c["hops"] == len(hops) == len({h["hop_id"] for h in hops})
+    assert c["seeds"] == sum(h["is_seed"] for h in hops)
+    assert c["followup_groups"] == len(linked(trial).hs.followups)
+    assert c["followup_logons"] == sum(len(h["followup_logon_uids"]) for h in hops)
+    assert all(h["links"] for h in hops), f"{trial}: a hop with no link row"
+    assert sum(1 for h in hops if h["target_only_reason"]) == sum(c["target_only_reasons"].values())
+    assert [h["hop_id"] for h in hops] == sorted(h["hop_id"] for h in hops)

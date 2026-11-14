@@ -125,13 +125,15 @@ def subject_of(target_host: str, source_ip: Any, members: Sequence[RemoteLogon],
 
 
 def hosts_with_rows(scan: ScanResult) -> set[str]:
-    """Hosts with at least one row the scan kept or counted: ``in_window``, ``lookback``, ``link_rows`` and the
-    hosts of ``removed_by_window`` (048 item 6, ``source_host_no_logs``).
+    """Hosts with at least one row in the DB (048 item 6 as amended in task 5, ``source_host_no_logs``).
 
-    Note: an in-window row of a kind the scan neither keeps nor counts (e.g. a Sysmon 22) is not seen here, so a
-    host whose ONLY rows were such in-window rows would read as "no logs". The scan offers no other host list
-    without a new DB read; on the development trials the hosts with no rows at all are the 048 pre-check list.
+    ``scan.hosts_loaded`` (the hosts of every row the scan read, any kind, any time) when it is filled. WHY the
+    fallback: a hand-built ``ScanResult`` that leaves ``hosts_loaded`` empty still gets the old answer, the union
+    of the hosts of ``in_window``, ``lookback``, ``link_rows`` and ``removed_by_window``. A scan of real rows
+    always fills it, so the fallback never decides a real run (an empty DB yields the empty set either way).
     """
+    if scan.hosts_loaded:
+        return set(scan.hosts_loaded)
     out: set[str] = set()
     for rows in (scan.in_window, scan.lookback, scan.link_rows):
         out.update(str(r.get("host")) for r in rows)

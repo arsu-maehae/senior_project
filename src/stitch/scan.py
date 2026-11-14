@@ -127,6 +127,12 @@ class ScanResult:
     like ``in_window``; they are in neither ``in_window`` nor ``lookback``. They are collapsed (ST-05) in a
     separate call with their own counters ``link_near_duplicate_groups`` and
     ``link_near_duplicate_split_by_window``, so every T7.2 field keeps its T7.2 value.
+
+    ``hosts_loaded`` is the sorted list of hosts of EVERY row read, whatever its kind or time (a NULL host is
+    left out: it names no host). WHY: ``source_host_no_logs`` means "the DB holds no row of that host"
+    (048 item 6 as amended in task 5); the kept and counted lists miss hosts whose only rows are in-window
+    rows of a kind the scan neither keeps nor counts. It enters no T7.2 count, so ``t72_index.json`` is
+    unchanged.
     """
     in_window: list[Row] = field(default_factory=list)
     lookback: list[Row] = field(default_factory=list)
@@ -138,6 +144,7 @@ class ScanResult:
     link_rows: list[Row] = field(default_factory=list)
     link_near_duplicate_groups: int = 0
     link_near_duplicate_split_by_window: int = 0
+    hosts_loaded: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------- per-row steps
@@ -239,14 +246,18 @@ def scan_rows(rows: Iterable[Mapping], start_us: int, end_us: int, offsets: Offs
     it is a 4624, 4634, 4647, boot or 1102 (ST-63); a pre-window Sysmon 1 is never kept (owner Q13b); a
     pre-window link row is never kept (it only places its near-duplicate group, ``_collapse_links``).
     ``removed_by_window`` counts every out-of-window row of every kind, link kinds included, as in T7.2.
+    ``hosts_loaded`` collects the host of every row read (048 item 6 as amended).
     Raises StitchError for a row without a parseable ``event_utc``.
     """
     res = ScanResult()
     kept: list[Row] = []
     link_seen: list[Row] = []
+    hosts: set[str] = set()
     for raw in rows:
         res.loaded_total += 1
         row = kept_row(raw, start_us, end_us, offsets, changes)
+        if row.get("host") is not None:
+            hosts.add(str(row["host"]))
         if row["in_window"]:
             if is_window_kind(row):
                 kept.append(row)
@@ -269,4 +280,5 @@ def scan_rows(rows: Iterable[Mapping], start_us: int, end_us: int, offsets: Offs
         res.kept_lookback_by_type[key] = res.kept_lookback_by_type.get(key, 0) + 1
     res.kept_lookback_by_type = dict(sorted(res.kept_lookback_by_type.items()))
     res.removed_by_window = {h: dict(sorted(c.items())) for h, c in sorted(res.removed_by_window.items())}
+    res.hosts_loaded = sorted(hosts)
     return res

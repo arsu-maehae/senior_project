@@ -72,7 +72,7 @@ Never tune code or weights on the test set.
 ## T7. Cross-host linking — depends on: T6 — CRITICAL — spec: docs/specs/03_stitch.md
 - [x] 7.1 *(done 2026-11-13: docs/specs/03_stitch.md approved by the owner; review docs/reviews/03_stitch-spec-2026-11-13.md; decisions 044 (council, after side 15 s) and 045 (tier rule scope) accepted; decision 014 window amended; Q9 open for T8/T9)* Spec; council on the NTLM linking approach and the time window. Input notes the spec must handle: docs/specs/03_stitch_input_notes.md (IN-01 several 4624s per hop, IN-02 file copy under an earlier session; F2, F3 of review 02_gate-2026-11-12)
 - [x] 7.2 *(done 2026-11-14: src/stitch/ inputs, scan, sessions, processes, index, check_index; decisions 046 (development allowlist) and 047 (session model, amended by the owner); spec ST-10/§5/STT-11 amended; counts in out/stitch_check/<trial>/t72_index.json; no spec output file yet, the outputs of spec §3 start in 7.3)* Sessions per host (Logon ID); process trees (ProcessGuid)
-- [~] 7.3 Cross-host links per protocol (Correction I); Kerberos confirmation *(in progress 2026-11-14; readings decision 048)*
+- [x] 7.3 *(done 2026-11-14: src/stitch/ cmdtext, hops, artefacts, source, confirm, links, check_links; decision 048; counts in out/stitch_check/<trial>/t73_links.json; spec §3 files start in 7.4/7.5)* Cross-host links per protocol (Correction I); Kerberos confirmation
 - [ ] 7.4 Every link records method, candidate count, time gap, confidence
 - [ ] 7.5 Candidate paths from triggers; merge on shared nodes; never drop isolated paths
 - [ ] 7.6 Link accuracy vs development keys (on t01: after T6b)

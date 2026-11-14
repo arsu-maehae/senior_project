@@ -62,6 +62,8 @@ Spec 03_stitch fixes the T7.3 rules but leaves some implementation readings open
     - It is never a stitcher error and never fails a test.
     - The plan's wording ("every host whose last Security event is before the window end") would have labelled 19 host-trials whose hosts were only quiet.
 
+**Matcher comparison (dev-only, task 5, 2026-11-14).** `stitch.cmdtext` and `log_check.matching` were run on every Sysmon 1 / 4688 command line of the nine development DBs (read-only, hashes unchanged), with every other lab host as the target: 161,019 command-target pairs, 122 matches by both, **0 disagreements**. The script prints counts and uids only and lives in the session scratchpad.
+
 ## Consequences
 - The stitcher process loads no answer-key or log-check code.
 - The matcher exists twice in the repo (`answer_key.targets` for the keys, `stitch.cmdtext` for the pipeline). Tier B on SMB is still agreement with the key's rule, not accuracy (spec L-ST1, 044).
