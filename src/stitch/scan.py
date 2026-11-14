@@ -258,7 +258,8 @@ def scan_rows(rows: Iterable[Mapping], start_us: int, end_us: int, offsets: Offs
             kept.append(row)
         elif row["us"] < start_us and is_link_kind(row):
             link_seen.append(row)
-    res.link_rows, res.link_near_duplicate_groups, res.link_near_duplicate_split_by_window =         _collapse_links(link_seen)
+    res.link_rows, res.link_near_duplicate_groups, res.link_near_duplicate_split_by_window = (
+        _collapse_links(link_seen))
     collapsed, res.near_duplicate_groups, res.near_duplicate_split_by_window = collapse_near_duplicates(kept)
     collapsed.sort(key=_sort_key)
     res.in_window = [r for r in collapsed if r["in_window"]]

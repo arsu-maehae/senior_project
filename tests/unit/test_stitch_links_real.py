@@ -1,15 +1,19 @@
 """Real-data checks for T7.3 task 1 (plan sections 3 and 4, task 1): the scan extension that keeps the link kinds apart
 must leave the committed T7.2 check files byte-identical, keep every link row inside the window and leave the DBs
-unchanged. Slow; parametrised over `clock_offset.params.DEVELOPMENT_TRIALS` only, never t02-t10.
+unchanged. Task 2 (hops, plan section 5 C2-C5, spec 03_stitch STA-01..03, 10.1, 10.2, 10.7) is at the end of the
+module. Slow; parametrised over `clock_offset.params.DEVELOPMENT_TRIALS` only, never t02-t10.
 
 Written from the plan and decision 048, not from the implementation. Assertions and messages carry counts and uids
 only, never command text. Nothing is written under the repo.
 """
 from __future__ import annotations
 
+import functools
 import json
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -21,7 +25,9 @@ from clock_offset import params as co_params  # noqa: E402
 from gate.timeutil import US_PER_MS  # noqa: E402
 from stitch.check_index import check_text, run_check  # noqa: E402
 from stitch.cmdtext import read_4648_targets, read_command_results, target_name_forms  # noqa: E402
-from stitch.inputs import check_allowed, load_link_inputs, load_scan, trial_paths  # noqa: E402
+from stitch.hops import build_hops  # noqa: E402
+from stitch.index import build_index  # noqa: E402
+from stitch.inputs import check_allowed, load_link_inputs, load_scan, read_gate_rows, trial_paths  # noqa: E402
 from stitch.params import StitchParams  # noqa: E402
 
 pytestmark = pytest.mark.slow
@@ -123,3 +129,372 @@ def test_adding_the_link_kinds_leaves_every_t72_scan_field_as_load_scan_gives_it
     assert a.near_duplicate_split_by_window == b.near_duplicate_split_by_window
     assert a.loaded_total == b.loaded_total
     assert a.link_rows == b.link_rows
+
+
+# ================================================================================================ T7.3 task 2: hops
+# Plan section 5 C2-C5 and spec 03_stitch STA-01..STA-03, 10.1, 10.2, 10.7 on the nine development trials. Hops are built
+# with check_allowed + load_scan + build_index + read_gate_rows + build_hops, once per trial. The tests read the approved
+# t00 keys; `src/stitch` never does. The expected numbers are literal copies of the spec / plan tables.
+DEV_T00 = [t for t in DEV if t.endswith("_t00")]
+APPROVED = REPO / "ground_truth" / "approved"
+ENDPOINTS = {h for h in PARAMS.lab_host_ips if h.startswith("ep-")}
+ENDPOINT_IPS = {ip for h, ip in PARAMS.lab_host_ips.items() if h.startswith("ep-")}
+
+# spec 10.1 (table order s02_t00, s02_t01, s03_t00, s03_t01, s04_t00, s05_t00, s06_t00, s06_t01, s07_t00)
+TABLE_ORDER = ["s02_t00", "s02_t01", "s03_t00", "s03_t01", "s04_t00", "s05_t00", "s06_t00", "s06_t01", "s07_t00"]
+
+
+def _by_trial(values: list[int]) -> dict[str, int]:
+    return dict(zip(TABLE_ORDER, values))
+
+
+REMOTE_LOGONS = _by_trial([90, 70, 77, 83, 81, 129, 115, 74, 92])
+IP_GROUPS = _by_trial([25, 26, 19, 21, 21, 41, 36, 26, 26])
+BLANK_IP = _by_trial([2, 4, 4, 7, 4, 4, 7, 7, 7])
+SEEDS = _by_trial([4, 10, 3, 4, 5, 10, 7, 6, 6])
+USER_E2E = _by_trial([1, 2, 1, 1, 3, 3, 5, 4, 3])
+FOLLOWUP_GROUPS = {t: int(t in ("s05_t00", "s06_t00", "s06_t01")) for t in TABLE_ORDER}
+# spec input notes IN-01 / STA-02, in the input-notes order
+KEY_ORDER = ["s02-h1", "s03-h1", "s04-A-h1", "s04-B-h1", "s04-t1", "s05-h1", "s05-h2", "s05-t1", "s06-winrm-1",
+             "s06-winrm-2", "s06-smb-1", "s06-t1", "s07-h-x", "s07-h-y", "s07-t1"]
+KEY_MEMBER_COUNTS = dict(zip(KEY_ORDER, [3, 5, 3, 3, 1, 3, 5, 1, 3, 5, 3, 1, 3, 2, 1]))
+
+
+@dataclass
+class Hopped:
+    trial: str
+    paths: Any
+    checked: Any
+    scan: Any
+    gate: Any
+    hs: Any
+    by_uid: dict[str, dict]               # every uid of every in-window row -> its row
+
+
+@functools.lru_cache(maxsize=None)
+def _hopped(trial: str):
+    assert trial in DEV, trial            # belt and braces: only development trials, ever
+    paths = trial_paths(REPO, trial)
+    if not paths.db.is_file() or not (paths.gate_dir / "stats.json").is_file():
+        return None
+    checked = check_allowed(paths)
+    scan, _, _ = load_scan(checked, paths, PARAMS)
+    index = build_index(trial, scan, PARAMS)
+    gate = read_gate_rows(paths.gate_dir)
+    hs = build_hops(trial, gate, scan, index.sessions, PARAMS)
+    by_uid = {u: r for r in scan.in_window for u in r["event_uids"]}
+    return Hopped(trial, paths, checked, scan, gate, hs, by_uid)
+
+
+def hopped(trial: str) -> Hopped:
+    got = _hopped(trial)
+    if got is None:
+        pytest.skip(f"{trial}: trial DB or gate output missing")
+    return got
+
+
+def load_key(trial: str) -> dict:
+    path = APPROVED / f"{trial}.yaml"
+    if not path.is_file():
+        pytest.skip(f"no approved key for {trial}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def gate_logon_uids(ld: Hopped) -> list[str]:
+    """Every remote logon of the gate files: trigger anchors plus unmatched rows (a trigger row with no anchor is no logon)."""
+    out = [r["anchor_logon_uid"].strip() for r in ld.gate.triggers if (r.get("anchor_logon_uid") or "").strip()]
+    out += [(r.get("anchor_logon_uid") or r.get("trigger_event_uid") or "").strip() for r in ld.gate.unmatched]
+    return out
+
+
+def hop_by_id(ld: Hopped, hop_id: str):
+    return next(h for h in ld.hs.hops if h.hop_id == hop_id)
+
+
+def groups_before_followups(ld: Hopped) -> list[tuple[str, str | None, list, bool, str | None]]:
+    """(target host, source IP, member logons, has trigger, hop id it is attached to) for every group, follow-up groups
+    included (the groups of spec 10.1 "hop groups at 2 s")."""
+    out = [(h.target_host, h.source_ip, h.members, any(m.trigger_ids for m in h.members), None) for h in ld.hs.hops]
+    for f in ld.hs.followups:
+        h = hop_by_id(ld, f.hop_id)
+        out.append((h.target_host, h.source_ip, f.logons, any(m.trigger_ids for m in f.logons), f.hop_id))
+    return out
+
+
+def is_user_e2e(target: str, ip: str | None, members: list) -> bool:
+    """User endpoint -> endpoint (spec 10.1): source IP of a lab endpoint, target an endpoint, not all machine accounts."""
+    return ip in ENDPOINT_IPS and target in ENDPOINTS and not all(m.machine_account == 1 for m in members)
+
+
+def key_logon_uids(ld: Hopped, key: dict, hop: dict) -> list[str]:
+    """The key hop's target 4624 uids: the key's `target_event_uids` that are Security 4624s of the target host carrying
+    the key's target logon ID (spec ST-25: the hop is matched by this logon)."""
+    want = int(hop["target_logon_id"], 16)
+    ek = key["event_keys"]
+    out = []
+    for u in hop["target_event_uids"]:
+        e = ek.get(u)
+        row = ld.by_uid.get(u)
+        if e and e["channel"] == "Security" and e["event_id"] == 4624 and row is not None \
+                and row["host"] == hop["target_host"] and row["target_logon_id"] == want:
+            out.append(u)
+    return out
+
+
+def hop_with_uid(ld: Hopped, uid: str):
+    """(hop, is_member) of the hop that holds `uid` as a member or as a follow-up logon; exactly one."""
+    found = []
+    for h in ld.hs.hops:
+        if any(uid in m.event_uids for m in h.members):
+            found.append((h, True))
+        if any(uid in m.event_uids for m in h.followups):
+            found.append((h, False))
+    assert len(found) == 1, f"{uid} found in {len(found)} places"
+    return found[0]
+
+
+# ------------------------------------------------------------------------------------------------ C2 / STA-01
+@pytest.mark.parametrize("trial", DEV)
+def test_c2_every_gate_remote_logon_is_a_member_of_one_hop_or_a_follow_up_of_one_hop(trial):
+    ld = hopped(trial)
+    want = gate_logon_uids(ld)
+    assert len(want) == len(set(want))
+    seen: list[str] = []
+    for h in ld.hs.hops:
+        for m in h.members + h.followups:
+            seen.extend(m.event_uids)
+    assert len(seen) == len(set(seen)), f"{trial}: {len(seen) - len(set(seen))} uid(s) in more than one place"
+    assert set(seen) == set(want), f"{trial}: {len(set(seen) ^ set(want))} uid(s) differ from the gate files"
+    members = {u for h in ld.hs.hops for m in h.members for u in m.event_uids}
+    follow = {u for h in ld.hs.hops for m in h.followups for u in m.event_uids}
+    assert members.isdisjoint(follow)
+    n = len(want)
+    assert n == REMOTE_LOGONS[trial] == ld.hs.counts["remote_logons"]
+    print(f"C2 {trial}: remote logons {n}, members {len(members)}, follow-up logons {len(follow)}")
+
+
+@pytest.mark.parametrize("trial", DEV)
+def test_c2_group_hop_seed_and_follow_up_counts_equal_spec_10_1(trial):
+    ld = hopped(trial)
+    groups = groups_before_followups(ld)
+    ip_groups = [g for g in groups if g[1] is not None]
+    blank = [g for g in groups if g[1] is None]
+    assert len(ip_groups) == IP_GROUPS[trial], f"{trial}: {len(ip_groups)} groups with a source IP"
+    assert len(blank) == BLANK_IP[trial], f"{trial}: {len(blank)} blank-IP groups"
+    assert all(len(g[2]) == 1 for g in blank), f"{trial}: a blank-IP group with more than one logon"
+    assert len(groups) == IP_GROUPS[trial] + BLANK_IP[trial]
+    assert sum(1 for g in groups if g[3]) == SEEDS[trial], f"{trial}: seeds before follow-ups"
+    assert sum(h.is_seed for h in ld.hs.hops) == SEEDS[trial]
+    assert len(ld.hs.followups) == FOLLOWUP_GROUPS[trial], f"{trial}: {len(ld.hs.followups)} follow-up groups"
+    assert len(ld.hs.hops) == IP_GROUPS[trial] + BLANK_IP[trial] - FOLLOWUP_GROUPS[trial]
+    assert all(not g[3] for g in groups if g[4] is not None), f"{trial}: a triggered follow-up group"
+    assert [h.hop_id for h in ld.hs.hops] == [f"{trial}-h{n:04d}" for n in range(1, len(ld.hs.hops) + 1)]
+    order = [(h.first_us, h.members[0].uid) for h in ld.hs.hops]
+    assert order == sorted(order), f"{trial}: hop ids are not in corrected first-member time order"
+    print(f"C2 {trial}: groups {len(groups)} (with IP {len(ip_groups)}, blank {len(blank)}), hops {len(ld.hs.hops)}, "
+          f"seeds {SEEDS[trial]}, follow-up groups {len(ld.hs.followups)}")
+
+
+def test_c2_the_three_follow_up_groups_are_in_s05_t00_s06_t00_and_s06_t01():
+    per = {t: len(hopped(t).hs.followups) for t in DEV}
+    assert {t: n for t, n in per.items() if n} == {"s05_t00": 1, "s06_t00": 1, "s06_t01": 1}
+    assert sum(per.values()) == 3
+
+
+def test_c2_the_s05_t00_follow_up_is_a_machine_account_dc01_group_9_6_s_after_its_seed():
+    ld = hopped("s05_t00")
+    (f,) = ld.hs.followups
+    hop = hop_by_id(ld, f.hop_id)
+    assert hop.target_host == "dc01" and hop.is_seed == 1
+    assert all(m.machine_account == 1 for m in f.logons)
+    assert 9550 <= f.time_delta_ms < 9650                                # spec 10.7: 9.6 s (9.598 s measured)
+    assert set(f.ports) <= {m.source_port for m in hop.members}
+    assert (f.kind, f.method, f.confidence_tier, f.candidate_count) == ("followup_logon", "port_reuse", "C", 1)
+
+
+@pytest.mark.parametrize("trial", DEV)
+def test_c2_follow_up_groups_are_untriggered_on_their_hops_ip_target_and_ports_within_30_s(trial):
+    ld = hopped(trial)
+    for f in ld.hs.followups:
+        h = hop_by_id(ld, f.hop_id)
+        assert h.is_seed == 1
+        assert not ({m.uid for m in f.logons} & {m.uid for m in h.members})
+        assert f.time_delta_ms == round((f.logons[0].us_raw - h.members[-1].us_raw) / 1000)
+        assert 0 < f.time_delta_ms <= 30000
+        assert all(m.source_ip == h.source_ip and m.host == h.target_host for m in f.logons)
+        assert all(m.source_port in {x.source_port for x in h.members} for m in f.logons)
+        assert not any(m.trigger_ids for m in f.logons)
+        assert {m.uid for m in f.logons} <= {m.uid for m in h.followups}
+
+
+# ------------------------------------------------------------------------------------------------ C3
+def test_c3_user_endpoint_to_endpoint_groups_are_23_of_which_21_are_seeds_and_21_hops_remain():
+    per_group, per_seed, per_hop, per_hop_seed = {}, {}, {}, {}
+    attached = []
+    for t in TABLE_ORDER:
+        ld = hopped(t)
+        e2e = [g for g in groups_before_followups(ld) if is_user_e2e(g[0], g[1], g[2])]
+        per_group[t] = len(e2e)
+        per_seed[t] = sum(1 for g in e2e if g[3])
+        attached += [t for g in e2e if g[4] is not None]
+        hops = [h for h in ld.hs.hops if is_user_e2e(h.target_host, h.source_ip, h.members)]
+        per_hop[t] = len(hops)
+        per_hop_seed[t] = sum(h.is_seed for h in hops)
+    print(f"C3 groups {per_group}, seeds {per_seed}, hops {per_hop}")
+    assert per_group == USER_E2E
+    assert sum(per_group.values()) == 23 and sum(per_seed.values()) == 21
+    assert sum(per_hop.values()) == 21 and sum(per_hop_seed.values()) == 21, "after follow-ups: 21 hops, all seeds"
+    assert sorted(attached) == ["s06_t00", "s06_t01"]                   # the two attached user groups
+
+
+@pytest.mark.parametrize("trial,low,high", [("s06_t00", 10950, 11100), ("s06_t01", 11850, 12000)])
+def test_c3_the_attached_user_group_is_11_0_s_or_11_9_s_after_a_winrm_hop_on_its_ports(trial, low, high):
+    ld = hopped(trial)
+    user = [f for f in ld.hs.followups
+            if is_user_e2e(hop_by_id(ld, f.hop_id).target_host, hop_by_id(ld, f.hop_id).source_ip, f.logons)]
+    assert len(user) == 1, f"{trial}: {len(user)} attached user group(s)"
+    f = user[0]
+    hop = hop_by_id(ld, f.hop_id)
+    assert hop.protocol == "winrm" and hop.is_seed == 1 and len(f.logons) == 2
+    assert low <= f.time_delta_ms < high, f"{trial}: {f.time_delta_ms} ms after the hop's last member"
+    assert set(f.ports) <= {m.source_port for m in hop.members} and len(f.ports) >= 1
+    print(f"C3 {trial}: follow-up of {hop.hop_id}, {f.time_delta_ms} ms, ports {f.ports}")
+
+
+# ------------------------------------------------------------------------------------------------ C4 / STA-02
+@pytest.mark.parametrize("trial", DEV_T00)
+def test_c4_key_hops_have_the_input_notes_member_counts_and_never_share_a_hop(trial):
+    ld = hopped(trial)
+    key = load_key(trial)
+    seen: dict[str, str] = {}
+    for kh in key["hops"]:
+        kid = kh["hop_id"]
+        assert kid in KEY_MEMBER_COUNTS, f"{trial}: unexpected key hop id {kid}"
+        uids = key_logon_uids(ld, key, kh)
+        assert uids, f"{trial} {kid}: no 4624 of the key's logon ID among its target events"
+        found = [hop_with_uid(ld, u) for u in uids]
+        assert all(is_member for _, is_member in found), f"{trial} {kid}: the key's 4624 is a follow-up logon"
+        ids = {h.hop_id for h, _ in found}
+        assert len(ids) == 1, f"{trial} {kid}: its 4624s are in {len(ids)} hops {sorted(ids)}"
+        (hid,) = ids
+        assert hid not in seen, f"{trial}: key hops {seen[hid]} and {kid} share hop {hid}"
+        seen[hid] = kid
+        hop = found[0][0]
+        assert hop.member_count == KEY_MEMBER_COUNTS[kid], f"{trial} {kid}: {hop.member_count} members in {hid}"
+        assert hop.target_host == kh["target_host"]
+        print(f"C4 {trial} {kid}: {hid} members {hop.member_count} protocol {hop.protocol} seed {hop.is_seed} "
+              f"followups {len(hop.followups)}")
+
+
+def test_c4_the_member_counts_of_the_15_key_hops_in_input_notes_order():
+    got = {}
+    for t in DEV_T00:
+        ld, key = hopped(t), load_key(t)
+        for kh in key["hops"]:
+            hop, _ = hop_with_uid(ld, key_logon_uids(ld, key, kh)[0])
+            got[kh["hop_id"]] = hop.member_count
+    assert list(got) == KEY_ORDER, "key hop ids are not the 15 of the input notes in order"
+    assert [got[k] for k in KEY_ORDER] == [3, 5, 3, 3, 1, 3, 5, 1, 3, 5, 3, 1, 3, 2, 1]
+
+
+# ------------------------------------------------------------------------------------------------ C5 / STA-03
+def test_c5_s06_smb_1_is_one_hop_with_both_accounts_and_the_key_4624_is_a_member():
+    ld, key = hopped("s06_t00"), load_key("s06_t00")
+    kh = next(h for h in key["hops"] if h["hop_id"] == "s06-smb-1")
+    uids = key_logon_uids(ld, key, kh)
+    assert uids
+    hops = {hop_with_uid(ld, u)[0].hop_id for u in uids}
+    assert len(hops) == 1
+    hop = hop_by_id(ld, next(iter(hops)))
+    assert all(any(u in m.event_uids for m in hop.members) for u in uids)
+    assert hop.mixed_account == 1 and len({m.account_key for m in hop.members}) == 2
+    assert hop.member_count == 3 and hop.protocol == "smb_service" and hop.is_seed == 1
+    assert hop.followups == []
+
+
+def test_c5_s06_t01_has_a_mixed_account_smb_service_hop_at_06_23_59_corrected():
+    ld = hopped("s06_t01")
+    mixed = [h for h in ld.hs.hops if h.mixed_account and is_user_e2e(h.target_host, h.source_ip, h.members)]
+    assert len(mixed) == 1, f"s06_t01: {len(mixed)} mixed user endpoint hops"
+    h = mixed[0]
+    assert h.protocol == "smb_service" and h.is_seed == 1 and h.member_count == 3
+    assert "T06:23:59" in h.first_utc_corrected, f"{h.hop_id}: corrected first member {h.first_utc_corrected}"
+
+
+@pytest.mark.parametrize("trial", TABLE_ORDER)
+def test_c5_mixed_account_user_endpoint_hops_exist_only_in_s06_t00_and_s06_t01(trial):
+    ld = hopped(trial)
+    mixed = [h for h in ld.hs.hops if h.mixed_account and is_user_e2e(h.target_host, h.source_ip, h.members)]
+    assert len(mixed) == (1 if trial in ("s06_t00", "s06_t01") else 0), f"{trial}: {[h.hop_id for h in mixed]}"
+
+
+@pytest.mark.parametrize("trial", DEV)
+def test_c5_mixed_account_is_exactly_a_difference_of_member_accounts(trial):
+    ld = hopped(trial)
+    for h in ld.hs.hops:
+        assert h.mixed_account == int(len({m.account_key for m in h.members}) > 1), f"{trial} {h.hop_id}"
+
+
+# ------------------------------------------------------------------------------------------------ spec 6 spot checks
+def test_s04_a_and_b_are_two_hops_with_gap_near_threshold_and_merges_at_3s_on_both():
+    ld, key = hopped("s04_t00"), load_key("s04_t00")
+    hops = {}
+    for kh in key["hops"]:
+        if kh["hop_id"] in ("s04-A-h1", "s04-B-h1"):
+            hops[kh["hop_id"]] = hop_with_uid(ld, key_logon_uids(ld, key, kh)[0])[0]
+    a, b = hops["s04-A-h1"], hops["s04-B-h1"]
+    assert a.hop_id != b.hop_id
+    for h in (a, b):
+        assert (h.gap_near_threshold, h.merges_at_3s) == (1, 1), f"{h.hop_id}"
+    assert a.next_gap_ms == b.prev_gap_ms and 2460 <= a.next_gap_ms < 2480, f"gap {a.next_gap_ms} ms (spec 2.47 s)"
+    assert a.hop_id in b.shares_port_with_hops and b.hop_id in a.shares_port_with_hops   # port 49734 (input notes)
+
+
+def test_s03_t01_has_a_winrm_hop_of_five_members_with_its_largest_inside_gap_1_33_s():
+    ld = hopped("s03_t01")
+    cand = [h for h in ld.hs.hops if h.protocol == "winrm" and h.member_count == 5 and h.inside_gap_max_ms is not None
+            and 1300 <= h.inside_gap_max_ms < 1340]
+    assert len(cand) == 1, f"s03_t01: {len(cand)} such hops"
+    h = cand[0]
+    assert h.splits_at_1s == 1 and h.gap_near_threshold == 1 and h.is_seed == 1
+    assert is_user_e2e(h.target_host, h.source_ip, h.members)
+
+
+@pytest.mark.parametrize("trial", DEV_T00)
+def test_largest_inside_gap_of_a_user_endpoint_hop_on_t00_is_below_one_second(trial):
+    ld = hopped(trial)
+    hops = [h for h in ld.hs.hops if is_user_e2e(h.target_host, h.source_ip, h.members)]
+    gaps = [h.inside_gap_max_ms for h in hops if h.inside_gap_max_ms is not None]
+    assert gaps and max(gaps) < 1000, f"{trial}: {max(gaps)} ms"           # spec 10.2: 0.837 s (s05-h2) on t00
+    assert all(h.splits_at_1s == 0 for h in hops)
+
+
+# ------------------------------------------------------------------------------------------------ ST-01
+@pytest.mark.parametrize("trial", DEV)
+def test_no_hop_or_follow_up_holds_an_out_of_window_uid(trial):
+    ld = hopped(trial)
+    in_window = {u for r in ld.scan.in_window for u in r["event_uids"]}
+    lookback = {u for r in ld.scan.lookback for u in r["event_uids"]}
+    uids = [u for h in ld.hs.hops for m in h.members + h.followups for u in m.event_uids]
+    assert uids and set(uids) <= in_window, f"{trial}: {len(set(uids) - in_window)} uid(s) not in the window"
+    assert set(uids).isdisjoint(lookback)
+    lo, hi = ld.checked.start_us, ld.checked.end_us + US_PER_MS
+    bad = sorted(m.uid for h in ld.hs.hops for m in h.members + h.followups if not lo <= m.us < hi)
+    assert bad == [], f"{trial}: {len(bad)} logon(s) outside the window, e.g. {bad[:5]}"
+    for f in ld.hs.followups:
+        assert all(lo <= m.us < hi for m in f.logons)
+    assert all(ld.by_uid[m.uid]["channel"] == "Security" and ld.by_uid[m.uid]["event_id"] == 4624
+               for h in ld.hs.hops for m in h.members + h.followups)
+
+
+@pytest.mark.parametrize("trial", DEV)
+def test_hops_are_identical_across_two_builds_and_the_db_is_unchanged(trial):
+    ld = hopped(trial)
+    again = build_hops(trial, ld.gate, ld.scan, build_index(trial, ld.scan, PARAMS).sessions, PARAMS)
+
+    def view(hops):
+        return [(h.hop_id, h.member_uids, h.protocol, h.inside_gap_max_ms, h.prev_gap_ms, h.next_gap_ms,
+                 h.shares_port_with_hops, [m.uid for m in h.followups]) for h in hops]
+    assert view(ld.hs.hops) == view(again.hops)
+    gate_sha = json.loads((ld.paths.gate_dir / "stats.json").read_text(encoding="utf-8"))["db"]["sha256_after"]
+    assert sha256_file(ld.paths.db) == gate_sha

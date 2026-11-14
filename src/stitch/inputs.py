@@ -7,10 +7,11 @@ through their shared functions, so a stale gate folder cannot be stitched (spec 
 """
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping, TypeVar
 
@@ -27,9 +28,9 @@ from .errors import StitchError
 from .params import ALLOWED_TRIALS, GATE_FILES, GATE_OUT_REL, SCAN_COLUMNS, SPEC_DB_COLUMNS, VIEW, StitchParams
 from .scan import ScanResult, scan_rows
 
-__all__ = ["StitchError", "TrialPaths", "CheckedInputs", "trial_paths", "check_allowed", "load_scan",
-           "load_link_inputs", "check_allowlist", "missing_gate_files", "window_row_differences",
-           "missing_db_columns"]
+__all__ = ["StitchError", "TrialPaths", "CheckedInputs", "GateRows", "trial_paths", "check_allowed", "load_scan",
+           "load_link_inputs", "read_gate_rows", "read_gate_csv", "check_allowlist", "missing_gate_files",
+           "window_row_differences", "missing_db_columns"]
 
 T = TypeVar("T")
 
@@ -215,6 +216,48 @@ def check_allowed(paths: TrialPaths, params: StitchParams = StitchParams()) -> C
     check_co17(paths.trial_id, start_us, clock)
     return CheckedInputs(trial_id=paths.trial_id, gate_stats=stats, gate_stats_sha256=stats_sha,
                          window_row=dict(row), start_us=start_us, end_us=end_us, clock=clock)
+
+
+# ---------------------------------------------------------------- gate rows (T7.3)
+
+# The three gate files T7.3 reads (spec 2). WHY not dispositions.csv / stats.json: ST-00 already checked
+# that they exist and read stats.json; hops need only the remote logons (ST-03) and supporting rows.
+GATE_ROW_FILES: tuple[str, ...] = ("triggers.csv", "unmatched_remote.csv", "supporting.csv")
+
+
+@dataclass
+class GateRows:
+    """The rows of the gate's ``triggers.csv``, ``unmatched_remote.csv`` and ``supporting.csv``, as text.
+
+    WHY plain dicts of text: the hop builder (``hops.remote_logons``) converts each value it uses with the
+    gate's own functions (``norm_ip``, ``logon_id``), so the stitcher reads a gate row exactly as the gate
+    meant it, and a test can build these rows by hand.
+    """
+    triggers: list[dict[str, str]] = field(default_factory=list)
+    unmatched: list[dict[str, str]] = field(default_factory=list)
+    supporting: list[dict[str, str]] = field(default_factory=list)
+
+
+def read_gate_csv(path: Path) -> list[dict[str, str]]:
+    """All rows of one gate CSV (utf-8, ``newline=''`` as the csv module requires); StitchError if unreadable.
+
+    WHY refuse and not skip: a gate file that cannot be read would silently drop remote logons, and every
+    remote logon must become a hop member or a follow-up (ST-03, STA-01).
+    """
+    try:
+        with Path(path).open("r", encoding="utf-8", newline="") as fh:
+            return [dict(r) for r in csv.DictReader(fh)]
+    except (OSError, UnicodeDecodeError, csv.Error) as exc:
+        raise StitchError(f"refused: cannot read gate file {path}: {exc}") from exc
+
+
+def read_gate_rows(gate_dir: Path) -> GateRows:
+    """The three gate files of ``GATE_ROW_FILES`` from ``gate_dir`` (spec 2). Call after ``check_allowed``,
+    which refused a trial with any gate file missing; the allowlist is therefore checked before this opens
+    anything."""
+    d = Path(gate_dir)
+    trig, unm, sup = (read_gate_csv(d / name) for name in GATE_ROW_FILES)
+    return GateRows(triggers=trig, unmatched=unm, supporting=sup)
 
 
 # ---------------------------------------------------------------- DB scan

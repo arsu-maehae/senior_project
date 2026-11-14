@@ -43,6 +43,7 @@ Spec 03_stitch fixes the T7.3 rules but leaves some implementation readings open
    - There is no source-IP condition. A system process gives a row with `session_unresolved_reason` = `system_process`. It is not a candidate and it is counted.
 6. **`source_host_no_logs`** = the DB holds no row of that host.
 7. **Grouping** compares logged same-host times. A gap equal to `GROUP_GAP_S` joins. Hop ids follow the first member's corrected time, then uid. Flags: `gap_near_threshold` = a gap in [1, 3] s; `splits_at_1s` = an inside gap > 1 s; `merges_at_3s` = a neighbour gap ≤ 3 s.
+   *Added in task 2:* port 0 counts as NULL for the follow-up port test and for `shares_port_with_hops`, as in ST-41 ("> 0"); no development member has port 0. Previous and next gaps and `merges_at_3s` look only at neighbouring hops, never at follow-up groups. `inside_gap_max_ms` is empty for a one-member hop. A NULL account counts as its own value for `mixed_account`. **§10.1 "hop groups at 2 s" counts only groups with a source IP**: the stitcher's group count before follow-ups is that number plus the blank-IP single hops (2/4/4/7/4/4/7/7/7), both are reported, and nothing was tuned.
 8. **ST-26 "the hop before it"** is the nearest preceding hop (never a follow-up group) with the same target and IP.
 9. **Artefact tiers (owner accepted).**
    - `wsmprovhost` (`logon_id`): A.
