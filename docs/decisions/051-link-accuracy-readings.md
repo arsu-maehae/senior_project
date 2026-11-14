@@ -98,3 +98,24 @@ T7.6 checks the stitch links against the approved development keys. The checks a
 ## Committee answer
 **EN:** The accuracy check is a separate program. It reads the linker's saved output and the answer key, and the linker can never see the key. On the development trials, the linked source session was the key's session for every keyed hop. These are development numbers, not results. For SMB they show agreement with the key's own command-line rule, not measured accuracy. Before the test run, the owner locks each test key by its fingerprint, and a changed key is refused.
 **TH:** การตรวจความถูกต้องเป็นโปรแกรมแยกต่างหาก อ่านผลที่ตัวเชื่อมโยงบันทึกไว้และเฉลย โดยตัวเชื่อมโยงไม่มีทางเห็นเฉลย บนข้อมูลพัฒนา เซสชันต้นทางที่เชื่อมได้ตรงกับเฉลยทุก hop ที่มีเฉลย แต่นี่เป็นตัวเลขระหว่างพัฒนา ไม่ใช่ผลการทดลอง และสำหรับ SMB เป็นเพียงความสอดคล้องกับกฎ command line ที่เฉลยใช้เอง ไม่ใช่ความแม่นยำที่วัดได้ ก่อนรันชุดทดสอบ เจ้าของงานจะล็อกเฉลยแต่ละไฟล์ด้วยลายนิ้วมือ (SHA-256) หากเฉลยถูกแก้ไขจะถูกปฏิเสธ
+
+## Implementation readings (T7.6 tasks 1–3, 2026-11-15; within items 1–10, no rule change)
+1. An unmatched or multiple key hop has empty hop and verdict columns, `identity_value` = `missing`, `identity_match` = 0, and is counted under tier `unmatched`. For a multiple match, `hop_id` lists the hops. Its protocol group comes from the key's `protocol`.
+2. `key_session_uid_source`:
+   - `direct`: every key session's uid is in the key;
+   - `lookup`: every key session has a uid, and at least one came from the DB;
+   - `none`: some key session has no uid;
+   - empty: the hop has no key session.
+3. `session_evidence.session_logon_uid` is used only when `session_evidence.session_id` is absent or equals the key session.
+4. The command events of an explicit key session are `session_evidence.command_event_uids` when present, else `agent_event_uids`. Either way, only those that `event_keys` places on `source_host` count.
+5. A hop with no candidate session is compared by the general rule. Under any mode except `ambiguous_boot`, its verdict is `rank1` = `no_candidate`, among = 0, only = 0.
+6. `tie` = 1 if any `links.csv` row of the hop has `tie` = 1.
+7. Order flags are empty when the default Q9 variant has no deciding row. A `not_applicable` identity gives `identity_match` = 0.
+8. `key_account` (lower-cased key `logon_account`) is written in `link_accuracy_hops.csv` and never in a `.md`. It is the target 4624 account, the same value as the stitch `hop_identity.csv` `account`.
+9. Totals add an `all/all` row per scope. The development summary is one CSV with a `row_kind` column (`hop` / `total`), plus a `run_info.json`.
+10. Extra refusals:
+    - the stitch `run_info.trial_id` differs from the trial;
+    - `parameters.boot_group_s` is missing;
+    - a stitch `protocol` falls outside the ST-22 vocabulary;
+    - with `--development`, one refused trial means nothing is written.
+11. Key lock: only the sha256 is checked against the key file, as item 9 says. The row's `key_path` is not compared. A manifest whose header differs, a UTF-8 BOM included, is refused. **Open for the owner** (T10): also check `key_path`, and accept a BOM or not.
