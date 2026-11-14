@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "attack-path-poc"
+version = "0.1.0"
+description = "Identity-aware attack path reconstruction (proof of concept): the src/ pipeline packages"
+requires-python = ">=3.11"
+dependencies = ["evtx>=0.13.1"]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools]
+# Every pipeline package under src/, plus evtx_pipeline, which keeps its folder under src/parsing_normalization/.
+# This install replaces the separate editable install of src/parsing_normalization (evtx-parsing-normalization),
+# so that one `pip install -e .` makes every `python -m <package>` work from the repo root.
+packages = [
+    "answer_key", "clock_offset", "data_layout", "gate", "lab_common", "log_check", "stitch",
+    "trial_window", "x10_validate", "evtx_pipeline",
+]
+
+[tool.setuptools.package-dir]
+"" = "src"
+"evtx_pipeline" = "src/parsing_normalization/evtx_pipeline"
+
+[tool.setuptools.package-data]
+answer_key = ["*.json"]
