@@ -124,7 +124,13 @@ def artefact_record(r: ArtefactRow) -> dict[str, Any]:
 
 
 def limit_record(lim: HostLimit) -> dict[str, Any]:
-    """One host of the data limits (048 item 13): times, counts and ids only."""
+    """One host of the data limits (048 item 13; owner instruction 2026-11-14): times, counts and ids only.
+
+    WHY the unknown-session keys and ``data_limitation_reasons``: the owner added a second labelling condition
+    (processes on the host after its last Security event whose session has no logon) and must see which
+    condition fired and, through the system / user split, what kind of session caused it. Uids only, no command
+    text or account (spec 2).
+    """
     return {
         "last_security_event_uid": lim.last_security_uid,
         "last_security_utc": fmt_us(lim.last_security_us_raw),
@@ -132,7 +138,12 @@ def limit_record(lim: HostLimit) -> dict[str, Any]:
         "ms_before_window_end": lim.ms_before_window_end,
         "evidence_after": dict(lim.evidence_after),
         "evidence_after_event_uids": {m: list(u) for m, u in lim.evidence_after_uids.items()},
+        "unknown_session_processes_after": lim.unknown_session_processes_after,
+        "unknown_session_processes_after_system": lim.unknown_session_processes_after_system,
+        "unknown_session_processes_after_user": lim.unknown_session_processes_after_user,
+        "unknown_session_process_uids": list(lim.unknown_session_process_uids),
         "data_limitation": lim.data_limitation,
+        "data_limitation_reasons": list(lim.data_limitation_reasons),
         "hops_near_end": list(lim.hops_near_end),
     }
 

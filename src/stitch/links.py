@@ -33,12 +33,14 @@ from .inputs import CheckedInputs, GateRows, TrialPaths, check_allowed, load_lin
 from .params import METHODS, TARGET_ONLY_REASONS, StitchParams
 from .processes import ProcessIndex
 from .scan import ScanResult
+from .sessions import SessionIndex
 from .source import (METHOD_4648, METHOD_CMD, METHOD_PORT, METHOD_TARGET_ONLY, SubjectLinks, _initiated,
                      _targets_of, build_links, lab_ip_of)
 
 __all__ = ["LinkIndex", "HostLimit", "assemble", "run_links", "run_links_checked", "command_probes",
            "names_by_target", "process_uids_by_host", "link_4648_uids", "last_security_events", "data_limits",
-           "link_counts", "EVIDENCE_METHODS"]
+           "link_counts", "EVIDENCE_METHODS", "REASON_EVIDENCE_AFTER", "REASON_UNKNOWN_SESSION_PROCESS",
+           "LIMIT_REASONS", "unknown_session_processes_after"]
 
 Row = Mapping[str, Any]
 
@@ -48,6 +50,12 @@ EVIDENCE_METHODS: tuple[str, ...] = tuple(m for m in METHODS if m != METHOD_TARG
 # Artefact kinds whose ``names`` are target-side file / service names (ST-46 data side): the share burst's ``.exe``
 # names (5145) and the install's service name and binary file name (4697 / 7045).
 NAMED_ARTEFACT_KINDS: tuple[str, ...] = (KIND_BURST, KIND_INSTALL)
+# Why a host is labelled ``data_limitation`` = 1 (048 item 13; owner instruction 2026-11-14). WHY names and not a
+# bare 0 / 1: the owner must see which condition fired, because the two have different causes (evidence on other
+# hosts vs. a process on the host itself whose logon is missing from its log).
+REASON_EVIDENCE_AFTER = "evidence_after"
+REASON_UNKNOWN_SESSION_PROCESS = "unknown_session_process"
+LIMIT_REASONS: tuple[str, ...] = (REASON_EVIDENCE_AFTER, REASON_UNKNOWN_SESSION_PROCESS)
 
 
 # ---------------------------------------------------------------- result
@@ -59,9 +67,14 @@ class HostLimit:
     ``last_*``: its last kept in-window Security event (by logged time, then uid) and that event's corrected time.
     ``evidence_after`` / ``evidence_after_uids``: per method, source evidence on OTHER hosts that names this host
     and lies after that event (corrected time, inside the window): Sysmon 3 rows, 4648 rows, processes.
-    ``data_limitation`` = 1 only when any count is > 0 (a quiet host is not a limitation). ``hops_near_end``:
-    for a labelled host, the hops into it whose last member is within ``link_after_s`` before the last event
-    (same-host logged times); empty otherwise. Counts and ids only: never a stitcher error, never a test failure.
+    ``unknown_session_processes_after`` / ``unknown_session_process_uids`` (owner instruction 2026-11-14): index
+    processes ON this host that start (logged time) after that event and belong to a session with no logon
+    (``open_known`` False); split into ``_system`` / ``_user`` by the session's ``is_system`` (system logon IDs).
+    ``data_limitation`` = 1 when the ``evidence_after`` sum > 0 or ``unknown_session_processes_after`` > 0 (a
+    quiet host is not a limitation); ``data_limitation_reasons`` names the condition(s) that fired, sorted, from
+    ``LIMIT_REASONS``. ``hops_near_end``: for a labelled host (either reason), the hops into it whose last member
+    is within ``link_after_s`` before the last event (same-host logged times); empty otherwise. Counts and ids
+    only: never a stitcher error, never a test failure.
     """
     host: str
     last_security_uid: str
@@ -72,6 +85,11 @@ class HostLimit:
     evidence_after_uids: dict[str, list[str]]
     data_limitation: int
     hops_near_end: list[str] = field(default_factory=list)
+    unknown_session_processes_after: int = 0
+    unknown_session_processes_after_system: int = 0
+    unknown_session_processes_after_user: int = 0
+    unknown_session_process_uids: list[str] = field(default_factory=list)
+    data_limitation_reasons: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -195,15 +213,60 @@ def _cmd_after(host: str, after_us: int, processes: ProcessIndex, cmd: Mapping[s
     return n, sorted(uids)
 
 
+def unknown_session_processes_after(host: str, after_us_raw: int, processes: ProcessIndex,
+                                    sessions: SessionIndex) -> tuple[int, int, list[str]]:
+    """(system count, user count, Sysmon 1 / 4688 uids) of the index processes ON ``host`` that start after
+    ``after_us_raw`` (logged time) and whose session has no logon (``open_known`` False). Owner instruction
+    2026-11-14, added to 048 item 13.
+
+    WHY it signals a data limit: such a process names a logon ID that no 4624 in the host's own rows opened,
+    and it runs after the host's last kept Security event, so the host was still active while its Security log
+    shows nothing (the logon may be missing from the export). WHY same-host logged times: both instants come
+    from the same host's clock, as the rest of ``data_limits`` compares same-host times. A process with a NULL
+    session (``session_key`` None) does not count: decision 005, NULL never forms a session. The session is
+    read through the ``SessionIndex`` and never changed here; its ``is_system`` (system logon IDs) gives the
+    split, so the owner can see what fired. A collapsed Sysmon 1 + 4688 counts once (048 item 4). Pure.
+    """
+    n_system = n_user = 0
+    uids: set[str] = set()
+    for p in processes.processes.values():
+        if p.host != host or p.start_us_raw <= after_us_raw or p.session_key is None:
+            continue
+        session = sessions.sessions[p.session_key]
+        if session.open_known:
+            continue
+        if session.is_system:
+            n_system += 1
+        else:
+            n_user += 1
+        uids.update(p.sysmon1_uids + p.sec4688_uids)
+    return n_system, n_user, sorted(uids)
+
+
+def _limit_reasons(evidence_counts: Mapping[str, int], unknown_session_processes: int) -> list[str]:
+    """The ``data_limitation_reasons`` of one host, sorted: which of the two 048 item 13 conditions (as extended
+    by the owner instruction 2026-11-14) fired. Empty = the host is not labelled."""
+    out: list[str] = []
+    if sum(evidence_counts.values()) > 0:
+        out.append(REASON_EVIDENCE_AFTER)
+    if unknown_session_processes > 0:
+        out.append(REASON_UNKNOWN_SESSION_PROCESS)
+    return sorted(out)
+
+
 def data_limits(scan: ScanResult, hopset: HopSet, processes: ProcessIndex, cmd: Mapping[str, CmdResult],
                 t4648: Mapping[str, Sequence[str]], window_end_us: int,
-                params: StitchParams = StitchParams()) -> dict[str, HostLimit]:
-    """048 item 13 (as amended): per host with in-window Security rows, its last Security event, the source
-    evidence naming it after that event per method, ``data_limitation`` and the hops near the end.
+                params: StitchParams = StitchParams(), *, sessions: SessionIndex) -> dict[str, HostLimit]:
+    """048 item 13 (as amended, and extended by the owner instruction 2026-11-14): per host with in-window
+    Security rows, its last Security event, the source evidence naming it after that event per method, the
+    processes on it after that event whose session has no logon, ``data_limitation`` with its reasons, and the
+    hops near the end.
 
-    Pure. WHY only "evidence after the end" labels a host: a host's Security log may simply be quiet near the
-    window end (the window runs 300 s past the last agent command, 048 pre-check), and that is no limitation;
-    evidence elsewhere that something reached the host after its log stops is.
+    Pure. WHY only these two conditions label a host: a host's Security log may simply be quiet near the window
+    end (the window runs 300 s past the last agent command, 048 pre-check), and that is no limitation; evidence
+    elsewhere that something reached the host after its log stops is, and so is activity on the host itself
+    under a logon its log never recorded (owner, 2026-11-14). ``sessions`` is required (keyword only) so no
+    caller can silently skip the second condition.
     """
     after_s = seconds_to_us(params.link_after_s)
     out: dict[str, HostLimit] = {}
@@ -212,7 +275,9 @@ def data_limits(scan: ScanResult, hopset: HopSet, processes: ProcessIndex, cmd: 
         x4648 = _4648_after(host, last["us"], scan, t4648, params)
         n_cmd, cmd_uids = _cmd_after(host, last["us"], processes, cmd)
         counts = {METHOD_PORT: len(s3), METHOD_4648: len(x4648), METHOD_CMD: n_cmd}
-        flagged = int(any(counts.values()))
+        n_sys, n_user, unk_uids = unknown_session_processes_after(host, last["us_raw"], processes, sessions)
+        reasons = _limit_reasons(counts, n_sys + n_user)
+        flagged = int(bool(reasons))
         near = sorted(h.hop_id for h in hopset.hops
                       if h.target_host == host and last["us_raw"] - h.last_us_raw <= after_s) if flagged else []
         out[host] = HostLimit(host=host, last_security_uid=str(last["event_uid"]),
@@ -220,7 +285,11 @@ def data_limits(scan: ScanResult, hopset: HopSet, processes: ProcessIndex, cmd: 
                               ms_before_window_end=delta_ms(window_end_us, last["us"]),
                               evidence_after=counts,
                               evidence_after_uids={METHOD_PORT: s3, METHOD_4648: x4648, METHOD_CMD: cmd_uids},
-                              data_limitation=flagged, hops_near_end=near)
+                              data_limitation=flagged, hops_near_end=near,
+                              unknown_session_processes_after=n_sys + n_user,
+                              unknown_session_processes_after_system=n_sys,
+                              unknown_session_processes_after_user=n_user,
+                              unknown_session_process_uids=unk_uids, data_limitation_reasons=reasons)
     return out
 
 
@@ -288,7 +357,7 @@ def link_counts(scan: ScanResult, hopset: HopSet, artefact_set: ArtefactSet, lin
 def assemble(trial_id: str, con: sqlite3.Connection, scan: ScanResult, gate_rows: GateRows,
              checked: CheckedInputs, params: StitchParams = StitchParams()) -> LinkIndex:
     """The ``extra`` step of ``inputs.load_link_inputs``: index, hops, artefacts, command facts (read on ``con``),
-    links (ST-40..44), confirmations (ST-47), data limits (048 item 13) and counts.
+    links (ST-40..44), confirmations (ST-47), data limits (048 item 13; owner instruction 2026-11-14) and counts.
 
     ``checked`` supplies the clock offsets (ST-02 host part of ``clock_unreliable``) and the window end. The
     index's ``SessionIndex`` is mutated by ``source.by_4648`` (unknown-open 4648 sessions, as documented there).
@@ -301,7 +370,8 @@ def assemble(trial_id: str, con: sqlite3.Connection, scan: ScanResult, gate_rows
     t4648 = read_4648_targets(con, link_4648_uids(scan))
     links = build_links(hopset, scan, index, cmd, t4648, params, offsets=checked.clock.offsets)
     confirm = {h.hop_id: confirm_of(h, scan.link_rows, arts) for h in hopset.hops}
-    limits = data_limits(scan, hopset, index.processes, cmd, t4648, checked.end_us, params)
+    limits = data_limits(scan, hopset, index.processes, cmd, t4648, checked.end_us, params,
+                         sessions=index.sessions)
     counts = link_counts(scan, hopset, arts, links, confirm, limits)
     return LinkIndex(trial_id=trial_id, hopset=hopset, artefacts=arts, links=links, confirm=confirm,
                      data_limits=limits, counts=counts)

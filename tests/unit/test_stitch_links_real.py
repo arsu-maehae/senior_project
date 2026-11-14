@@ -1514,6 +1514,7 @@ def test_c15_every_uid_of_the_check_file_is_in_the_window_and_none_is_from_the_l
         uids.add(lm["last_security_event_uid"])
         for v in lm["evidence_after_event_uids"].values():
             uids.update(v)
+        uids.update(lm["unknown_session_process_uids"])
     rows = {u: r for r in ld.scan.in_window + ld.scan.link_rows for u in r["event_uids"]}
     lookback = {u for r in ld.scan.lookback for u in r["event_uids"]}
     assert uids, f"{trial}: no uid in the check file"
@@ -1526,6 +1527,19 @@ def test_c15_every_uid_of_the_check_file_is_in_the_window_and_none_is_from_the_l
 
 
 # ------------------------------------------------------------------------------------------------ C16
+def _assert_limit_consistent(lm: dict, where: str) -> None:
+    """The owner rule (2026-11-14, amends 048 item 13): data_limitation = 1 when the evidence sum > 0 OR the count of
+    unknown-session processes after the last Security event > 0; the reasons name exactly the conditions that hold."""
+    evidence = sum(lm["evidence_after"].values()) > 0
+    unknown = lm["unknown_session_processes_after"] > 0
+    assert lm["data_limitation"] == int(bool(evidence or unknown)), where
+    assert lm["data_limitation_reasons"] == sorted(r for r, on in (("evidence_after", evidence),
+                                                                   ("unknown_session_process", unknown)) if on), where
+    assert lm["unknown_session_processes_after"] == (lm["unknown_session_processes_after_system"]
+                                                     + lm["unknown_session_processes_after_user"]), where
+    assert unknown == bool(lm["unknown_session_process_uids"]), where
+
+
 def test_c16_s06_t01_ep_03_is_listed_with_its_last_security_event_72_s_before_the_window_end():
     data = _check_data("s06_t01")
     assert "ep-03" in data["data_limits"], f"hosts listed: {sorted(data['data_limits'])}"
@@ -1539,8 +1553,8 @@ def test_c16_s06_t01_ep_03_is_listed_with_its_last_security_event_72_s_before_th
           f"data_limitation {lm['data_limitation']}, hops near the end {lm['hops_near_end']}")
     assert abs(secs - (6 * 3600 + 23 * 60 + 26)) <= 1.0, f"last Security event at {clock}"
     assert 70000 <= lm["ms_before_window_end"] <= 74000
-    # 048 item 13 as amended: the label is a consistent function of the evidence counts, never a verdict
-    assert lm["data_limitation"] == int(sum(lm["evidence_after"].values()) > 0)
+    # 048 item 13 as amended (owner rule 2026-11-14): the label is a consistent function of the two conditions
+    _assert_limit_consistent(lm, "s06_t01 ep-03")
     for m, n in lm["evidence_after"].items():
         assert n == len(lm["evidence_after_event_uids"][m])
     if not lm["data_limitation"]:
@@ -1552,7 +1566,7 @@ def test_c16_every_host_label_is_consistent_with_its_evidence_and_is_reported(tr
     data = _check_data(trial)
     labelled = []
     for host, lm in data["data_limits"].items():
-        assert lm["data_limitation"] == int(sum(lm["evidence_after"].values()) > 0), f"{trial} {host}"
+        _assert_limit_consistent(lm, f"{trial} {host}")
         assert set(lm["evidence_after"]) == {"sysmon3_port", "source_4648", "cmdline_target"}
         assert lm["ms_before_window_end"] is not None
         if lm["data_limitation"]:
@@ -1562,6 +1576,39 @@ def test_c16_every_host_label_is_consistent_with_its_evidence_and_is_reported(tr
     assert data["counts"]["data_limitation_hosts"] == sorted(h for h, lm in data["data_limits"].items()
                                                               if lm["data_limitation"])
     print(f"C16 {trial}: hosts listed {sorted(data['data_limits'])}, labelled data_limitation {labelled}")
+
+
+def test_c16_unknown_session_rule_labels_exactly_one_development_host_s06_t01_ep_03():
+    """Owner rule 2026-11-14 (b): over the 9 development trials only s06_t01 ep-03 is labelled, for an unknown session
+    (0x11341f, a user session with no 4624) that two processes after its last Security event belong to."""
+    labelled = {}
+    for trial in DEV:
+        for host, lm in _check_data(trial)["data_limits"].items():
+            if lm["data_limitation"]:
+                labelled[(trial, host)] = lm
+            else:
+                assert lm["data_limitation_reasons"] == [] and lm["unknown_session_processes_after"] == 0, (trial, host)
+                assert lm["hops_near_end"] == [], (trial, host)
+    assert sorted(labelled) == [("s06_t01", "ep-03")], f"labelled hosts: {sorted(labelled)}"
+    lm = labelled[("s06_t01", "ep-03")]
+    assert lm["data_limitation_reasons"] == ["unknown_session_process"]
+    assert lm["unknown_session_processes_after"] == 2
+    assert lm["unknown_session_processes_after_user"] == 2 and lm["unknown_session_processes_after_system"] == 0
+    assert sum(lm["evidence_after"].values()) == 0
+    assert lm["hops_near_end"], "a labelled host lists its hops near the end"
+    # the session behind the uids: every process of the uids is in the one session, 0x11341f, with no 4624
+    ld = linked("s06_t01")
+    uids = set(lm["unknown_session_process_uids"])
+    assert uids
+    procs = [p for p in ld.index.processes.processes.values()
+             if p.host == "ep-03" and uids & set(p.sysmon1_uids + p.sec4688_uids)]
+    assert len(procs) == 2, f"{len(procs)} processes behind {sorted(uids)}"
+    keys = {p.session_key for p in procs}
+    assert len(keys) == 1 and None not in keys
+    session = ld.index.sessions.sessions[next(iter(keys))]
+    assert session.logon_id == 0x11341F and session.logon_id_hex.lower() == "0x11341f"
+    assert session.open_known is False and session.is_system is False
+    assert uids == {u for p in procs for u in p.sysmon1_uids + p.sec4688_uids}
 
 
 # ------------------------------------------------------------------------------------------------ C13 / STA-07

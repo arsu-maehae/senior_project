@@ -6,7 +6,9 @@ Written from the plan (task 5; sections 1, 5 C1 / C16), decision 048 (items 1, 6
 the implementation (the code was read only for public names, signatures and the fixed key lists of the records).
 
 Accepted readings tested as stated by the coordinator:
-- `data_limitation` is set only when source evidence on OTHER hosts names the host after its last kept Security event;
+- `data_limitation` is set when source evidence on OTHER hosts names the host after its last kept Security event, OR when
+  a process ON the host (in-window, strictly after that event, same-host logged time) belongs to a session with no 4624
+  (owner rule 2026-11-14, amends 048 item 13); a process with a NULL session does not count;
 - in `t73_links.json`, lab IPs, target-side names and the schema's own key names are not command text.
 
 World: target ep-02 (192.168.50.22), source ep-01 (192.168.50.21). Event times are seconds after 10:30:00
@@ -40,7 +42,8 @@ from stitch.confirm import confirm_of  # noqa: E402
 from stitch.hops import build_hops  # noqa: E402
 from stitch.index import build_index  # noqa: E402
 from stitch.inputs import GateRows  # noqa: E402
-from stitch.links import HostLimit, LinkIndex, data_limits, link_counts  # noqa: E402
+from stitch.links import (HostLimit, LinkIndex, data_limits, link_counts,  # noqa: E402
+                          unknown_session_processes_after)
 from stitch.params import StitchParams  # noqa: E402
 from stitch.scan import scan_rows  # noqa: E402
 
@@ -143,7 +146,7 @@ class Built:
 
     def limits(self, params: StitchParams | None = None) -> dict[str, HostLimit]:
         return data_limits(self.scan, self.hs, self.index.processes, self.w.cmd, self.w.t4648, END_US,
-                           self.params if params is None else params)
+                           self.params if params is None else params, sessions=self.index.sessions)
 
 
 def limits_world() -> W:
@@ -310,12 +313,207 @@ def test_hops_near_end_is_empty_for_a_host_that_is_not_labelled():
     assert lm.data_limitation == 0 and lm.hops_near_end == []
 
 
-def test_data_limit_labels_follow_the_evidence_sum_only():
+def test_data_limit_labels_follow_the_two_conditions_only():
+    """Owner rule 2026-11-14: data_limitation = 1 iff the evidence sum > 0 OR unknown-session processes after > 0;
+    the reasons name exactly the conditions that hold, and the counts equal the uid lists."""
+    def nothing(w: W) -> None:
+        return None
+
+    def evidence(w: W) -> None:
+        w.s3("N1", 120.0)
+
+    def unknown(w: W) -> None:
+        w.s1("U1", 120.0, "{GU}", UNK, host=TGT, target=None)
+
+    def both(w: W) -> None:
+        evidence(w)
+        unknown(w)
+
+    for add in (nothing, evidence, unknown, both):
+        w = limits_world()
+        add(w)
+        for h, lm in Built(w).limits().items():
+            ev_on = sum(lm.evidence_after.values()) > 0
+            unk_on = lm.unknown_session_processes_after > 0
+            assert lm.data_limitation == int(bool(ev_on or unk_on)), (add.__name__, h)
+            assert lm.data_limitation_reasons == sorted(r for r, on in (("evidence_after", ev_on),
+                                                                         ("unknown_session_process", unk_on)) if on), (add.__name__, h)
+            assert all(lm.evidence_after[m] == len(lm.evidence_after_uids[m]) for m in lm.evidence_after), h
+            assert lm.unknown_session_processes_after == (lm.unknown_session_processes_after_system
+                                                          + lm.unknown_session_processes_after_user), h
+            assert unk_on == bool(lm.unknown_session_process_uids), h
+
+
+# ================================================================================================ owner rule 2026-11-14 (b)
+UNK = 8888          # a user logon ID with no 4624 anywhere
+SYS_UNK = 0x3E7     # a system logon ID with no 4624 on ep-02 in these worlds
+
+
+def unk_proc(w: W, uid: str, off: float, lid: int | None = UNK, *, host: str = TGT, guid: str | None = None,
+             pid: int | None = None) -> str:
+    """A Sysmon 1 on `host` in session `lid` (no command naming any host: only rule (b) can fire)."""
+    return w.s1(uid, off, guid or "{G-" + uid + "}", lid, host=host, target=None, pid=pid)
+
+
+def session_of(b: Built, host: str, uid: str):
+    proc = next(p for p in b.index.processes.processes.values() if p.host == host and uid in p.sysmon1_uids)
+    return None if proc.session_key is None else b.index.sessions.sessions[proc.session_key]
+
+
+def test_a_process_after_the_last_security_event_in_a_session_without_a_4624_labels_the_host():
+    w = limits_world()
+    unk_proc(w, "U1", 120.0)
+    b = Built(w)
+    assert session_of(b, TGT, "U1").open_known is False            # the world really has an unknown session
+    lm = b.limits()[TGT]
+    assert lm.data_limitation == 1
+    assert lm.data_limitation_reasons == ["unknown_session_process"]
+    assert lm.unknown_session_processes_after == 1
+    assert (lm.unknown_session_processes_after_system, lm.unknown_session_processes_after_user) == (0, 1)
+    assert lm.unknown_session_process_uids == ["U1"]
+    assert lm.evidence_after == {PORT: 0, E4648: 0, CMD: 0}
+    assert b.limits()[SRC].data_limitation == 0
+
+
+def test_the_same_process_in_a_system_session_without_a_4624_is_counted_under_system():
+    w = limits_world()
+    unk_proc(w, "U1", 120.0, SYS_UNK)
+    b = Built(w)
+    s = session_of(b, TGT, "U1")
+    assert s.open_known is False and s.is_system is True
+    lm = b.limits()[TGT]
+    assert lm.data_limitation == 1 and lm.data_limitation_reasons == ["unknown_session_process"]
+    assert lm.unknown_session_processes_after == 1
+    assert (lm.unknown_session_processes_after_system, lm.unknown_session_processes_after_user) == (1, 0)
+    assert lm.unknown_session_process_uids == ["U1"]
+
+
+def test_system_and_user_unknown_session_processes_are_split_and_all_uids_listed():
+    w = limits_world()
+    unk_proc(w, "U1", 120.0, UNK)
+    unk_proc(w, "U2", 121.0, UNK + 1)
+    unk_proc(w, "U3", 122.0, SYS_UNK)
+    lm = lim(w)
+    assert lm.unknown_session_processes_after == 3
+    assert (lm.unknown_session_processes_after_system, lm.unknown_session_processes_after_user) == (1, 2)
+    assert lm.unknown_session_process_uids == ["U1", "U2", "U3"]
+
+
+def test_a_process_starting_exactly_at_the_last_security_event_is_not_counted_but_one_microsecond_later_is():
+    w = limits_world()
+    unk_proc(w, "U1", LAST)
+    lm = lim(w)
+    assert lm.unknown_session_processes_after == 0 and lm.data_limitation == 0
+    assert lm.data_limitation_reasons == [] and lm.unknown_session_process_uids == []
+    w = limits_world()
+    unk_proc(w, "U1", LAST + 0.000001)
+    lm = lim(w)
+    assert lm.unknown_session_processes_after == 1 and lm.data_limitation == 1
+
+
+def test_a_process_before_the_last_security_event_is_not_counted():
+    w = limits_world()
+    unk_proc(w, "U1", LAST - 5.0)
+    lm = lim(w)
+    assert lm.unknown_session_processes_after == 0 and lm.data_limitation == 0 and lm.hops_near_end == []
+    assert lm.data_limitation_reasons == []
+
+
+def test_a_process_on_another_host_is_not_counted_for_this_host():
+    w = limits_world()
+    unk_proc(w, "U1", 120.0, host=SRC)          # ep-01: its last Security event is at 0 s, so ep-01 is the host labelled
+    got = Built(w).limits()
+    assert got[TGT].unknown_session_processes_after == 0 and got[TGT].data_limitation == 0
+    assert got[TGT].unknown_session_process_uids == []
+    assert got[SRC].unknown_session_processes_after == 1 and got[SRC].data_limitation == 1
+    assert got[SRC].unknown_session_process_uids == ["U1"]
+
+
+def test_a_process_whose_session_has_a_4624_is_not_counted_including_a_logon_before_the_window():
+    w = limits_world()
+    w.src_logon("L8000", 50.0, 8000, host=TGT)             # a 4624 in the window
+    w.src_logon("LB8100", PRE, 8100, host=TGT)             # a 4624 before the window (look-back only)
+    unk_proc(w, "K1", 120.0, 8000)
+    unk_proc(w, "K2", 121.0, 8100)
+    b = Built(w)
+    assert session_of(b, TGT, "K1").open_known is True
+    assert session_of(b, TGT, "K2").open_known is True and session_of(b, TGT, "K2").opened_before_window is True
+    lm = b.limits()[TGT]
+    assert lm.unknown_session_processes_after == 0 and lm.data_limitation == 0
+    assert lm.unknown_session_process_uids == [] and lm.data_limitation_reasons == []
+
+
+def test_a_process_with_a_null_session_is_not_counted():
+    w = limits_world()
+    unk_proc(w, "N1", 120.0, None)
+    b = Built(w)
+    assert session_of(b, TGT, "N1") is None
+    lm = b.limits()[TGT]
+    assert lm.unknown_session_processes_after == 0 and lm.data_limitation == 0
+    assert lm.unknown_session_process_uids == []
+
+
+def test_a_sysmon1_and_4688_of_one_unknown_session_process_count_once_and_both_uids_are_listed():
+    w = limits_world()
+    w.e4688("B1", 119.9, 4242, UNK, host=TGT, target=None)     # the 4688 is the host's last Security event now
+    unk_proc(w, "S1", 120.0, UNK, pid=4242)
+    b = Built(w)
+    procs = [p for p in b.index.processes.processes.values() if p.host == TGT and "S1" in p.sysmon1_uids]
+    assert len(procs) == 1 and procs[0].sec4688_uids == ["B1"]  # collapsed into one process
+    lm = b.limits()[TGT]
+    assert lm.last_security_uid == "B1"
+    assert lm.unknown_session_processes_after == 1
+    assert lm.unknown_session_process_uids == ["B1", "S1"]
+
+
+def test_both_conditions_together_list_both_reasons_sorted():
     w = limits_world()
     w.s3("N1", 120.0)
-    for h, lm in Built(w).limits().items():
-        assert lm.data_limitation == int(sum(lm.evidence_after.values()) > 0), h
-        assert all(lm.evidence_after[m] == len(lm.evidence_after_uids[m]) for m in lm.evidence_after), h
+    unk_proc(w, "U1", 121.0)
+    lm = lim(w)
+    assert lm.data_limitation == 1
+    assert lm.data_limitation_reasons == ["evidence_after", "unknown_session_process"]
+    assert lm.evidence_after[PORT] == 1 and lm.unknown_session_processes_after == 1
+
+
+def test_evidence_only_gives_the_evidence_reason_alone():
+    w = limits_world()
+    w.s3("N1", 120.0)
+    lm = lim(w)
+    assert lm.data_limitation_reasons == ["evidence_after"]
+    assert lm.unknown_session_processes_after == 0 and lm.unknown_session_process_uids == []
+
+
+def test_hops_near_end_is_filled_under_the_unknown_session_reason_alone():
+    w = limits_world()
+    unk_proc(w, "U1", 120.0)
+    b = Built(w)
+    lm = b.limits()[TGT]
+    assert lm.evidence_after == {PORT: 0, E4648: 0, CMD: 0}
+    near = [h.hop_id for h in b.hs.hops if h.members[-1].uid == "M1"]
+    assert lm.hops_near_end == near and len(near) == 1       # M1 is 10 s before the event; the 30 s hop is 80 s before
+
+
+def test_unknown_session_processes_after_pure_function_counts_by_host_time_and_session():
+    w = limits_world()
+    unk_proc(w, "U1", 120.0)
+    unk_proc(w, "U2", 130.0, SYS_UNK)
+    unk_proc(w, "U3", 125.0, host=SRC)
+    b = Built(w)
+    after = to_us(sf.at(LAST))
+    procs, sess = b.index.processes, b.index.sessions
+    assert unknown_session_processes_after(TGT, after, procs, sess) == (1, 1, ["U1", "U2"])
+    assert unknown_session_processes_after(TGT, to_us(sf.at(125.0)), procs, sess) == (1, 0, ["U2"])
+    assert unknown_session_processes_after(SRC, after, procs, sess) == (0, 1, ["U3"])
+    assert unknown_session_processes_after(THIRD, after, procs, sess) == (0, 0, [])
+
+
+def test_data_limits_requires_the_sessions_keyword():
+    b = Built(limits_world())
+    with pytest.raises(TypeError):
+        data_limits(b.scan, b.hs, b.index.processes, b.w.cmd, b.w.t4648, END_US)          # type: ignore[call-arg]
+    with pytest.raises(TypeError):
+        data_limits(b.scan, b.hs, b.index.processes, b.w.cmd, b.w.t4648, END_US, P, b.index.sessions)  # type: ignore[misc]
 
 
 # ================================================================================================ hosts_loaded
@@ -389,7 +587,9 @@ ARTEFACT_KEYS = ["hop_id", "kind", "member_logon_uid", "logged_under_hop_id", "m
                  "time_delta_ms", "supporting_span_ms", "confidence_tier", "event_uids", "names",
                  "untied_same_name_bursts"]
 LIMIT_KEYS = ["last_security_event_uid", "last_security_utc", "last_security_utc_corrected", "ms_before_window_end",
-              "evidence_after", "evidence_after_event_uids", "data_limitation", "hops_near_end"]
+              "evidence_after", "evidence_after_event_uids", "data_limitation", "hops_near_end",
+              "unknown_session_processes_after", "unknown_session_processes_after_system",
+              "unknown_session_processes_after_user", "unknown_session_process_uids", "data_limitation_reasons"]
 # Words that would name a forbidden field (spec 2: no account, image or command text in an output file).
 # Flags such as `mixed_account` and method names such as `cmdline_target` are no account or command text.
 FORBIDDEN_KEY_PARTS = ("account_name", "subject_account", "session_account", "credential", "image", "command_line",
@@ -521,6 +721,24 @@ def test_limit_record_emits_exactly_its_fixed_key_list():
     text = json.dumps(rec)
     for tok in FAKE_TOKENS:
         assert tok not in text
+
+
+def test_limit_record_carries_the_unknown_session_fields_and_reasons():
+    w = rich_world()
+    w.s3("N9", 130.0, guid="{G1}")
+    w.s1("U1", 131.0, "{GU1}", UNK, host=TGT, target=None)
+    w.s1("U2", 132.0, "{GU2}", SYS_UNK, host=TGT, target=None)
+    li, _ = make_link_index(w)
+    rec = cl.limit_record(li.data_limits[TGT])
+    assert rec["data_limitation_reasons"] == ["evidence_after", "unknown_session_process"]
+    assert rec["unknown_session_processes_after"] == 2
+    assert (rec["unknown_session_processes_after_system"], rec["unknown_session_processes_after_user"]) == (1, 1)
+    assert rec["unknown_session_process_uids"] == ["U1", "U2"]
+    assert isinstance(rec["unknown_session_process_uids"], list) and isinstance(rec["data_limitation_reasons"], list)
+    json.dumps(rec)
+    quiet = cl.limit_record(li.data_limits[SRC])
+    assert quiet["data_limitation_reasons"] == [] and quiet["unknown_session_process_uids"] == []
+    assert quiet["unknown_session_processes_after"] == 0
 
 
 def test_links_check_data_has_one_hop_record_per_hop_and_one_artefact_record_per_row():
