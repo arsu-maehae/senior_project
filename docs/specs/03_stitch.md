@@ -1,6 +1,6 @@
 # Stage spec: 03_stitch
 
-**Owner:** <stage owner> · **Status:** **approved (owner, 2026-11-13).** Measured on development data 2026-11-13; data-checker and attacker review merged ([review](../reviews/03_stitch-spec-2026-11-13.md)); council [044](../decisions/044-stitch-linking-and-windows-council.md) accepted ("after" side 15 s); [045](../decisions/045-tier-rule-scope.md) accepted; owner answers Q1–Q16 merged; Q9 stays open for the T8 / T9 specs. **Amended by [047](../decisions/047-stitch-session-model.md) (owner, 2026-11-13): ST-10 boot groups and 4688 session, §5 `BOOT_GROUP_S`, STT-11.** · **Last updated:** 2026-11-13
+**Owner:** <stage owner> · **Status:** **approved (owner, 2026-11-13).** Measured on development data 2026-11-13; data-checker and attacker review merged ([review](../reviews/03_stitch-spec-2026-11-13.md)); council [044](../decisions/044-stitch-linking-and-windows-council.md) accepted ("after" side 15 s); [045](../decisions/045-tier-rule-scope.md) accepted; owner answers Q1–Q16 merged; Q9 stays open for the T8 / T9 specs. **Amended by [047](../decisions/047-stitch-session-model.md) (owner, 2026-11-13): ST-10 boot groups and 4688 session, §5 `BOOT_GROUP_S`, STT-11.** **Amended by [049](../decisions/049-stitch-t74-readings.md) (owner, 2026-11-14): `hop_identity.csv` `not_applicable` = `source_host_no_logs`; limitation L-ST4; STT-13 image / account columns.** · **Last updated:** 2026-11-14
 
 Decisions this spec rests on: [011](../decisions/011-smb-linking-without-sysmon3.md), [013](../decisions/013-council-correction-i-amended.md) (Correction I amended), [014](../decisions/014-cross-host-time-tolerance.md) (5 s), [015](../decisions/015-port-zero-kerberos-hops.md), [038](../decisions/038-gate-rule-choices.md) (`confidence_tier` belongs to T7), [039](../decisions/039-gate-window-input-and-clock.md) (identity look-back), [043](../decisions/043-clock-offset-method.md) (corrected times). Accepted with this spec: [044](../decisions/044-stitch-linking-and-windows-council.md) (council), [045](../decisions/045-tier-rule-scope.md) (tier rule scope, review 08 SF-9). With T7.2: [046](../decisions/046-stitch-development-allowlist.md) (development allowlist until T10), [047](../decisions/047-stitch-session-model.md) (session model). Input notes: [03_stitch_input_notes](03_stitch_input_notes.md) (IN-01, IN-02). Measurements: §10.
 
@@ -113,7 +113,9 @@ dump_source_image, dump_account, gap_ms, order_margin_ms, order_ok, order_within
 order_within_uncertainty, offset_unc_source_ms, offset_unc_target_ms, open_session_uids, open_session_types,
 session_open_before_window, end_unknown_session_uids, not_applicable, clock_unreliable`. A hop with no LSASS read
 on its source host has one row per account with empty dump columns. A hop with no known source host, or a
-machine-account member, has one row with `not_applicable` = `source_host_unknown` / `machine_account`.
+machine-account member, has one row with `not_applicable` = `source_host_unknown` / `machine_account`. **049:** a
+source host with no logs in the DB gives `not_applicable` = `source_host_no_logs`; the value is set per (hop, account),
+first that applies: `source_host_unknown`, `source_host_no_logs`, `machine_account`.
 
 **`paths.csv`**, **`path_edges.csv`** and **`path_nodes.csv`** — candidate paths (ST-70..ST-74).
 `paths.csv`: `path_id, hop_ids` (time order)`, hosts` (in hop order)`, n_hops, seed_trigger_ids` (of all its
@@ -246,7 +248,7 @@ Unit (synthetic rows, STT):
 | STT-10 | Kerberos confirmation by LogonGuid only; a zero GUID never confirms; it never sets the source session. |
 | STT-11 | Identity: session closed before the dump → not open; boot between → not open; a session opened between two startup events of one restart (≤ `BOOT_GROUP_S` apart) stays open (047); a 4624 logged after a shutdown group and before the next startup event belongs to the new boot (047); a 4688 process belongs to its target logon ID when present and non-zero (047); opened and closed before the window → not open; opened before the window and still open → used, flagged, and absent from every other file; a log clear between → `end_unknown`, not open; changing the linked session changes no identity row. |
 | STT-12 | An event outside the window is in no row of any file (ST-01), the ST-63 look-back apart; `clock_unreliable` and `gate_clock_unreliable` as ST-02. |
-| STT-13 | No output file contains any substring of length ≥ 12 of any `command_line` value of the DB other than a target-side name; `src/stitch` opens nothing under `ground_truth/`; DB hash unchanged; two runs byte-identical. |
+| STT-13 | No output file contains any substring of length ≥ 12 of any `command_line` value of the DB other than a target-side name; `src/stitch` opens nothing under `ground_truth/`; DB hash unchanged; two runs byte-identical. **049:** the image and account columns (`dump_source_image`, `dump_account`, `account`, `source_session_account`) are blanked for the substring scan, and each of their values must equal the DB field of the event its row references. |
 | STT-14 | Paths: an isolated `target_only` seed is in `paths.csv`; a hop in no path has `in_path` = 0 and is in `stats.json`; a tier D link adds no source-session nodes. Chaining: a `host_time` edge when the second hop's source is the first hop's target and it starts after the first; no edge when it starts more than 5 s before; a `session` edge when its first-ranked tier A / B session is a member logon of the first hop; two chains that share a hop are one path and that hop has `multi_chain_parent` = 1 with both parents listed; a hop whose logons are all machine accounts gets no edge; a hop with no trigger gets no edge; two hops that share only a source session or an event are two paths with the note set. |
 | STT-15 | Order flags: a move 4 s inside the boundary with uncertainties 1.76 s and 2.97 s → `order_within_uncertainty` = 1 and `order_ok` unchanged; uncertainties of 1 ms → the floor applies. |
 
@@ -299,6 +301,10 @@ any development trial; ST-41 covers it on synthetic data only). Changing the gat
   T9 can see it (owner 2026-11-13, Q16).
 - **L-ST3 Values from nine trials.** `GROUP_GAP_S`, `LINK_LOOKBACK_S`, `LINK_AFTER_S`, `FOLLOWUP_MAX_S` and the
   uncertainty floor are chosen on the nine development trials, three of them without a key, and are frozen.
+- **L-ST4 Port join with another account (049, owner 2026-11-14).** A port-joined session whose 4624 account differs
+  from the moving account (for example a session using injected credentials with no 4648) gets tier D under the locked
+  tier rule (ST-48: `account_match` none → D), so the strongest technical link gets the lowest tier in that case. No
+  development hop is affected. No rule change.
 
 ## 10. Measurements (development trials only, read-only, 2026-11-13)
 Scripts with a hard allowlist of the nine development trials (s02–s07 t00; s02_t01, s03_t01, s06_t01); `s02_t02`
