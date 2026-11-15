@@ -123,6 +123,21 @@ def failing(res: Mapping) -> list[str]:
     return [c for c in CRITERIA if res["criteria"].get(c, {}).get("status") == "FAIL"]
 
 
+def rerun_status(results: Sequence[Mapping], minimum: int) -> dict:
+    """Decision 052 status of one x10_v2 scenario: validated so far against the minimum number of accepted trials.
+
+    WHY not ``verdict``: 029 Decision 3 ("replace N", "full rerun" at >= 6 of 10) is superseded for the reruns.
+    A trial is accepted when no criterion FAILs (WARNs are reported, never blocking; 052 item 5). The count is
+    "so far": there is no fixed expected total, only the minimum to reach."""
+    trials = [r for r in results if not is_t00(r["trial_id"])]
+    bad = {r["trial_id"]: failing(r) for r in trials if failing(r)}
+    per_crit = Counter(c for cs in bad.values() for c in cs)
+    accepted = len(trials) - len(bad)
+    return {"validated": len(trials), "accepted": accepted, "minimum": minimum,
+            "minimum_reached": accepted >= minimum, "still_needed": max(0, minimum - accepted),
+            "failing_trials": bad, "fails_per_criterion": dict(per_crit)}
+
+
 def verdict(results: Sequence[Mapping], expected: int = 10) -> dict:
     """029 Decision 3 for one scenario group: pass / replace N / full rerun (WARNs never count)."""
     trials = [r for r in results if not is_t00(r["trial_id"])]

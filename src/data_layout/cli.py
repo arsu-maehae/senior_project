@@ -69,7 +69,7 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--mapping", required=True)
     f.add_argument("--out", required=True)
     f.set_defaults(fn=_cmd_manifest)
-    b = sub.add_parser("batch", help="x10 batch ingest: incoming -> raw -> manifest -> JSONL -> SQLite")
+    b = sub.add_parser("batch", help="batch ingest (--source x10 | x10_v2): incoming -> raw -> manifest -> JSONL -> SQLite")
     batch.add_arguments(b)
     b.set_defaults(fn=batch.run)
     return p

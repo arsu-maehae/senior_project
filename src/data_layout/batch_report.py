@@ -154,6 +154,14 @@ def render_markdown(report: Mapping[str, Any]) -> str:
     lines += [f"- `{f['source_path']}`: {f['reason']}" for f in r.get("files_ignored", [])] or ["- none"]
     lines += ["", "## Extra files (outside 4 hosts x 5 logs)", ""]
     lines += [f"- {e['host']} / {e['channel']}" for e in r.get("extra_files", [])] or ["- none"]
+    clock = r.get("clock_files")
+    if clock is not None:
+        lines += ["", f"## Clock files (x10_v2; spec 08 section 4.2; {len(clock.get('copied', []))} copied)", ""]
+        lines += [f"- `{c['source_path']}` -> `{c['dest_path']}` (`{c['sha256'][:16]}…`, {c['size']:,} B, {c['action']})"
+                  for c in clock.get("copied", [])] or ["- none copied"]
+        lines.append("- missing clock file for: " + (", ".join(clock.get("missing_hosts", [])) or "none"))
+    if r.get("warnings"):
+        lines += ["", "## Warnings", ""] + [f"- {w}" for w in r["warnings"]]
     lines += ["", "## Converter (EVTX -> JSONL)", "", "| file | attempted | emitted | parse errors | status |",
               "|---|---:|---:|---:|---|"]
     for c in r.get("converter", []):

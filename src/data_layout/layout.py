@@ -308,8 +308,34 @@ def manifest_row(raw_root: Path, r: MapRow) -> dict[str, object]:
             "first_event_utc": info.first_utc, "last_event_utc": info.last_utc}
 
 
-def append_manifest(raw_root: Path, rows: list[MapRow], out: Path) -> tuple[int, int]:
-    """Append rows for paths not yet listed; existing lines are never rewritten. Returns (added, skipped)."""
+def manifest_line_ending(data: bytes) -> str:
+    """The line ending an existing manifest uses ("\\r\\n" unless it is LF-only), so an append never mixes endings.
+
+    WHY: data/manifest.csv is CRLF (csv default); a bare-LF line in the middle would break byte-exact diffs."""
+    if b"\r\n" in data or b"\n" not in data:
+        return "\r\n"
+    return "\n"
+
+
+def check_manifest_appendable(data: bytes, name: str = "manifest") -> None:
+    """Refuse a manifest an append would corrupt: a BOM, an empty file, or no final newline.
+
+    WHY: the writer appends after the last byte; without a final newline the new row would be glued to the
+    last old row, and an empty file would get rows without a header. Called before any write."""
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise ValueError(f"{name}: manifest starts with a BOM; refusing to append")
+    if data == b"":
+        raise ValueError(f"{name}: manifest exists but is empty (no header); refusing to append")
+    if not data.endswith(b"\n"):
+        raise ValueError(f"{name}: manifest does not end in a newline; an append would glue two rows")
+
+
+def append_manifest(raw_root: Path, rows: list[MapRow], out: Path,
+                    lineterminator: str = "\r\n") -> tuple[int, int]:
+    """Append rows for paths not yet listed; existing lines are never rewritten. Returns (added, skipped).
+
+    ``lineterminator`` defaults to the csv module's CRLF (the real manifest); callers that append to a file with
+    another ending pass it explicitly."""
     existing: set[str] = set()
     if out.exists():
         with open(out, newline="", encoding="utf-8") as f:
@@ -321,7 +347,7 @@ def append_manifest(raw_root: Path, rows: list[MapRow], out: Path) -> tuple[int,
         out.parent.mkdir(parents=True, exist_ok=True)
         fresh = not out.exists()
         with open(out, "a", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, MANIFEST_COLUMNS)
+            w = csv.DictWriter(f, MANIFEST_COLUMNS, lineterminator=lineterminator)
             if fresh:
                 w.writeheader()
             w.writerows(new)

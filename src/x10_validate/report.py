@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Mapping, Sequence
 
-from .cross import CRITERIA, failing, group_of, is_t00, verdict
+from .cross import CRITERIA, failing, group_of, is_t00, rerun_status, verdict
 from .params import IMPLEMENTATION_NOTES
 
 OPEN_POINTS: tuple[str, ...] = (
@@ -125,6 +125,56 @@ def render(results: Sequence[Mapping], not_ingested: Sequence[Mapping], generate
         "## t00 sanity run (development trials; not part of any verdict)", "", *_table(t00), "",
         "## Implementation notes (029 'Consequences')", "", *[f"- {n}" for n in IMPLEMENTATION_NOTES], "",
         "## Open points / not measurable", "", *[f"- {p}" for p in OPEN_POINTS], "",
+    ]
+    return "\n".join(out)
+
+
+def _status_lines_v2(by_group: Mapping[str, list[Mapping]], scenarios: Sequence[str],
+                     minimum: int) -> tuple[list[str], list[str]]:
+    """Per-scenario "validated so far" table (decision 052) and the list of failing trials to move and retire."""
+    head = ["| scenario | validated so far | accepted | minimum | status | failing trials | fails per criterion |",
+            "|---|---|---|---|---|---|---|"]
+    failed = ["| trial | failing criteria |", "|---|---|"]
+    for g in sorted(set(scenarios) | set(by_group)):
+        st = rerun_status(by_group.get(g, []), minimum)
+        status = "minimum reached" if st["minimum_reached"] else f"{st['still_needed']} more accepted needed"
+        head.append(f"| {g} | {st['validated']} | {st['accepted']} | {minimum} | {status} | "
+                    f"{', '.join(st['failing_trials']) or '-'} | {st['fails_per_criterion'] or '-'} |")
+        failed += [f"| {t} | {','.join(cs)} |" for t, cs in sorted(st["failing_trials"].items())]
+    return head, failed
+
+
+def render_v2(results: Sequence[Mapping], not_ingested: Sequence[Mapping], generated_utc: str,
+              scenarios: Sequence[str], minimum: int) -> str:
+    """The x10_v2 report as markdown text (pure): criteria a-i unchanged, count against the decision 052 minimum.
+
+    WHY separate from ``render``: the 029 wording ("replace N", "full rerun", replacements from trial_11,
+    a fixed 10 expected trials) is superseded for the reruns, and the v1 report must stay byte-identical."""
+    trials = [r for r in results if not r.get("quarantine") and not is_t00(r["trial_id"])]
+    t00 = [r for r in results if is_t00(r["trial_id"]) and not r.get("quarantine")]
+    by_group: dict[str, list[Mapping]] = {}
+    for r in trials:
+        by_group.setdefault(group_of(r), []).append(r)
+    status, failed = _status_lines_v2(by_group, scenarios, minimum)
+    notes = [n for n in IMPLEMENTATION_NOTES if not n.startswith(("N14 ", "N15 "))]
+    notes.append("N14 (x10_v2) criterion a reads out/ingest/x10_v2/<trial>/ingest.json (files_missing); a report "
+                 "whose `source` is not x10_v2 or whose `source_dir` is not under data/incoming/x10_v2/ is refused.")
+    points = [p for p in OPEN_POINTS if "full rerun" not in p]
+    out = [
+        "# x10_v2 design validation (criteria of decision 029; stopping rule of decision 052)", "",
+        f"Generated {generated_utc} by `python -m x10_validate report --source x10_v2` (read-only; independent of "
+        "answer_key, log_check and any stitcher). Statuses: PASS | WARN | FAIL | n/a. WARNs never block.", "",
+        "## x10_v2 trials", "", *_table(trials), "",
+        "## Not ingested", "",
+        *([f"- {n['trial_id']}: {n['reason']}" for n in not_ingested] or ["(none)"]), "",
+        f"## Validated so far against the minimum (decision 052: minimum {minimum} accepted trials per scenario)", "",
+        "A trial is accepted when no criterion a-i is FAIL. The count is what has been validated so far, not a "
+        "fixed total; the cutoff and the test list are recorded in docs/lab/test_set.csv.", "", *status, "",
+        "## Failed trials (decision 052 item 6; owner moves the folder, the tool retires the ingested copies)", "",
+        *(failed if len(failed) > 2 else ["(none)"]), "",
+        *(["## t00 sanity run (not part of any status)", "", *_table(t00), ""] if t00 else []),
+        "## Implementation notes (029 'Consequences')", "", *[f"- {n}" for n in notes], "",
+        "## Open points / not measurable", "", *[f"- {p}" for p in points], "",
     ]
     return "\n".join(out)
 

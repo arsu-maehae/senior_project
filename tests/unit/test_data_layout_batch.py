@@ -2,8 +2,9 @@
 
 Written from CLAUDE.md data rules, decision 030 and the driver requirements, not from the code.
 Everything runs in a temp repo; tiny real EVTX files are READ from data/raw and copied into the
-temp tree. The real data/, out/ and manifests are never written (the only real-out reads are
-out/ingest/x10/s02_t01 and s02_t03 ingest.json).
+temp tree. The real data/, out/ and manifests are never written (the only real-out read is
+out/ingest/x10/s02_t01 ingest.json). No test opens data of trials t02-t10: tiny EVTX bytes come from t00/t01.
+(`Roots.x10` was renamed `Roots.source` for the x10_v2 work; new-source tests are in test_data_layout_batch_v2.py.)
 """
 from __future__ import annotations
 
@@ -23,7 +24,7 @@ from data_layout import batch, batch_report as R, cli  # noqa: E402
 SRC = {
     "system": REPO / "data/raw/s02/t00/ep-01/system.evtx",
     "winrm": REPO / "data/raw/s02/t01/ep-01/winrm.evtx",
-    "powershell": REPO / "data/raw/s02/t03/ep-01/powershell.evtx",
+    "powershell": REPO / "data/raw/s02/t01/ep-01/powershell.evtx",
 }
 NAME = {"system": "System", "winrm": "Microsoft-Windows-WinRM_Operational",
         "powershell": "Microsoft-Windows-PowerShell_Operational"}
@@ -111,11 +112,11 @@ def test_trial_and_scenario_naming():
 
 def test_plan_paths_normal_and_quarantine(repo):
     roots = batch.Roots.from_repo(repo)
-    n = batch.plan_trial(roots, roots.x10 / "S02/trial_01", "s02", "t01", False)
+    n = batch.plan_trial(roots, roots.source / "S02/trial_01", "s02", "t01", False)
     assert n.raw_dir == roots.raw / "s02/t01"
     assert n.database == roots.processed / "s02_t01.sqlite3"
     assert n.manifest == repo.resolve() / "data/manifest.csv"
-    q = batch.plan_trial(roots, roots.x10 / QDIR / "trial_03", "s05", "t03", True)
+    q = batch.plan_trial(roots, roots.source / QDIR / "trial_03", "s05", "t03", True)
     assert q.raw_dir == roots.raw / "quarantine/s05/t03"
     assert q.database == roots.processed / "quarantine/s05q_t03.sqlite3"
     assert q.manifest == repo.resolve() / "data/manifest_quarantine.csv"
@@ -126,7 +127,7 @@ def test_plan_paths_normal_and_quarantine(repo):
 def test_check_write_paths_refuses_protected_and_mixed(repo):
     from dataclasses import replace
     roots = batch.Roots.from_repo(repo)
-    q = batch.plan_trial(roots, roots.x10 / QDIR / "trial_01", "s05", "t01", True)
+    q = batch.plan_trial(roots, roots.source / QDIR / "trial_01", "s05", "t01", True)
     with pytest.raises(batch.IngestError):
         batch.check_write_paths(roots, replace(q, manifest=roots.manifest))
     with pytest.raises(batch.IngestError):
@@ -379,7 +380,6 @@ def test_end_to_end_real_tiny_evtx(repo):
 
 @pytest.mark.parametrize("tid,copied,missing", [
     ("s02_t01", 20, set()),
-    ("s02_t03", 18, {("dc01", "security"), ("dc01", "sysmon")}),
 ])
 def test_real_recorded_ingests(tid, copied, missing):
     p = REPO / "out/ingest/x10" / tid / "ingest.json"
