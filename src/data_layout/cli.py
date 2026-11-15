@@ -1,4 +1,5 @@
-"""Command line: python -m data_layout.cli {map,copy,manifest,batch} ... (PYTHONPATH=src)."""
+"""Command line: python -m data_layout.cli {map,copy,manifest,batch,archive-v1,archive-verify,retire-failed} ...
+(PYTHONPATH=src)."""
 from __future__ import annotations
 
 import argparse
@@ -7,7 +8,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Optional, Sequence
 
-from data_layout import batch
+from data_layout import archive, batch
 from data_layout import layout as L
 
 
@@ -72,7 +73,68 @@ def build_parser() -> argparse.ArgumentParser:
     b = sub.add_parser("batch", help="batch ingest (--source x10 | x10_v2): incoming -> raw -> manifest -> JSONL -> SQLite")
     batch.add_arguments(b)
     b.set_defaults(fn=batch.run)
+    add_archive_commands(sub)
     return p
+
+
+def positive_int(text: str) -> int:
+    """argparse type for --attempt: a positive integer, nothing else (no sign tricks, no path text)."""
+    if not text.isascii() or not text.isdigit() or int(text) < 1:
+        raise argparse.ArgumentTypeError(f"must be a positive integer, got {text!r}")
+    return int(text)
+
+
+def _repo_default() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _cmd_archive_v1(a: argparse.Namespace) -> int:
+    return archive.run_spec(a.repo, archive.V1, a.execute)
+
+
+def _cmd_archive_verify(a: argparse.Namespace) -> int:
+    """Verify V1, or one failed attempt when --scenario, --trial and --attempt are all given."""
+    given = [a.scenario, a.trial, a.attempt]
+    if any(x is not None for x in given) and not all(x is not None for x in given):
+        print("error: --scenario, --trial and --attempt must be given together", file=sys.stderr)
+        return 2
+    try:
+        spec = archive.V1 if a.attempt is None else archive.failed_attempt_spec(a.scenario, a.trial, a.attempt)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    return archive.run_verify(a.repo, spec)
+
+
+def _cmd_retire_failed(a: argparse.Namespace) -> int:
+    try:
+        spec = archive.failed_attempt_spec(a.scenario, a.trial, a.attempt)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    return archive.run_spec(a.repo, spec, a.execute)
+
+
+def add_archive_commands(sub: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
+    """archive-v1, archive-verify and retire-failed (all dry-run by default; --execute moves files)."""
+    v = sub.add_parser("archive-v1", help="archive the old S04/S07 t01-t10 copies (dry run unless --execute)")
+    v.add_argument("--repo", type=Path, default=_repo_default())
+    v.add_argument("--execute", action="store_true", help="really copy, record and delete (default: dry run)")
+    v.set_defaults(fn=_cmd_archive_v1)
+    c = sub.add_parser("archive-verify", help="re-hash the archive from its journal (read-only)")
+    c.add_argument("--repo", type=Path, default=_repo_default())
+    c.add_argument("--scenario", help="with --trial and --attempt: verify one retired failed attempt")
+    c.add_argument("--trial")
+    c.add_argument("--attempt", type=positive_int)
+    c.set_defaults(fn=_cmd_archive_verify)
+    r = sub.add_parser("retire-failed", help="move the ingested copies of a failed x10_v2 attempt off the normal "
+                                             "paths (dry run unless --execute)")
+    r.add_argument("--repo", type=Path, default=_repo_default())
+    r.add_argument("--scenario", required=True)
+    r.add_argument("--trial", required=True)
+    r.add_argument("--attempt", required=True, type=positive_int)
+    r.add_argument("--execute", action="store_true", help="really copy, record and delete (default: dry run)")
+    r.set_defaults(fn=_cmd_retire_failed)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

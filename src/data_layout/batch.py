@@ -47,6 +47,7 @@ SOURCES: tuple[str, ...] = ("x10", "x10_v2")
 STRICT_SOURCES: frozenset[str] = frozenset({"x10_v2"})   # sources that get the guards and the clock files
 V2_SOURCE_PREFIX = "x10_v2/"                              # manifest source_path of a v2 row
 LOCK_NAME_SUFFIX = ".lock"
+ARCHIVE_V1_LABEL = "archive_x10_v1"                        # the one-time archive of the old S04/S07 copies
 
 
 class IngestError(RuntimeError):
@@ -789,6 +790,19 @@ def is_stale(roots: Roots, plan: TrialPlan, pre: Optional[dict[str, str]]) -> bo
     return bool(stale_files(recorded_sources(read_json(plan.out_dir / "ingest.json")), pre))
 
 
+def archived_trial_ids(roots: Roots) -> frozenset[str]:
+    """Trial ids listed in out/archive_x10_v1/archive_report.json (source x10 only; empty otherwise).
+
+    WHY: the old out/ingest/x10/<id>/ingest.json stays after the archive (status ok, DB gone). Without this an
+    unfiltered x10 batch would see a "partial" trial and re-ingest the archived copy (review item 3). A listed id
+    counts as archived even if that run was incomplete: the old copy is half-moved and must not be rebuilt."""
+    if roots.source_name != "x10":
+        return frozenset()
+    report = read_json(roots.repo / "out" / ARCHIVE_V1_LABEL / "archive_report.json")
+    ids = report.get("trials") if isinstance(report, dict) else None
+    return frozenset(i for i in ids if isinstance(i, str)) if isinstance(ids, list) else frozenset()
+
+
 def run(a: argparse.Namespace) -> int:
     """Entry point shared by `python -m data_layout.batch` and `data_layout.cli batch`."""
     roots = Roots.from_repo(a.repo, a.source)
@@ -798,6 +812,10 @@ def run(a: argparse.Namespace) -> int:
     except IngestError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    archived = archived_trial_ids(roots)
+    for plan in [p for p in selected if p.trial_id in archived]:
+        print(f"{plan.trial_id}: archived (out/{ARCHIVE_V1_LABEL}/archive_report.json), skipped; nothing written")
+    selected = [p for p in selected if p.trial_id not in archived]
     for n in notes:
         print(f"note: {n}")
     if a.dry_run:
