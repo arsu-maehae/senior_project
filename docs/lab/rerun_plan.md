@@ -7,14 +7,15 @@
 2. Ingest it (`batch` ingest, as for the first ×10, from the source folder named below).
 3. Run the x10 validator on it.
 4. **Proceed to the remaining trials only if that trial has no FAIL.** If it fails, stop, report to the owner, and do not run more.
-5. After the last trial of an item, ingest and validate all of them; the item is done when none has a FAIL. A failing trial is replaced by a new trial numbered `trial_11` onwards in the same folder (decision 029).
+5. After the last trial of an item, ingest and validate all of them; the item is done when none has a FAIL. **Partial replacements (S03, S06):** a failing trial is replaced by a new trial numbered `trial_11` onwards in `data/incoming/x10` (decision 029). **Full reruns (S01, S04, S05, S07):** *(decision 052)* any trial with a FAIL is moved by the owner to `data/incoming/x10_v2_failed/<scenario>/attempt_N/`, its ingested copies are retired with the `retire-failed` tool, and its number is reused (a failed first trial never takes `trial_01`). Trial numbers run in order within each scenario, with no gaps.
 
 Broken trials are archived, never deleted (decision 034).
 
 ## Where the new trials go (decision 034)
 - **Partial replacements** (S03, S06): `data/incoming/x10/<scenario folder>/trial_11` (and `trial_12`). Ids `s03_t11`, `s06_t11`, `s06_t12`.
-- **Full reruns** (S04, S07, S05, S01): a new folder `data/incoming/x10_v2/<scenario folder>/trial_01` … `trial_10`. Ids `s04_t01` … `s04_t10`, same for the others. `data/incoming/x10/` is not touched.
-- **Archive of the old trials:** the old broken copies stay in `data/incoming/x10/`. Before the first `x10_v2` ingest, the old S04 and S07 copies in `data/raw/`, `data/processed/` and `data/manifest.csv` are moved by a script, with hash checks, to `archive_x10_v1/` paths, so the new trials sit on the normal paths (details in decision 034). The old S05 trials are already in quarantine and do not collide. S01 has no old ×10 trials.
+- **Full reruns** (S04, S07, S05, S01): a new folder `data/incoming/x10_v2/<scenario folder>/trial_01` … `trial_10` (minimum 5 accepted per scenario, up to 10 if time allows; decision 052). Ids `s04_t01` … `s04_t10`, same for the others. `data/incoming/x10/` is not touched.
+- **Failed full-rerun trials** (decision 052): moved by the owner to `data/incoming/x10_v2_failed/<scenario folder>/attempt_N/` (never ingested from there). Their ingested copies are retired by the `retire-failed` tool; the number is reused.
+- **Archive of the old trials:** the old broken copies stay in `data/incoming/x10/`. Before the first `x10_v2` ingest, the old S04 and S07 **`t01`–`t10`** copies (not `t00`) in `data/raw/`, `data/processed/`, `data/manifest.csv` and the per-trial outputs that share the id are moved by a script, with hash checks, to `archive_x10_v1/` paths, so the new trials sit on the normal paths (decision 034, amended by 052). The old S05 trials are already in quarantine and do not collide. S01 has no old ×10 trials.
 
 ## Before the first run and in every session
 - *(Owner 2026-11-12, decision 043 item 11; replaces the session sync of decision 032 item 2.)* **No clock sync:** do not run `w32tm /resync` on any VM before or between trials. A sync would land after ep-01's only offset pairs (its boot logons) and the trial would be refused.
@@ -30,27 +31,28 @@ Broken trials are archived, never deleted (decision 034).
 |---|---|---|---|---|---|
 | 1 | S03 | 1 | `x10` · `trial_11` | replaces `s03_t08` (test) | run 1, ingest, validator: no FAIL |
 | 2 | S06 | 2 | `x10` · `trial_11`, `trial_12` | replace `s06_t09`, `s06_t10` (test) | run `trial_11`, ingest, validator: no FAIL; then `trial_12`, same check |
-| 3 | S04 | 10 | `x10_v2` · `trial_01`–`trial_10` | full rerun (all 10 failed b, c, d) | run `trial_01`, ingest, validator: proceed only if it passes; then the other 9 |
-| 4 | S07 | 10 | `x10_v2` · `trial_01`–`trial_10` | full rerun (all 10 failed c) | same; the design fix is confirmed by the owner first (decision 033) |
-| 5 | S05 | 10 | `x10_v2` · `trial_01`–`trial_10` | rebuild to the t00 design (the first 10 are quarantined, decision 030) | same |
-| 6 | S01 | 10 | `x10_v2` · `trial_01`–`trial_10` | build (S01 has only t00, which is excluded) | same; the S01 design is confirmed by the owner first |
+| 3 | S04 | min 5, up to 10 | `x10_v2` · `trial_01`–`trial_10` | full rerun (all 10 failed b, c, d) | run `trial_01`, ingest, validator: proceed only if it passes; then the other 9 |
+| 4 | S07 | min 5, up to 10 | `x10_v2` · `trial_01`–`trial_10` | full rerun (all 10 failed c) | same; the design fix is confirmed by the owner first (decision 033) |
+| 5 | S05 | min 5, up to 10 | `x10_v2` · `trial_01`–`trial_10` | rebuild to the t00 design (the first 10 are quarantined, decision 030) | same |
+| 6 | S01 | min 5, up to 10 | `x10_v2` · `trial_01`–`trial_10` | build (S01 has only t00, which is excluded) | same; the S01 design is confirmed by the owner first |
 
 ### Run order
-1 → 2 → 3 → 4 → 5 → 6. Items 1 and 2 are single replacements of designs that already worked, so they come first and cost the least. Items 3 and 4 follow, because their designs and fixes are already described in the decision records. Items 5 and 6 come last because they are the largest and S01 needs its design confirmed.
+Trial numbers run in order within each scenario (decision 052). The order **across** scenarios is an operational choice in the lab handoff (round-robin to t05 first); it is not fixed by decision 052 or this file. Suggested default if the handoff says nothing: 1 → 2 → 3 → 4 → 5 → 6 (items 1 and 2 are single replacements of designs that already worked; items 3 and 4 have their designs described; items 5 and 6 are the largest and S01 needs its design confirmed).
 
-Do not start an item before the previous one is validated, unless the owner says so.
+Per trial, the rule at the top applies (run one, ingest, validate, proceed only without a FAIL), whatever the cross-scenario order.
 
 ### Per-item checklist
-For each item, record in `docs/PROGRESS.md`: the trial ids, the date, that each trial folder has the three `<HOST>_clock.txt` files with a start and an end reading, the validator result of the first trial, and the final validator result of the item.
+For each item, record in `docs/PROGRESS.md`: the trial ids, the date, that each trial folder has the three `<HOST>_clock.txt` files with a start and an end reading (a missing file is noted, not a failure), the validator result of the first trial, the failed attempts moved to `x10_v2_failed`, and the final validator result of the item. Accepted trials are added to `docs/lab/test_set.csv`.
 
-## Development and test mapping (decision 034)
-For the full reruns, new `t01` = development and `t02`–`t10` = test. Replacement trials (`s03_t11`, `s06_t11`, `s06_t12`) are test. Development stays `t00` for S02–S07 plus `t01` for all seven scenarios; the old S04 and S07 `t01` are invalid and replaced by the new `t01`. Each scenario ends with 9 test trials.
+## Development and test mapping (decision 034, amended by 052)
+For the full reruns, new `t01` = development and every later accepted trial = test. The test set is every trial that passed the operational checks (ingest ok, validator a–i with no FAIL; never pipeline results) by the **cutoff** (end of the lab session, or a later date the owner names), with a minimum of `t02`–`t05`. The cutoff and the accepted trials are recorded in `docs/lab/test_set.csv` (`trial_id, scenario, split, accepted_date`) and in a `docs/PROGRESS.md` line. Replacement trials (`s03_t11`, `s06_t11`, `s06_t12`) are test. Development stays `t00` for S02–S07 plus `t01` for all seven scenarios; the old S04 and S07 `t01` are invalid and replaced by the new `t01`. S02, S03 and S06 keep 9 test trials; the full-rerun scenarios have 4 to 9 (state n with every figure).
 
 ## Work needed before the first `x10_v2` trial is ingested
-- The batch ingest takes `x10_v2` as a source, with its own report folder (`out/ingest/x10_v2/`).
-- The validator takes `x10_v2` as a source, with its own output folder (`out/x10_validate_v2/`), and lists `s01` among the expected scenarios (`X10_SCENARIOS` in `src/x10_validate/cli.py`). The S01 design table is done (decision 035, manual RDP hop; open point: whether S01 includes an LSASS dump).
-- The archive step above, with hash checks, run once.
-These are implementation tasks and are not part of this plan.
+Planned 2026-11-15 (plan approved by the owner; decision 052). Implementation tasks, tracked in `docs/PLAN.md`:
+- The batch ingest takes `x10_v2` as a source, with its own report folder (`out/ingest/x10_v2/`), and refuses a trial id still held by an old copy.
+- The validator takes `x10_v2` as a source, with its own output folder (`out/x10_validate_v2/`), and lists `s01` among the expected scenarios. The S01 design table is done (decisions 035 and 036: manual RDP hop with a dump step on ep-01).
+- The one-time archive of the old S04 and S07 `t01`–`t10` copies, with hash checks (built and tested on synthetic folders; run once by the owner), and the `retire-failed` tool for failed v2 attempts.
+- The ingest keeps each host's `<HOST>_clock.txt` (one file, two readings) as `data/raw/<s>/<t>/<host>/clock.txt` plus a manifest row; a missing file is noted in `ingest.json`, not a failure.
 
 ## Open points for the owner
 - **S07 and S01** need a confirmed design before their first trial. For S01 the validator design is decision 035 (draft); confirm it and its open points (LSASS dump on ep-01? type 3 + port 3389 accepted as RDP?).

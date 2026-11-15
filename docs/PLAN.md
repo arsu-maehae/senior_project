@@ -69,6 +69,15 @@ Never tune code or weights on the test set.
 - [ ] 6b.4 Step 2 (after the x10_v2 ingest): confirm MIN_PAIRS, MAX_LOO_SHIFT_S, READING_AGREE_S and the late_gap_s limit on the rerun t01 trials and their start/end w32tm readings (spec 08 CO-11b, CO-12; no rerun trial is synced, t01 and t02–t10 alike, owner 2026-11-12); t02–t10 readings are reported, never used to tune
 **Must be done before:** gating any trial collected on or after 2026-10-26 (spec 02_gate §2.2), and T7.6 link accuracy on t01.
 
+## T6c. Lab tooling for the x10_v2 reruns — before the first x10_v2 trial is ingested (before 23 Nov) — decisions 034, 052; plan approved 2026-11-15
+- [ ] 6c.1 Decision 052 (lab stopping rule) accepted by the owner; amendments to decision 034 and docs/lab/rerun_plan.md; docs/lab/test_set.csv created (docs written 2026-11-15, awaiting acceptance)
+- [ ] 6c.2 Batch ingest `--source x10_v2` (own report folder out/ingest/x10_v2/, `source` in ingest.json, shadow guard against old copies on the normal paths)
+- [ ] 6c.3 Ingest keeps each host's `<HOST>_clock.txt` as data/raw/<s>/<t>/<host>/clock.txt + manifest row (channel=clock); a missing file is noted in ingest.json, not a failure (spec 08 §4.2)
+- [ ] 6c.4 Validator `--source x10_v2` (out/x10_validate_v2/, s01 among the scenarios, v1 output unchanged)
+- [ ] 6c.5 Attacker review of the archive design (before 6c.6)
+- [ ] 6c.6 One-time archive of old S04/S07 t01–t10 (not t00) with hash checks, plus `retire-failed` for failed v2 attempts; built and tested on synthetic folders only, NOT run on real data (the owner runs it once)
+**Done when:** fast and full suites pass; v1 behaviour is unchanged; no real data was opened or moved.
+
 ## T7. Cross-host linking — depends on: T6 — CRITICAL — spec: docs/specs/03_stitch.md
 - [x] 7.1 *(done 2026-11-13: docs/specs/03_stitch.md approved by the owner; review docs/reviews/03_stitch-spec-2026-11-13.md; decisions 044 (council, after side 15 s) and 045 (tier rule scope) accepted; decision 014 window amended; Q9 open for T8/T9)* Spec; council on the NTLM linking approach and the time window. Input notes the spec must handle: docs/specs/03_stitch_input_notes.md (IN-01 several 4624s per hop, IN-02 file copy under an earlier session; F2, F3 of review 02_gate-2026-11-12)
 - [x] 7.2 *(done 2026-11-14: src/stitch/ inputs, scan, sessions, processes, index, check_index; decisions 046 (development allowlist) and 047 (session model, amended by the owner); spec ST-10/§5/STT-11 amended; counts in out/stitch_check/<trial>/t72_index.json; no spec output file yet, the outputs of spec §3 start in 7.3)* Sessions per host (Logon ID); process trees (ProcessGuid)

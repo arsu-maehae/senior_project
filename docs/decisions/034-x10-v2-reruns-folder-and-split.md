@@ -30,6 +30,11 @@ Decision 029 numbers replacements from `trial_11`. That is fine for a few replac
 - The rule "run 1 trial, ingest, validate, proceed only if it passes" applies to every v2 scenario; the first accepted trial is `t01`.
 - If a v2 trial fails, it is replaced by a new trial in `x10_v2` numbered `trial_11` onwards, as in 029.
 
+## Amended by decision 052 (2026-11-15)
+- **Archive scope (item 3):** the archive moves the old S04 and S07 trials `t01`–`t10` only. `t00` of S04 and S07 stays on the normal paths (development, table above). Besides `data/raw/`, `data/processed/` and `data/manifest.csv`, the script also moves the per-trial files that share the id and would be overwritten or deleted by the new ingest: `data/processed/jsonl/<id>/`, `data/processed/<id>.clock_{offsets,changes}.csv`, `out/normalise/<id>/`, `out/clock_offset/<id>/`. `out/ingest/x10/` and `out/x10_validate/` do not collide and stay. Old manifest rows are recognised by `source_path` starting `x10/`.
+- **Failed v2 trials (Consequences):** "If a v2 trial fails, it is replaced by a new trial in `x10_v2` numbered `trial_11` onwards" is replaced: **any** failed v2 trial is moved to `data/incoming/x10_v2_failed/<scenario>/attempt_N/`, its ingested copies are retired by the `retire-failed` tool, and its number is reused (never `trial_11+`; a failed first trial never takes `trial_01`).
+- **Split (item 4):** `t01` stays development. The test set is every v2 trial that passed the operational checks by the cutoff, recorded in `docs/lab/test_set.csv`, with a minimum of `t02`–`t05` (4 test trials) per scenario, not a fixed 9. In the table above read "v2 `t02`–`t10`" as "v2 `t02` … `t(N)`, N = accepted by the cutoff". Replacement trials of S03 and S06 are unchanged.
+
 ## Kill criteria
 If the archive move cannot be verified by hash, it is not done and the v2 trials get a separate path (as in decision 030) instead.
 
