@@ -38,6 +38,8 @@ EVTX → JSONL → normalise → SQLite (one DB per trial) → gate → stitch �
 ## Environment (Windows PC)
 - Repo: `D:\senior_project` (no spaces in the path). Python venv in `.venv`; start `claude` from a terminal where the venv is active.
 - Shell: Git Bash (Bash tool) or PowerShell. Use Python scripts rather than shell-specific one-liners.
+- Never pipe a here-document into `python -` on this machine (it hangs). Write the script to a scratchpad file and run
+  it with `.venv/Scripts/python.exe <file>`.
 - Existing parser/normaliser: `src/parsing_normalization/` (reviewed 2026-11-09; fixes in docs/specs/01_normalise_fixes.md). Extend it, do not rewrite it.
 - Papers: `docs/papers/` (HADES, TPPR PDFs). Fact-check paper claims against these files, not memory.
 

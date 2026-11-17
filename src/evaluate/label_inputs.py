@@ -123,8 +123,9 @@ def query_share_facts(conn: sqlite3.Connection, uids: Iterable[str]) -> dict[str
     """uid -> ShareFacts (``share_name``, ``relative_target_name``) from ``events_dedup`` for the key's SMB
     5140 / 5145 uids.
 
-    WHY these two columns only: they name a share and a file, never command text, and the field JSON is never
-    selected in ``src/evaluate`` (decision 051 item 8). A key uid absent from the view is refused (EvalError, a count
+    WHY these two columns only: they name a share and a file, never command text, and no SQL in ``src/evaluate``
+    names the field JSON (test ``test_src_evaluate_never_selects_command_text_or_field_json``, guarding decision 051
+    item 8). A key uid absent from the view is refused (EvalError, a count
     only): the key and the DB (whose hashes match) would disagree, and skipping it would silently drop a key event
     from the recall (as review ATK-24 for links).
     """

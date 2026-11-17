@@ -18,8 +18,9 @@ Readings of the table (reported to the owner with T8.3):
   names C$, ADMIN$ and IPC$). Any other share (a lab share) is no table kind.
 - "copied executable" = a 5145 on ``ADMIN$`` or a drive share whose ``relative_target_name`` ends in an executable
   extension (``EXECUTABLE_EXTENSIONS``). The table says "(write)", but the AccessList is only in the event's field
-  JSON, which ``src/evaluate`` never selects (decision 051 item 8, tested); so a non-write access to the copied file
-  also counts here (open question to the owner, T8.3 report).
+  JSON, and no SQL in ``src/evaluate`` names it (test ``test_src_evaluate_never_selects_command_text_or_field_json``,
+  guarding decision 051 item 8; decision 060 reading 1); so a non-write access to the copied file also counts here
+  (open question to the owner, T8.3 report).
 - "WinRM hop: wsmprovhost process" = every target-host Sysmon 1 / Security 4688 in ``target_event_uids`` of a WinRM
   key hop (the key lists the session-host process there; the image is not re-checked, which would repeat SR-40).
 - "WinRM hop: source connection" = every source-host Sysmon 3 in ``port_join_event_uids`` of a WinRM key hop.
