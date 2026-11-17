@@ -34,15 +34,16 @@ Option A, plus the S03–S06 fixes:
   `manifest.csv`: 3508a065dad556d0aad214470270dc4868759c4b023b3454febfb1d45288ee5e.
 - **S03.** `hop_labels.csv` gains `n_labelled_context0_node_events` right after `n_labelled_node_events`. Hop `techniques`,
   `in_path_without_labelled_node`, and the new stats `with_labelled_context0_node` and
-  `labelled_context0_node_events` use `context` = 0 nodes only, as in 056 item 7. As a result, T1003.001 leaves the
-  hop techniques of 11 of 284 hops, and T1021.006 leaves those of 2 s06 hops.
+  `labelled_context0_node_events` use `context` = 0 nodes only, as in 056 item 7. As a result, the hop techniques of 11 of 284 hops
+  change: T1003.001 leaves 9 hops (all 20 T1003.001 node rows are `context` = 1), and T1021.006 leaves 2 s06 hops.
 - **S05.** This replaces 058 point 10. src/label refuses with exit 2 and writes nothing when:
   - the stitch run_info's `gate_stats_sha256`, offsets hash or clock-changes hash differs from the current files;
   - a stitch CSV (path_nodes, hops, hop_identity, hop_artefacts) differs from its run_info hash;
   - a required column is missing, or a row is ragged;
   - a `dump_utc_corrected` value is empty or cannot be parsed.
 - **S04.** The recall is called rule coverage of key events in the code, the .md and decision 060.
-- **S06.** A kept evaluate file must name only the trial being written (`trial_id`, checked before any write).
+- **S06.** A kept per-trial CSV or JSON file must name only the trial being written (`trial_id`, checked before any
+  write). Kept `.md` files and the files of the `development` summary folder carry no trial id and are not checked.
   `label_recall.csv` gains `label_run_sha256` as its last column. `--out` is checked before the no-key return.
 
 Development effect: `event_labels` and `node_labels` are byte-identical. Recall is unchanged (46/69). Two runs are

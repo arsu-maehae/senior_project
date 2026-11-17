@@ -139,7 +139,7 @@ before measurement.
 | SR-10 | T1021.002 | SigmaHQ adapted from `098d7118` | low | P1: `ShareName|endswith: '\ADMIN$'`; new id, `related: derived` (§3.3) |
 | SR-11 | T1021.002 | SigmaHQ `b210394c` | high | as written; no development match |
 | SR-12 | T1021.002 | SigmaHQ `586a8d6b` | medium | as written; no development match |
-| SR-20 | T1570 | own | low | as §3.1 |
+| SR-20 | T1570 | own | low | as §3.1; share literals `\ADMIN$` / `\C$` (decision 059) |
 | SR-30 | T1569.002 | own | low | as §3.1 |
 | SR-31 | T1569.002 | own | low | P3′: filter `ServiceType` 0xd0 / 0xe0 |
 | SR-40 | T1021.006 | SigmaHQ `734f8d9b` | medium | as written |
@@ -181,9 +181,10 @@ Location `out/label/<trial_id>/`. Rebuilt on every run. Rows sorted by time, the
 unlabelled).
 
 **`hop_labels.csv`** — one row per hop of `hops.csv`: `hop_id, in_path, n_node_events, n_labelled_node_events,
-techniques` (of its node events)`, dump_event_uids` (the distinct non-empty `dump_event_uid` values of the hop's
+n_labelled_context0_node_events` (decision 061)`, techniques` (primary techniques of its `context` = 0 node events;
+decisions 058, 061)`, dump_event_uids` (the distinct non-empty `dump_event_uid` values of the hop's
 `hop_identity.csv` rows, which has several rows per hop, `;`-joined)`, dump_labelled` (`1` / `0` /
-`outside_window` for a look-back read, ST-63)`, dump_rule_ids, dump_max_level_value`. The dump columns are facts
+`outside_window` for a look-back read, ST-63; one value per uid of `dump_event_uids`, `;`-joined, decision 058)`, dump_rule_ids, dump_max_level_value`. The dump columns are facts
 about the LSASS reads that identity uses. They are not nodes and never change identity (OPEN Q1, Q2; review ATK-L02).
 A hop with no labelled node event has `n_labelled_node_events` = 0 and empty `techniques` (review ATK-L08).
 

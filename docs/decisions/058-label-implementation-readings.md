@@ -20,7 +20,7 @@ match §10.2.
 | 7 SR-10 adapted | the rule file has its own id `2495f327-…` and `related: 098d7118… derived`. `manifest.csv` and the `sigma_id` of label rows keep the upstream `098d7118…` for attribution, and `report.md` says the rule is adapted | a manifest notes column | the §3.4 manifest columns stay as approved |
 | 8 folder swap / JSON writers | imported from `stitch.__main__` | from `evaluate.writers` | `evaluate` reads answer keys; `src/label` must not import it |
 | 9 rules folder | any file other than `*.yml` and `manifest.csv` is refused | ignored | LB-10 lock: nothing unlisted near the rules |
-| 10 stitch file hashes | recorded in `run_info.json`, no refusal | refuse when they differ | the stitch outputs are re-run often; T9 checks the chain |
+| 10 stitch file hashes (**replaced by [061](061-label-stage-review-fixes.md) S05: now refused**) | recorded in `run_info.json`, no refusal | refuse when they differ | the stitch outputs are re-run often; T9 checks the chain |
 | 11 allowlist refusal text | the shared stitch text ("the stitcher runs on …") | a label-specific text | reuses `stitch.inputs.check_allowlist`; cosmetic |
 
 **SR-31 count.** SR-31 matches 9 events (1,0,2,1,1,2,1,0,1), and 8 of them are path nodes. The ninth is a
@@ -34,7 +34,8 @@ Adopt the readings in the table. They are coded in `src/label` and covered by th
 ## Consequences
 - `hop_labels.csv` `dump_labelled` is a `;`-joined list, so T9 must read it per uid.
 - T9 does not see secondary techniques at node level; it reads them from `event_labels.csv` if needed.
-- A changed stitch output after labelling is not refused. Only `run_info.json` records it.
+- A changed stitch output after labelling is not refused. Only `run_info.json` records it. (Replaced by 061 S05: it is
+  now refused.)
 
 ## Kill criteria
 - T9 needs a single hop-level dump flag or secondary techniques at node level. In that case the output columns change,
