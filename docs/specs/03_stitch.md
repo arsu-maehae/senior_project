@@ -1,6 +1,6 @@
 # Stage spec: 03_stitch
 
-**Owner:** <stage owner> · **Status:** **approved (owner, 2026-11-13).** Measured on development data 2026-11-13; data-checker and attacker review merged ([review](../reviews/03_stitch-spec-2026-11-13.md)); council [044](../decisions/044-stitch-linking-and-windows-council.md) accepted ("after" side 15 s); [045](../decisions/045-tier-rule-scope.md) accepted; owner answers Q1–Q16 merged; Q9 stays open for the T8 / T9 specs. **Amended by [047](../decisions/047-stitch-session-model.md) (owner, 2026-11-13): ST-10 boot groups and 4688 session, §5 `BOOT_GROUP_S`, STT-11.** **Amended by [049](../decisions/049-stitch-t74-readings.md) (owner, 2026-11-14): `hop_identity.csv` `not_applicable` = `source_host_no_logs`; limitation L-ST4; STT-13 image / account columns.** **Readings for T7.5 in [050](../decisions/050-stitch-t75-readings.md) (owner, 2026-11-14): paths as connected components of the chain graph, edge boundaries, session-key edges, notes, spellings, node rules; no rule change.** · **Last updated:** 2026-11-14
+**Owner:** <stage owner> · **Status:** **approved (owner, 2026-11-13).** Measured on development data 2026-11-13; data-checker and attacker review merged ([review](../reviews/03_stitch-spec-2026-11-13.md)); council [044](../decisions/044-stitch-linking-and-windows-council.md) accepted ("after" side 15 s); [045](../decisions/045-tier-rule-scope.md) accepted; owner answers Q1–Q16 merged; Q9 stays open for the T8 / T9 specs. **Amended by [047](../decisions/047-stitch-session-model.md) (owner, 2026-11-13): ST-10 boot groups and 4688 session, §5 `BOOT_GROUP_S`, STT-11.** **Amended by [049](../decisions/049-stitch-t74-readings.md) (owner, 2026-11-14): `hop_identity.csv` `not_applicable` = `source_host_no_logs`; limitation L-ST4; STT-13 image / account columns.** **Readings for T7.5 in [050](../decisions/050-stitch-t75-readings.md) (owner, 2026-11-14): paths as connected components of the chain graph, edge boundaries, session-key edges, notes, spellings, node rules; no rule change.** **Amended by [055](../decisions/055-t77-review-owner-rulings.md) (owner, 2026-11-17, T7.7 review): `hops.csv` `member_logon_uids` keeps each member's ST-05 copies joined by `|`; limitations L-ST5..L-ST9.** · **Last updated:** 2026-11-17
 
 Decisions this spec rests on: [011](../decisions/011-smb-linking-without-sysmon3.md), [013](../decisions/013-council-correction-i-amended.md) (Correction I amended), [014](../decisions/014-cross-host-time-tolerance.md) (5 s), [015](../decisions/015-port-zero-kerberos-hops.md), [038](../decisions/038-gate-rule-choices.md) (`confidence_tier` belongs to T7), [039](../decisions/039-gate-window-input-and-clock.md) (identity look-back), [043](../decisions/043-clock-offset-method.md) (corrected times). Accepted with this spec: [044](../decisions/044-stitch-linking-and-windows-council.md) (council), [045](../decisions/045-tier-rule-scope.md) (tier rule scope, review 08 SF-9). With T7.2: [046](../decisions/046-stitch-development-allowlist.md) (development allowlist until T10), [047](../decisions/047-stitch-session-model.md) (session model). Input notes: [03_stitch_input_notes](03_stitch_input_notes.md) (IN-01, IN-02). Measurements: §10.
 
@@ -60,7 +60,7 @@ Location `out/stitch/<trial_id>/`. Rebuilt on every run. Rows sorted by time, th
 | target_host, source_ip, ip_kind, source_host | text | source host = lab host that owns the normalised source IP, else empty |
 | first_utc, first_utc_corrected, last_utc_corrected | text | first / last member 4624 |
 | member_count | int | number of member logons |
-| member_logon_uids, member_logon_ids, member_logon_ids_hex, member_accounts, member_ports | text | `;`-joined, in member order |
+| member_logon_uids, member_logon_ids, member_logon_ids_hex, member_accounts, member_ports | text | `;`-joined, in member order; **055:** a member's item in `member_logon_uids` is its representative uid followed by its ST-05 copies, joined by `|` (one `;` item per member, so the columns stay parallel) |
 | mixed_account | int | 1 if the members' accounts differ (ST-21) |
 | protocol, rules | text | `winrm`, `rdp`, `smb_service`, `smb`, `none` (ST-22); `rules` = the distinct gate rules of the members, `;`-joined |
 | chain_parent_count, chain_parent_hop_ids, multi_chain_parent | int / text / int | number of hops chained into this hop; their ids; 1 if more than one (ST-72, limitation L-ST2) |
@@ -305,6 +305,23 @@ any development trial; ST-41 covers it on synthetic data only). Changing the gat
   from the moving account (for example a session using injected credentials with no 4648) gets tier D under the locked
   tier rule (ST-48: `account_match` none → D), so the strongest technical link gets the lowest tier in that case. No
   development hop is affected. No rule change.
+- **L-ST5 Host-time chaining has no upper time bound (055; review ATK-18).** H1 → H2 is chained whenever H2 leaves
+  H1's target after H1 arrived, however long after and whatever the account, so benign seeds into a host chain into a
+  later seed out of it and paths merge through the shared hop (L-ST2). Only s05_t00 in the development data. To be
+  measured on the t01 reruns before any cap is considered (T9 / T10).
+- **L-ST6 Untriggered hops seed nothing (055; review ATK-19).** A hop with only unmatched logons (for example a
+  remote logon with no artefact the gate pairs) is listed and linked but is in no path (ST-23, owner Q13). A gate
+  trigger row with no anchor starts nothing; the gate always writes an anchor (02_gate GT-14).
+- **L-ST7 Sessions whose 4624 is not in the window or was erased (055; review ATK-20).** A source session opened
+  before the window has no account in `links.csv`, so its links can only be `4648` or `none` (tier B at best, often D).
+  A session whose 4624 was erased by a log clear is never counted open and never `end_unknown`.
+- **L-ST8 Evidence only in system sessions (055; review ATK-22).** Commands or 4648s in 0x3e7 / 0x3e4 / 0x3e5 are not
+  candidates (ST-44); a hop with only such evidence is `target_only` / `no_evidence_in_range`, and the evidence is
+  visible only as the `stats.json` count.
+- **L-ST9 A second movement absorbed as follow-up logons (055; review ATK-25).** An untriggered group within
+  `FOLLOWUP_MAX_S` on the seed's ports is attached as follow-up logons (ST-26), also if it was a real second movement
+  over the same connection; its 4624 is then not a member and a key naming it is unmatched. Not in the development
+  data (S07 Y comes 95 s after X).
 
 ## 10. Measurements (development trials only, read-only, 2026-11-13)
 Scripts with a hard allowlist of the nine development trials (s02–s07 t00; s02_t01, s03_t01, s06_t01); `s02_t02`

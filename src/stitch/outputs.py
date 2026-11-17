@@ -43,7 +43,8 @@ __all__ = ["LINKS_COLUMNS", "ARTEFACT_COLUMNS", "IDENTITY_COLUMNS", "LINKS_FILE"
            "link_sort_key", "numbered_link_rows", "link_row", "link_rows", "artefact_row", "artefact_rows",
            "identity_row", "identity_rows", "csv_text", "HOPS_FILE", "PATHS_FILE", "EDGES_FILE", "NODES_FILE",
            "HOPS_COLUMNS", "PATHS_COLUMNS", "EDGES_COLUMNS", "NODES_COLUMNS", "CHAIN_SEPARATOR", "hop_row",
-           "hop_rows", "path_row", "path_rows", "edge_row", "edge_rows", "node_row", "node_rows"]
+           "hop_rows", "path_row", "path_rows", "edge_row", "edge_rows", "node_row", "node_rows", "COPY_SEP",
+           "member_uids_cell"]
 
 LINKS_FILE, ARTEFACT_FILE, IDENTITY_FILE = "links.csv", "hop_artefacts.csv", "hop_identity.csv"
 HOPS_FILE, PATHS_FILE, EDGES_FILE, NODES_FILE = "hops.csv", "paths.csv", "path_edges.csv", "path_nodes.csv"
@@ -288,11 +289,22 @@ def identity_rows(li: LinkIndex) -> list[dict[str, str]]:
 
 # ---------------------------------------------------------------- hops.csv (T7.5)
 
+COPY_SEP = "|"
+
+
+def member_uids_cell(uid: str, event_uids: Iterable[str]) -> str:
+    """One member's item of ``member_logon_uids``: the representative uid first, then every other uid of the same
+    event (ST-05 near-duplicate copies) in their given order, joined by ``|`` (decision 055). WHY ``|`` and not
+    ``;``: the column stays parallel to ``member_logon_ids`` (one ``;`` item per member), and ST-05 asks that all
+    uids are kept. A member with no copy gives its uid alone, so outputs without copies are byte-identical."""
+    return COPY_SEP.join([uid] + [u for u in event_uids if u != uid])
+
+
 def hop_row(hop: Hop, li: LinkIndex, facts: HopPathFacts) -> dict[str, str]:
     """One ``hops.csv`` row (spec 3), field by field.
 
-    Member columns are parallel, one item per member in member order: the member's representative uid (its ST-05
-    copies are in ``path_nodes.csv``), the logon ID as a decimal integer and as hex (D1), the 4624
+    Member columns are parallel, one item per member in member order: the member's uids (the representative uid,
+    then its ST-05 copies joined by ``|``, owner ruling OQ-1 of the T7.7 review, decision 055), the logon ID as a decimal integer and as hex (D1), the 4624
     ``account_name`` (a DB field, 050 item 8) and the source port. ``candidate_count`` = distinct candidate
     sessions over all methods (``candidate_count_all``); ``best_tier`` from the T7.4 verdicts (D with no session,
     ST-49); ``clock_unreliable`` = ``paths.hop_clock_unreliable`` (ST-02 both parts, the edge flag's input).
@@ -313,7 +325,7 @@ def hop_row(hop: Hop, li: LinkIndex, facts: HopPathFacts) -> dict[str, str]:
         "first_utc_corrected": hop.first_utc_corrected,
         "last_utc_corrected": hop.last_utc_corrected,
         "member_count": hop.member_count,
-        "member_logon_uids": [m.uid for m in hop.members],
+        "member_logon_uids": [member_uids_cell(m.uid, m.event_uids) for m in hop.members],
         "member_logon_ids": [m.logon_id for m in hop.members],
         "member_logon_ids_hex": [m.logon_id_hex for m in hop.members],
         "member_accounts": [m.account for m in hop.members],

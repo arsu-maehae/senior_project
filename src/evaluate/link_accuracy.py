@@ -147,8 +147,10 @@ def target_only_reason(rows: Sequence[Mapping[str, str]]) -> str:
 
 
 def has_only_target_only(rows: Sequence[Mapping[str, str]]) -> bool:
-    """True when the hop's links are exactly one ``target_only`` row (051 item 6, ``target_only_ok``)."""
-    return len(rows) == 1 and rows[0].get("method") == METHOD_TARGET_ONLY and not session_rows(rows)
+    """True when the hop has a ``target_only`` row and no candidate session (051 item 6 as amended by decision 055,
+    owner ruling OQ-2): unresolved-process rows (ST-41, empty session) may sit beside it, because they name no
+    session and so are not candidates (ST-49)."""
+    return any(r.get("method") == METHOD_TARGET_ONLY for r in rows) and not session_rows(rows)
 
 
 def _flag(value: bool) -> str:

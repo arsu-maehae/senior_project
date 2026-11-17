@@ -175,3 +175,59 @@ def test_atk27_binary_file_name_never_returns_argument_text(image, want):
     got = binary_file_name(image)
     assert got == want
     assert " " not in got
+
+
+# ================================================================================================ OQ-1 (decision 055)
+def _hops_with_a_copied_member(tmp_path: Path) -> list[dict[str, str]]:
+    """The T7.4 writer world plus an ST-05 near-duplicate copy of member M1 (same host, channel, record ID)."""
+    import csv
+    import importlib
+    import io
+    from test_stitch_outputs import world_rows, write_gate_csv
+    rows, trig, sup = world_rows()
+    m1 = next(r for r in rows if r["event_uid"] == "M1")
+    rows.append(dict(m1, event_uid="M1-copy"))
+    fake = sf.make_repo(tmp_path, rows, name="copy")
+    write_gate_csv(fake.paths.gate_dir / "triggers.csv", trig, ["event_uid"])
+    write_gate_csv(fake.paths.gate_dir / "supporting.csv", sup, ["event_uid"])
+    out = tmp_path / "copy_out"
+    sm = importlib.import_module("stitch.__main__")
+    assert sm.main(["--trial", fake.trial, "--repo", str(fake.repo), "--out", str(out)]) == 0
+    return list(csv.DictReader(io.StringIO((out / "hops.csv").read_text(encoding="utf-8"))))
+
+
+def test_oq1_hops_csv_keeps_a_members_st05_copies_joined_by_bar_and_stays_parallel(tmp_path):
+    rows = _hops_with_a_copied_member(tmp_path)
+    (row,) = [r for r in rows if r["member_logon_uids"].split("|")[0] == "M1"]
+    assert row["member_logon_uids"] == "M1|M1-copy"
+    assert row["member_count"] == "1" and row["member_logon_ids"] == "7000"
+    assert all(len(r["member_logon_uids"].split(";")) == int(r["member_count"]) for r in rows)
+
+
+def test_oq1_member_uids_cell_without_copies_is_the_uid_alone():
+    from stitch.outputs import member_uids_cell
+    assert member_uids_cell("A", ["A"]) == "A"
+    assert member_uids_cell("A", ["A", "B", "C"]) == "A|B|C"
+    assert member_uids_cell("B", ["A", "B"]) == "B|A"
+
+
+def test_oq1_evaluate_matches_a_key_that_names_the_copy_uid():
+    from evaluate.keys import key_logons_in_hop, match_key_hop
+    hop = {"hop_id": "H1", "member_logon_uids": "T0;T1|T1copy", "member_logon_ids": "255;256"}
+    kh = {"target_event_uids": ["T1copy"], "target_logon_id": hex(256), "target_host": "ep-02"}
+    res = match_key_hop(kh, [hop])
+    assert res.outcome == "matched" and res.hop_ids == ("H1",) and res.member_uids == ("T1copy",)
+    ekeys = {"T1copy": {"host": "ep-02", "channel": "Security", "event_id": 4624}}
+    assert key_logons_in_hop(kh, ekeys, hop) == "1/1"
+
+
+# ================================================================================================ OQ-2 (decision 055)
+def test_oq2_target_only_ok_allows_unresolved_rows_but_not_a_candidate_session():
+    from evaluate.link_accuracy import has_only_target_only
+    to = link_row("H1", 1, "target_only")
+    unresolved = dict(link_row("H1", 2, "sysmon3_port", 0, ""), source_session_id="", source_session_id_hex="",
+                      session_unresolved_reason="no_sysmon1_in_window")
+    assert has_only_target_only([to]) is True
+    assert has_only_target_only([unresolved, to]) is True
+    assert has_only_target_only([to, link_row("H1", 2, "cmdline_target", 0x600, "U600")]) is False
+    assert has_only_target_only([unresolved]) is False                 # no target_only row at all

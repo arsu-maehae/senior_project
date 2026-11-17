@@ -65,7 +65,7 @@ T7.6 checks the stitch links against the approved development keys. The checks a
      - `wrong`;
      - `no_candidate`: a `target_only` hop.
    - `only_candidate`: the candidate set equals the key set.
-   - **A key hop without a key source session** (background, `time_account_only`) has `expected_target_only` = 1 and `target_only_ok` = 1 when the hop has only a `target_only` row.
+   - **A key hop without a key source session** (background, `time_account_only`) has `expected_target_only` = 1 and `target_only_ok` = 1 when the hop has only a `target_only` row. **Amended by 055 (owner, 2026-11-17, review OQ-2):** `target_only_ok` = 1 when the hop has a `target_only` row and no candidate session; unresolved-process rows (ST-41, empty session) may sit beside it.
 7. **Identity.** The comparison uses the `hop_identity.csv` rows of (hop, key `logon_account`).
    - The value is computed under the six Q9 variants: reads all / non-system / key rule × `end_unknown` counted or not, with the definitions of the existing test helper. A deciding row has `order_ok` = 1 and an open session.
    - `identity_value` = the shared value, or `q9_dependent`.

@@ -55,6 +55,12 @@ def split_list(cell: str | None) -> list[str]:
     return [p for p in (cell or "").split(";") if p != ""]
 
 
+def member_uid_set(item: str) -> set[str]:
+    """Every uid of one ``member_logon_uids`` item: the representative and its ST-05 copies, joined by ``|``
+    (decision 055, owner ruling OQ-1)."""
+    return {u for u in item.split("|") if u != ""}
+
+
 def key_account(key_hop: Mapping[str, Any]) -> str:
     """The moving account of a key hop, lower-cased: ``logon_account``, else ``account`` (decision 027)."""
     return str(key_hop.get("logon_account") or key_hop.get("account") or "").lower()
@@ -75,15 +81,18 @@ def match_key_hop(key_hop: Mapping[str, Any], hops: Sequence[Mapping[str, str]])
     whose logon ID equals ``target_logon_id`` (ST-25; 051 item 3).
 
     WHY both conditions: ``target_event_uids`` also lists artefacts and other 4624s of the move; the logon ID picks
-    the one 4624 the key calls the target logon. ``member_logon_uids`` and ``member_logon_ids`` are parallel lists.
+    the one 4624 the key calls the target logon. ``member_logon_uids`` and ``member_logon_ids`` are parallel lists;
+    a member item may hold the member's ST-05 copies joined by ``|`` and matches on any of them (decision 055).
+    The matched uid reported is the key's own uid.
     """
     uids = set(key_hop.get("target_event_uids") or [])
     want = parse_hex(key_hop["target_logon_id"])
     found: list[tuple[str, str]] = []
     for hop in hops:
-        for uid, lid in zip(split_list(hop.get("member_logon_uids")), split_list(hop.get("member_logon_ids"))):
-            if uid in uids and int(lid) == want:
-                found.append((hop["hop_id"], uid))
+        for item, lid in zip(split_list(hop.get("member_logon_uids")), split_list(hop.get("member_logon_ids"))):
+            hit = sorted(member_uid_set(item) & uids)
+            if hit and int(lid) == want:
+                found.append((hop["hop_id"], hit[0]))
                 break
     outcome = "matched" if len(found) == 1 else ("unmatched" if not found else "multiple")
     return MatchResult(outcome, tuple(h for h, _ in found), tuple(u for _, u in found))
@@ -101,7 +110,7 @@ def key_logons_in_hop(key_hop: Mapping[str, Any], event_keys: Mapping[str, Mappi
               if (event_keys.get(u) or {}).get("host") == target
               and (event_keys.get(u) or {}).get("channel") == "Security"
               and (event_keys.get(u) or {}).get("event_id") == 4624]
-    members = set(split_list(hop.get("member_logon_uids")))
+    members = {u for item in split_list(hop.get("member_logon_uids")) for u in member_uid_set(item)}
     return f"{sum(1 for u in logons if u in members)}/{len(logons)}"
 
 
