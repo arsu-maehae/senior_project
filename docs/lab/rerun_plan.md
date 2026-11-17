@@ -6,15 +6,15 @@
 1. Run **one** trial.
 2. Ingest it (`batch` ingest, as for the first ×10, from the source folder named below).
 3. Run the x10 validator on it.
-4. **Proceed to the remaining trials only if that trial has no FAIL.** If it fails, stop, report to the owner, and do not run more.
-5. After the last trial of an item, ingest and validate all of them; the item is done when none has a FAIL. **Partial replacements (S03, S06):** a failing trial is replaced by a new trial numbered `trial_11` onwards in `data/incoming/x10` (decision 029). **Full reruns (S01, S04, S05, S07):** *(decision 052)* any trial with a FAIL is moved by the owner to `data/incoming/x10_v2_failed/<scenario>/attempt_N/`, its ingested copies are retired with the `retire-failed` tool, and its number is reused (a failed first trial never takes `trial_01`). Trial numbers run in order within each scenario, with no gaps.
+4. **Proceed to the remaining trials only if that trial has no FAIL.** If it fails, stop, report to the owner, and do not run more. *(Full reruns, decision 052 item 6: this is the 1-trial gate. A failed `trial_01` stops the scenario until the design is fixed, then `trial_01` is run again as a new gate. A failed later trial does not stop the scenario: see rule 5.)*
+5. After the last trial of an item, ingest and validate all of them; the item is done when none has a FAIL. **Partial replacements (S03, S06):** a failing trial is replaced by a new trial numbered `trial_11` onwards in `data/incoming/x10` (decision 029). **Full reruns (S01, S04, S05, S07):** *(decision 052)* any trial with a FAIL is moved by the owner to `data/incoming/x10_v2_failed/<scenario>/attempt_N/`, its ingested copies are retired with the `retire-failed` tool, and its number is reused (a failed first trial never takes `trial_01`). A later failed trial (not `trial_01`) is retired and its number is run again; stop and ask the owner only if two trials of the same scenario fail in a row (a pass in between resets the count). Trial numbers run in order within each scenario, with no gaps.
 
 Broken trials are archived, never deleted (decision 034).
 
 ## Where the new trials go (decision 034)
 - **Partial replacements** (S03, S06): `data/incoming/x10/<scenario folder>/trial_11` (and `trial_12`). Ids `s03_t11`, `s06_t11`, `s06_t12`.
 - **Full reruns** (S04, S07, S05, S01): a new folder `data/incoming/x10_v2/<scenario folder>/trial_01` … `trial_10` (minimum 5 accepted per scenario, up to 10 if time allows; decision 052). Ids `s04_t01` … `s04_t10`, same for the others. `data/incoming/x10/` is not touched.
-- **Failed full-rerun trials** (decision 052): moved by the owner to `data/incoming/x10_v2_failed/<scenario folder>/attempt_N/` (never ingested from there). Their ingested copies are retired by the `retire-failed` tool; the number is reused.
+- **Failed full-rerun trials** (decision 052): moved by the owner to `data/incoming/x10_v2_failed/<scenario folder>/attempt_N/` (never ingested from there). Their ingested copies are retired by the `retire-failed` tool; the number is reused. Two failed trials in a row in one scenario: stop and ask the owner (decision 052 item 6).
 - **Archive of the old trials:** the old broken copies stay in `data/incoming/x10/`. Before the first `x10_v2` ingest, the old S04 and S07 **`t01`–`t10`** copies (not `t00`) in `data/raw/`, `data/processed/`, `data/manifest.csv` and the per-trial outputs that share the id are moved by a script, with hash checks, to `archive_x10_v1/` paths, so the new trials sit on the normal paths (decision 034, amended by 052). The old S05 trials are already in quarantine and do not collide. S01 has no old ×10 trials.
 
 ## Before the first run and in every session

@@ -70,13 +70,13 @@ Never tune code or weights on the test set.
 **Must be done before:** gating any trial collected on or after 2026-10-26 (spec 02_gate §2.2), and T7.6 link accuracy on t01.
 
 ## T6c. Lab tooling for the x10_v2 reruns — before the first x10_v2 trial is ingested (before 23 Nov) — decisions 034, 052; plan approved 2026-11-15
-- [ ] 6c.1 Decision 052 (lab stopping rule) accepted by the owner; amendments to decision 034 and docs/lab/rerun_plan.md; docs/lab/test_set.csv created (docs written 2026-11-15, awaiting acceptance)
+- [x] 6c.1 *(done 2026-11-17: decision 052 accepted by the owner with a changed item 6; decision 034 amendment and docs/lab/rerun_plan.md updated; docs/lab/test_set.csv created)* Decision 052 (lab stopping rule) accepted by the owner; amendments to decision 034 and docs/lab/rerun_plan.md; docs/lab/test_set.csv created
 - [x] 6c.2 Batch ingest `--source x10_v2` (own report folder out/ingest/x10_v2/, `source` in ingest.json, shadow guard against old copies on the normal paths)
 - [x] 6c.3 Ingest keeps each host's `<HOST>_clock.txt` as data/raw/<s>/<t>/<host>/clock.txt + manifest row (channel=clock); a missing file is noted in ingest.json, not a failure (spec 08 §4.2)
 - [x] 6c.4 Validator `--source x10_v2` (out/x10_validate_v2/, s01 among the scenarios, v1 output unchanged)
 - [x] 6c.5 Attacker review of the archive design (before 6c.6)
 - [x] 6c.6 One-time archive of old S04/S07 t01–t10 (not t00) with hash checks, plus `retire-failed` for failed v2 attempts; built and tested on synthetic folders only, NOT run on real data (the owner runs it once)
-**Done when:** fast and full suites pass; v1 behaviour is unchanged; no real data was opened or moved. (6c.2-6c.6 done 2026-11-15, full suite 4448 passed; 6c.1 waits for the owner to accept decision 052; the owner runs `archive-v1 --execute` once before the first x10_v2 ingest.)
+**Done when:** fast and full suites pass; v1 behaviour is unchanged; no real data was opened or moved. (6c.2-6c.6 done 2026-11-15, full suite 4448 passed; 6c.1 done 2026-11-17 with decision 052 accepted; the owner runs `archive-v1 --execute` once before the first x10_v2 ingest.)
 
 ## T7. Cross-host linking — depends on: T6 — CRITICAL — spec: docs/specs/03_stitch.md
 - [x] 7.1 *(done 2026-11-13: docs/specs/03_stitch.md approved by the owner; review docs/reviews/03_stitch-spec-2026-11-13.md; decisions 044 (council, after side 15 s) and 045 (tier rule scope) accepted; decision 014 window amended; Q9 open for T8/T9)* Spec; council on the NTLM linking approach and the time window. Input notes the spec must handle: docs/specs/03_stitch_input_notes.md (IN-01 several 4624s per hop, IN-02 file copy under an earlier session; F2, F3 of review 02_gate-2026-11-12)
