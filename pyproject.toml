@@ -18,7 +18,7 @@ test = ["pytest"]
 # so that one `pip install -e .` makes every `python -m <package>` work from the repo root.
 packages = [
     "answer_key", "clock_offset", "data_layout", "gate", "lab_common", "log_check", "stitch",
-    "trial_window", "x10_validate", "evtx_pipeline", "evaluate", "label",
+    "trial_window", "x10_validate", "evtx_pipeline", "evaluate", "label", "score",
 ]
 
 [tool.setuptools.package-dir]
@@ -28,3 +28,4 @@ packages = [
 [tool.setuptools.package-data]
 answer_key = ["*.json"]
 label = ["rules/*.yml", "rules/manifest.csv"]
+score = ["order_table.json"]

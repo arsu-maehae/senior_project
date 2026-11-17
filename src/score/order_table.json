@@ -1,0 +1,69 @@
+{
+ "decision": "docs/decisions/062-score-order-reference-and-sequence.md",
+ "description": "Own order reference of the score stage (spec 05_score SC-10, SC-22a; decision 062). Hand-built technique templates from ATT&CK / CTI pages (TPPR's unpublished pattern tree replaced, handoff 11.4 Option B), never from lab logs. The technique prefix tree is built from 'templates'; the tactic prefix tree from the same templates mapped through 'tactic_of'. Stage order for the technique sequence (SC-21) = smallest position of a technique in any template.",
+ "research": "docs/research/score_order_templates.md",
+ "tactic_of": {
+  "T1003.001": "credential-access",
+  "T1021.001": "lateral-movement",
+  "T1021.002": "lateral-movement",
+  "T1021.006": "lateral-movement",
+  "T1078": "initial-access",
+  "T1550.002": "lateral-movement",
+  "T1569.002": "execution",
+  "T1570": "lateral-movement"
+ },
+ "templates": [
+  {
+   "id": "R1",
+   "sources": [
+    "docs/research/score_order_templates.md (Transition-level evidence; Per-template summary, R1)",
+    "https://attack.mitre.org/software/S0029/",
+    "https://www.cisa.gov/news-events/cybersecurity-advisories/aa25-071a",
+    "https://attack.mitre.org/campaigns/C0014/"
+   ],
+   "support": "T1003.001>T1021.002>T1569.002 supported (S0029, CISA AA25-071A, DFIR Report); T1078>T1003.001 campaign level only (weak, spec L-SC7)",
+   "techniques": ["T1078", "T1003.001", "T1021.002", "T1569.002"]
+  },
+  {
+   "id": "R2",
+   "sources": [
+    "docs/research/score_order_templates.md (Transition-level evidence; Per-template summary, R2; Suggested corrections, R2 shortened)",
+    "https://attack.mitre.org/techniques/T1021/001/",
+    "https://www.cisa.gov/news-events/cybersecurity-advisories/aa25-071a"
+   ],
+   "support": "shortened (no source for T1021.001>T1569.002); T1003.001>T1021.001 from the T1021.001 page; T1078>T1003.001 campaign level only (weak)",
+   "techniques": ["T1078", "T1003.001", "T1021.001"]
+  },
+  {
+   "id": "R3",
+   "sources": [
+    "docs/research/score_order_templates.md (Transition-level evidence; Per-template summary, R3)",
+    "https://attack.mitre.org/techniques/T1021/002/",
+    "https://attack.mitre.org/techniques/T1570/",
+    "https://attack.mitre.org/software/S0029/"
+   ],
+   "support": "both transitions supported (T1021.002, T1570, S0029, CISA AA25-071A)",
+   "techniques": ["T1003.001", "T1021.002", "T1570"]
+  },
+  {
+   "id": "R4",
+   "sources": [
+    "docs/research/score_order_templates.md (Transition-level evidence; Per-template summary, R4 without T1550.002)",
+    "https://attack.mitre.org/software/S0029/",
+    "https://thedfirreport.com/2024/09/30/nitrogen-campaign-drops-sliver-and-ends-with-blackcat-ransomware/"
+   ],
+   "support": "S0029 PsExec; T1570>T1569.002 from DFIR Report (Nitrogen, BlackSuit); written after the development sequences were seen (L-SC7)",
+   "techniques": ["T1003.001", "T1021.002", "T1570", "T1569.002"]
+  },
+  {
+   "id": "R5",
+   "sources": [
+    "docs/research/score_order_templates.md (Transition-level evidence; Per-template summary, R5)",
+    "https://attack.mitre.org/techniques/T1021/006/",
+    "https://attack.mitre.org/techniques/T1003/001/"
+   ],
+   "support": "weak: T1021.006 says only 'use Valid Accounts'; no source shows dump then WinRM in order (spec L-SC7); written after the development sequences were seen",
+   "techniques": ["T1078", "T1003.001", "T1021.006"]
+  }
+ ]
+}

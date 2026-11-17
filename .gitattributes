@@ -3,3 +3,6 @@ docs/lab/** -text
 
 # Sigma rule files and their manifest: LF in the repo and in the checkout, so their SHA-256 is stable (spec 04 LB-13)
 src/label/rules/* text eol=lf
+
+# Score order table: LF everywhere so its pinned SHA-256 is stable (spec 05 SC-10, decision 062)
+src/score/order_table.json text eol=lf
