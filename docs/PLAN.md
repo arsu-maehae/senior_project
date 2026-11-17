@@ -96,8 +96,8 @@ Never tune code or weights on the test set.
 
 **Done when:** on the 6 keyed development trials every key LSASS dump is labelled T1003.001 (LBA-02) and every key attack hop has a labelled `context` = 0 node (LBA-03); the labelling recall table is written for all 9 development trials (t01 without right/wrong); the stage review has no open blocking item. **T8 done 2026-11-17:** LBA-02 14/14 dumps, LBA-03 holds on every key attack hop, recall written for 9/9 trials, ATK-S01 fixed (061).
 
-## T9. Scoring and identity — depends on: T7, T8 — spec: docs/specs/05_score.md
-- [ ] 9.1 Own tactic-order table (decision record: substitute for TPPR's tree)
+## T9. Scoring and identity — depends on: T7, T8 — spec: docs/specs/05_score.md (draft 2026-11-18, awaiting owner answers)
+- [~] 9.1 Own tactic-order table (decision record: substitute for TPPR's tree)
 - [ ] 9.2 Edge order score, LengthScore, NodeScore
 - [ ] 9.3 IdentityCoherence (Correction K)
 - [ ] 9.4 Path score + ranking (no θ); ranked list per trial
