@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from real_data import missing_input  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
@@ -30,7 +31,14 @@ NAME = {"system": "System", "winrm": "Microsoft-Windows-WinRM_Operational",
         "powershell": "Microsoft-Windows-PowerShell_Operational"}
 QDIR = "S05_WRONG_DESIGN_DO_NOT_USE"
 
-pytestmark = pytest.mark.skipif(not all(p.exists() for p in SRC.values()), reason="tiny real EVTX missing")
+
+
+@pytest.fixture(autouse=True)
+def _tiny_real_evtx_present():
+    """Module guard: the tiny real EVTX copies must exist. Missing skips, or fails with REQUIRE_REAL_DATA=1 (decision 053)."""
+    absent = [str(p) for p in SRC.values() if not p.exists()]
+    if absent:
+        missing_input(f"tiny real EVTX missing: {absent}")
 
 
 def sha(p: Path) -> str:
@@ -384,7 +392,7 @@ def test_end_to_end_real_tiny_evtx(repo):
 def test_real_recorded_ingests(tid, copied, missing):
     p = REPO / "out/ingest/x10" / tid / "ingest.json"
     if not p.exists():
-        pytest.skip("real ingest report absent")
+        missing_input("real ingest report absent")
     d = json.loads(p.read_text(encoding="utf-8"))
     assert d["status"] == "ok"
     assert len(d["files_copied"]) == copied

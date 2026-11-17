@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from real_data import missing_input  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src" / "parsing_normalization"))
@@ -39,7 +40,7 @@ LOGON_ID_COLUMNS = ("session_id", "subject_logon_id", "target_logon_id", "target
 def read_line(rel: str, line_no: int) -> dict:
     path = JSONL / rel
     if not path.exists():
-        pytest.skip(f"missing development JSONL: {path}")
+        missing_input(f"missing development JSONL: {path}")
     with open(path, encoding="utf-8", newline="") as fh:
         lines = fh.read().split("\n")
     return json.loads(lines[line_no - 1])
@@ -582,7 +583,7 @@ def test_kept_row_null_timestamp_raises():
 def test_no_zero_logon_ids_first_2000(rel):
     path = JSONL / rel
     if not path.exists():
-        pytest.skip(f"missing {path}")
+        missing_input(f"missing {path}")
     n = 0
     with open(path, encoding="utf-8", newline="") as fh:
         for i, line in enumerate(fh.read().split("\n"), 1):

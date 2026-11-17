@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from real_data import missing_input  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 SRC = REPO / "src" / "parsing_normalization"
@@ -32,7 +33,7 @@ LOGON_ID_COLUMNS = ("session_id", "subject_logon_id", "target_logon_id", "target
 def real_line(rel: str, line_no: int) -> str:
     path = JSONL / rel
     if not path.exists():
-        pytest.skip(f"missing development JSONL: {path}")
+        missing_input(f"missing development JSONL: {path}")
     return path.read_bytes().split(b"\n")[line_no - 1].decode("utf-8")
 
 
@@ -497,7 +498,7 @@ def test_real_t00_accounting_matches_manifest(n):
     db = PROCESSED / f"{n}_t00.sqlite3"
     manifest_path = JSONL / f"{n}_t00" / "manifest.json"
     if not db.exists() or not manifest_path.exists():
-        pytest.skip(f"missing {db} or {manifest_path}")
+        missing_input(f"missing {db} or {manifest_path}")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     conn = sqlite3.connect(f"{db.as_uri()}?mode=ro", uri=True)
     cols = [r[1] for r in conn.execute("pragma table_info(source_files)")]
@@ -633,7 +634,7 @@ def test_co18_existing_trial_dbs_untouched_and_have_no_new_events(tmp_path):
     hash unchanged (compared read-only), and that DB holds no 4616 and no System 1 (ingested before CO-18)."""
     real_db = PROCESSED / "s02_t00.sqlite3"
     if not real_db.exists():
-        pytest.skip(f"missing {real_db}")
+        missing_input(f"missing {real_db}")
     before = hashlib.sha256(real_db.read_bytes()).hexdigest()
     jdir = build_trial(tmp_path, clock_files())
     do_import(tmp_path, jdir)

@@ -1,6 +1,6 @@
 # 043 — Clock offset method: 1:1 LogonGuid pairs, median per host and trial; s04_t01/s07_t01 as clock-only evidence; two-step approval
 
-**Date:** 2026-11-12 · **Status:** **accepted for step 1 (method), owner 2026-11-12.** Step 2 is open: `MIN_PAIRS`, `MAX_LOO_SHIFT_S`, `READING_AGREE_S` and the `late_gap_s` limit are confirmed on the rerun t01s · **Task:** T6b.1 · **Spec:** [08_clock_offset](../specs/08_clock_offset.md) · **Relates to:** 014 (amends its last sentence for kept trials), 019, 032, 034, 039
+**Date:** 2026-11-12 · **Status:** **accepted for step 1 (method), owner 2026-11-12; item 3 (clock-only evidence) amended by [053](053-clock-only-retired-development-gate-real-data-switch.md): the old trials are historical evidence in `archive_x10_v1/`, no id is clock-only.** Step 2 is open: `MIN_PAIRS`, `MAX_LOO_SHIFT_S`, `READING_AGREE_S` and the `late_gap_s` limit are confirmed on the rerun t01s · **Task:** T6b.1 · **Spec:** [08_clock_offset](../specs/08_clock_offset.md) · **Relates to:** 014 (amends its last sentence for kept trials), 019, 032, 034, 039
 
 ## Context
 - **The skew:** from 2026-10-26, ep-01 ran 10–27 s behind dc01 (032). Before that date, endpoints sit within −2.3 … +4.5 s of dc01. Host pairs still reach 5–6 s, e.g. s03_t01 ep-01→ep-03, where the WinRM connection precedes the target logon by a raw 5.68 s.
@@ -67,7 +67,9 @@
 ## Parameter freeze (spec 08 §5, ATK-10, COT-17; T6b.2, 2026-11-12)
 `src/clock_offset/params.py` SHA-256, computed over its bytes with CRLF normalised to LF (so git's line-ending conversion on Windows cannot change it):
 
-`params_sha256: 0068779d8bf932a136eb348437f892bd1c0bbe36692fdd5f920551300f98d30a`
+`params_sha256: 132658bd3007aee49b3714ddc2baffb3d3611f73b651856506d51c32382d77e3`
+
+(Re-recorded 2026-11-17 for decision 053: `CLOCK_ONLY_TRIALS` emptied and `DEFAULT_TRIALS` = `DEVELOPMENT_TRIALS`; no parameter value changed. Previous hash `0068779d…`.)
 
 (Re-recorded 2026-11-12 for review SF-3: `OFFSETS_COLUMNS` gained `clock_changes_sha256` and `clock_scan`; no parameter value changed. Previous hash `9dcd662b…`, before that `0bfa7c8d…`.)
 

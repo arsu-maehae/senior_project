@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from real_data import missing_input  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 INC = REPO / "data" / "incoming" / "dryrun" / "ep-02" / "dryrun_s04" / "evtx_export"
@@ -20,7 +21,7 @@ EVTX_MAGIC = b"ElfFile\x00"
 
 def _need(p: Path) -> Path:
     if not p.exists():
-        pytest.skip(f"real fixture missing: {p}")
+        missing_input(f"real fixture missing: {p}")
     return p
 
 
@@ -162,7 +163,7 @@ def test_map_is_read_only_on_source(tmp_path, src):
 def test_real_override_file_parses():
     p = REPO / "docs" / "data_overrides_t00.csv"
     if not p.exists():
-        pytest.skip("overrides csv missing")
+        missing_input("overrides csv missing")
     rs = rows(p)
     assert rs and set(rs[0]) >= {"source_path", "action", "reason"}
     assert all(r["action"] in ("copy", "ignore") for r in rs)

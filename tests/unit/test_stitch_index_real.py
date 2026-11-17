@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from real_data import missing_input  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
@@ -87,7 +88,7 @@ def _loaded(trial: str) -> Loaded:
 def loaded(trial: str) -> Loaded:
     got = _loaded(trial)
     if got is None:
-        pytest.skip(f"{trial}: trial DB or gate output missing")
+        missing_input(f"{trial}: trial DB or gate output missing")
     return got
 
 
@@ -98,7 +99,7 @@ def sessions_of(ld: Loaded) -> list:
 def load_key(trial: str) -> dict:
     path = APPROVED / f"{trial}.yaml"
     if not path.is_file():
-        pytest.skip(f"no approved key for {trial}")
+        missing_input(f"no approved key for {trial}")
     return json.loads(path.read_text(encoding="utf-8"))
 
 

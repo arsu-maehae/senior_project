@@ -50,6 +50,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from real_data import missing_input  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
@@ -66,7 +67,14 @@ NAME = {"system": "System", "winrm": "Microsoft-Windows-WinRM_Operational",
 QDIR = "S05_WRONG_DESIGN_DO_NOT_USE"
 OLD_ROW_SOURCE = "x10/S04/trial_01/ENDPOINT-01/ENDPOINT-01_System.evtx"
 
-pytestmark = pytest.mark.skipif(not all(p.exists() for p in SRC.values()), reason="tiny real EVTX missing")
+
+
+@pytest.fixture(autouse=True)
+def _tiny_real_evtx_present():
+    """Module guard: the tiny real EVTX copies must exist. Missing skips, or fails with REQUIRE_REAL_DATA=1 (decision 053)."""
+    absent = [str(p) for p in SRC.values() if not p.exists()]
+    if absent:
+        missing_input(f"tiny real EVTX missing: {absent}")
 
 
 # ---------- helpers ----------

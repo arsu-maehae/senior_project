@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 import pytest
+from real_data import missing_input  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
@@ -169,7 +170,7 @@ def load_key(trial: str) -> dict:
     """Approved answer key (JSON text in a .yaml file). Read by the test only."""
     p = APPROVED / f"{trial}.yaml"
     if not p.exists():
-        pytest.skip(f"{p} missing")
+        missing_input(f"{p} missing")
     return json.loads(p.read_text(encoding="utf-8"))
 
 
@@ -237,7 +238,7 @@ def need(runs: dict[str, GateRun | str], trial: str) -> GateRun:
     r = runs[trial]
     if isinstance(r, str):
         if r.startswith("SKIP"):
-            pytest.skip(r)
+            missing_input(r)
         pytest.fail(f"{trial}: {r}")
     return r
 
@@ -310,7 +311,7 @@ def test_gta00_outputs_match_cli_run(gate_runs, trial):
     run = need(gate_runs, trial)
     cli = OUT_GATE / trial
     if not cli.exists():
-        pytest.skip(f"{cli} missing (CLI not run for {trial})")
+        missing_input(f"{cli} missing (CLI not run for {trial})")
     diffs = []
     for name in BYTE_COMPARED_FILES:
         a, b = run.out_dir / name, cli / name
@@ -676,7 +677,8 @@ def test_gta04_stats_equal_file_counts(gate_runs, trial):
 
 # ------------------------------------------------------------------------------------------------ GTA-05
 
-GTA05_SKIP = "no development trial with a .97/.98/.99 session (s04_t01 is clock-only, never gated)"
+GTA05_SKIP = ("no development trial with a .97/.98/.99 session (none of the 9 development trials has one; the x10_v2 "
+              "t01 trials join DEVELOPMENT_TRIALS only after ingest and a passing validator, decision 053)")
 
 
 def _excluded_ip_logons(trial: str) -> list[sqlite3.Row]:
@@ -694,7 +696,8 @@ def test_gta05_excluded_ip_logons_on_every_gated_development_trial(gate_runs):
     """GTA-05 (amended, T6b.2): on EVERY development trial gated that has a 4624 from 192.168.50.97/.98/.99, each such logon
     inside the window is `excluded_source_ip`; if that session has a 4697, 7045 or share write (checked from the DB by
     logon id, and in the gate `excluded_ip_with_artefacts`) the test stops and reports to the owner. Skipped with the
-    reason below until such a trial exists (none of the t00 trials has one; s04_t01 is clock-only, never gated)."""
+    reason below until such a trial exists (none of the 9 development trials has one; the x10_v2 t01 trials are added to
+    DEVELOPMENT_TRIALS one at a time after ingest and a passing validator, decision 053, and are then covered here)."""
     seen: list[str] = []
     for trial in TRIALS:
         run = gate_runs.get(trial)

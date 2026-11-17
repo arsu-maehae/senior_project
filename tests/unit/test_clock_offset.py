@@ -28,6 +28,7 @@ from fractions import Fraction
 from pathlib import Path
 
 import pytest
+from real_data import missing_input  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
@@ -1499,11 +1500,16 @@ def test_contract_original_times_never_changed_and_no_gate_columns(tmp_path):
     assert body[0]["t_4624_utc"] in {r["event_utc"] for r in _rich_rows()}
 
 
-def test_contract_stats_trial_role_for_synthetic_trial(tmp_path):
-    """COA-04 helper: a development trial id is labelled development, a clock-only id clock-only, others other."""
+def test_contract_stats_trial_role_for_synthetic_trial(tmp_path, monkeypatch):
+    """COA-04 helper: a development trial id is labelled development, an id in CLOCK_ONLY_TRIALS clock-only, others other.
+    The lab list is empty since decision 053 (s04_t01 / s07_t01 are the x10_v2 reruns), so the list is injected."""
+    from clock_offset import params
     assert run.trial_role("s02_t00") == "development"
     assert run.trial_role("s06_t01") == "development"
-    assert run.trial_role("s04_t01") == "clock-only" and run.trial_role("s07_t01") == "clock-only"
+    assert tuple(params.CLOCK_ONLY_TRIALS) == () and tuple(params.DEFAULT_TRIALS) == tuple(params.DEVELOPMENT_TRIALS)
+    assert run.trial_role("s04_t01") == "other" and run.trial_role("s07_t01") == "other"
+    monkeypatch.setattr(params, "CLOCK_ONLY_TRIALS", ("s09_t03",))
+    assert run.trial_role("s09_t03") == "clock-only" and run.trial_role("S09_T03") == "clock-only"
     assert run.trial_role("s02_t05") == "other"
 
 
@@ -1567,7 +1573,7 @@ def _db(trial: str) -> Path:
     assert trial in ALLOWLIST, f"{trial} is not on the test's real-data allowlist"
     p = PROCESSED / f"{trial}.sqlite3"
     if not p.exists():
-        pytest.skip(f"{p} missing")
+        missing_input(f"{p} missing")
     return p
 
 
@@ -3156,7 +3162,7 @@ def test_coa08_no_key_hop_event_logged_before_a_counted_clock_change(real_scan, 
     host (correct.before_counted_change with the trial's clock_changes rows)."""
     key_path = REPO / "ground_truth" / "approved" / f"{trial}.yaml"
     if not key_path.exists():
-        pytest.skip(f"no approved key {key_path}")
+        missing_input(f"no approved key {key_path}")
     key = json.loads(key_path.read_text(encoding="utf-8"))
     uids = sorted(set(collect_refs(key["hops"])))
     clock = real_scan["res"]["clock"][trial]
@@ -3203,7 +3209,7 @@ def test_coa08_the_check_is_not_vacuous():
 def _read_offsets_file(trial: str) -> tuple[list[str], list[dict]]:
     p = PROCESSED / f"{trial}.clock_offsets.csv"
     if not p.exists():
-        pytest.skip(f"{p} missing")
+        missing_input(f"{p} missing")
     return read_csv(p)
 
 
@@ -3254,7 +3260,7 @@ def test_sf3_real_window_and_gate_outputs_name_the_current_clock_files():
     the same two hashes. A trial the window file does not hold is not checked here."""
     p = REPO / "data" / "trial_windows.csv"
     if not p.exists():
-        pytest.skip("data/trial_windows.csv missing")
+        missing_input("data/trial_windows.csv missing")
     _, rows = read_csv(p)
     seen = 0
     for r in rows:
@@ -3326,7 +3332,7 @@ def test_sf3_real_standalone_scan_equals_the_step_clock_events_and_scan_json(tmp
 
 def _hist_require_archive() -> None:
     if not ARCHIVED_PROCESSED.is_dir() or not ARCHIVED_OUT.is_dir():
-        pytest.skip(f"archive {ARCHIVE_LABEL} not on this machine")
+        missing_input(f"archive {ARCHIVE_LABEL} not on this machine")
 
 
 def _hist_path(base: Path, *parts: str) -> Path:

@@ -126,8 +126,10 @@ def test_decision046_every_t02_to_t10_trial_is_refused_before_any_file_is_opened
     assert sf.snapshot(tmp_path) == before == {}
 
 
+# s04_t01 / s07_t01 are the x10_v2 reruns (development by 034 item 4, no longer clock-only, decision 053). They are refused
+# here only because they are not in DEVELOPMENT_TRIALS yet; 053 item 2 adds each one after ingest and a passing validator.
 @pytest.mark.parametrize("trial", ["s01_t00", "s04_t01", "s07_t01", "s05q_t00"])
-def test_decision046_s01_clock_only_and_quarantined_ids_are_refused_by_the_allowlist(tmp_path, monkeypatch, trial):
+def test_decision046_s01_rerun_and_quarantined_ids_are_refused_by_the_allowlist(tmp_path, monkeypatch, trial):
     before = sf.snapshot(tmp_path)
     paths = trial_paths(tmp_path, trial)
     with watch_fs(tmp_path, monkeypatch) as seen:

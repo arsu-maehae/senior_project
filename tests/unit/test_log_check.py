@@ -21,6 +21,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from real_data import missing_input  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
@@ -61,7 +62,7 @@ def _ddl() -> list[str]:
                 conn.close()
             by = dict(rows)
             return [by["events"], by["events_dedup"]]
-    pytest.skip("no real DB available to copy the events DDL from")
+    missing_input("no real DB available to copy the events DDL from")
 
 
 def fmt(value: datetime | str, day: str = DAY) -> str:
@@ -1127,7 +1128,7 @@ def test_lct12_passwords_masked_in_every_output(tmp_path):
 def _sample(name: str):
     db = SAMPLE / f"{name}_t00.sqlite3"
     if not db.exists():
-        pytest.skip(f"missing {db}")
+        missing_input(f"missing {db}")
     return db
 
 

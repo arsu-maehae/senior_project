@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from real_data import missing_input  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 SRC = REPO / "src"
@@ -732,7 +733,7 @@ def test_path_hosts_match_029():
 def _real(trial: str):
     p = REPO / "data" / "processed" / f"{trial}.sqlite3"
     if not p.is_file():
-        pytest.skip(f"{p} missing")
+        missing_input(f"{p} missing")
     ingest, _ = cli.read_ingest(REPO, trial)
     return cli.validate_one(REPO, trial, ingest)
 

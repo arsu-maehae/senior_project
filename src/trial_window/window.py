@@ -334,8 +334,9 @@ def id_refusal(trial_id: str, *, excluded_trials: Collection[str] = params.EXCLU
     """Refusals decided by the trial id alone: quarantine (030), split exclusion (019), clock-only (034).
 
     WHY separate: they need no DB and no file, so a refused trial is never opened and never raises for a
-    missing DB. Clock-only trials (s04_t01, s07_t01) were measured for the offset method only (spec 08
-    COA-04) and are never windowed or gated, on either time basis.
+    missing DB. A clock-only trial is measured for the offset method only (spec 08 COA-04) and is never
+    windowed or gated, on either time basis. None is listed today (decision 053 emptied the list: s04_t01 and
+    s07_t01 now mean the x10_v2 reruns); the check stays for ids passed in.
     """
     if is_quarantined(trial_id):
         return f"quarantined trial id ({params.QUARANTINE_PREFIX}*, decision 030)"

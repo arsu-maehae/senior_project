@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import pytest
+from real_data import missing_input  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
@@ -87,14 +88,14 @@ def _run(trial: str) -> Run | None:
 def run_of(trial: str) -> Run:
     got = _run(trial)
     if got is None:
-        pytest.skip(f"{trial}: trial DB or gate output missing")
+        missing_input(f"{trial}: trial DB or gate output missing")
     return got
 
 
 def load_key(trial: str) -> dict:
     path = APPROVED / f"{trial}.yaml"
     if not path.is_file():
-        pytest.skip(f"no approved key for {trial}")
+        missing_input(f"no approved key for {trial}")
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -192,7 +193,7 @@ def test_hop_count_target_only_reasons_and_rows_per_method_equal_the_committed_t
     r = run_of(trial)
     committed = REPO / CHECK_REL / trial / "t73_links.json"
     if not committed.is_file():
-        pytest.skip(f"{trial}: no committed t73_links.json")
+        missing_input(f"{trial}: no committed t73_links.json")
     d = json.loads(committed.read_text(encoding="utf-8"))
     hops = d["hops"]
     assert len({x["hop_id"] for x in r.links}) == len(hops), f"{trial}: hop count differs"
@@ -218,7 +219,7 @@ def test_t73_links_file_is_byte_identical_after_t74(trial):
     paths = trial_paths(REPO, trial)
     committed = REPO / CHECK_REL / trial / "t73_links.json"
     if not paths.db.is_file() or not committed.is_file():
-        pytest.skip(f"{trial}: DB or committed t73_links.json missing")
+        missing_input(f"{trial}: DB or committed t73_links.json missing")
     data = cl.run_check(REPO, trial)
     fresh = ci.check_text(data).encode("utf-8")
     old = committed.read_bytes()
@@ -231,7 +232,7 @@ def test_t72_index_file_is_byte_identical_after_t74(trial):
     paths = trial_paths(REPO, trial)
     committed = REPO / CHECK_REL / trial / "t72_index.json"
     if not paths.db.is_file() or not committed.is_file():
-        pytest.skip(f"{trial}: DB or committed t72_index.json missing")
+        missing_input(f"{trial}: DB or committed t72_index.json missing")
     data = ci.run_check(REPO, trial)
     fresh = ci.check_text(data).encode("utf-8")
     old = committed.read_bytes()
@@ -663,7 +664,7 @@ def written(trial: str) -> dict:
     assert trial in DEV
     got = _written(trial)
     if got is None:
-        pytest.skip(f"{trial}: trial DB or gate output missing")
+        missing_input(f"{trial}: trial DB or gate output missing")
     return got
 
 

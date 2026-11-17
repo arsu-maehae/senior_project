@@ -21,6 +21,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from real_data import missing_input  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
@@ -41,7 +42,10 @@ EDGE_RE = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$")
 EXPECTED_COLUMNS = ["trial_id", "start_utc", "end_utc", "window_source", "margin_start_s", "margin_end_s",
                     "rule", "db_sha256", "time_basis", "offsets_sha256", "clock_changes_sha256", "clock_flag",
                     "clock_change_in_window", "start_host", "end_host"]       # spec 2.1 (T6b.2, decision 043)
-CLOCK_ONLY = ("s04_t01", "s07_t01")
+CLOCK_ONLY = ()      # the lab default since decision 053: no trial id is clock-only
+# Ids INJECTED to exercise the clock-only refusal path (kept by 053). They are the strings the synthetic repos below already
+# use; they are not the lab trials s04_t01 / s07_t01, which are the x10_v2 development reruns now.
+INJECTED_CLOCK_ONLY = ("s04_t01", "s07_t01")
 
 
 # ------------------------------------------------------------------------------------------ time helpers
@@ -334,10 +338,12 @@ def test_tw22b_co17_by_status(tmp_path, status, offset, has_events, refused):
 
 
 def test_tw23_refusal_start_none_runs_only_window_free_checks():
-    """TW-23: start None -> only the id checks apply: t00 and non-t00 pass, a clock-only trial does not."""
+    """TW-23: start None -> only the id checks apply: t00 and non-t00 pass (also s04_t01, no longer clock-only, decision
+    053), an injected clock-only trial does not."""
     assert window.refusal("s02_t00", None) is None
     assert window.refusal("s02_t05", None) is None
-    assert window.refusal("s04_t01", None)
+    assert window.refusal("s04_t01", None) is None
+    assert window.refusal("s04_t01", None, clock_only_trials=INJECTED_CLOCK_ONLY)
 
 
 def test_tw24_refusal_quarantine_by_trial_id():
@@ -347,12 +353,13 @@ def test_tw24_refusal_quarantine_by_trial_id():
 
 
 def test_tw25_refusal_clock_only_trials():
-    """TW-25 (spec 2, decision 034, spec 08 COA-04): s04_t01 and s07_t01 are refused, with or without a start; the list
-    is a parameter; the reason says it is a clock-only trial."""
-    for trial in ("s04_t01", "s07_t01"):
+    """TW-25 (spec 2, decision 034, spec 08 COA-04; list emptied by 053): a trial in the injected list is refused, with or
+    without a start; the list is a parameter; the reason says it is a clock-only trial. The lab default refuses none."""
+    for trial in INJECTED_CLOCK_ONLY:
         for start in (None, "2026-09-24T05:00:00.000Z"):
-            reason = window.refusal(trial, start)
+            reason = window.refusal(trial, start, clock_only_trials=INJECTED_CLOCK_ONLY)
             assert reason and "clock-only" in reason.lower(), (trial, start, reason)
+            assert window.refusal(trial, start) is None, (trial, start)          # default list is empty
     assert window.refusal("s04_t01", None, clock_only_trials=()) is None
     assert window.refusal("s02_t01", None, clock_only_trials=("s02_t01",))
 
@@ -580,7 +587,7 @@ def test_tw40_run_refusals_skip_with_reason_and_write_no_row(temp_repo, tmp_path
     s02_t01 (non-t00) and s04_t00 (starts after 2026-10-26, hosts ok) are NO LONGER refused."""
     out = tmp_path / "out" / "trial_windows.csv"
     trials = ["s02_t00", "s02_t01", "s05q_t01", "s04_t00", "s03_t00", "s01_t00", "s04_t01"]
-    res = tw_main.run(temp_repo, trials, tmp_path / "no_operator_file.csv", out)
+    res = tw_main.run(temp_repo, trials, tmp_path / "no_operator_file.csv", out, clock_only_trials=INJECTED_CLOCK_ONLY)
     assert [r["trial_id"] for r in res["rows"]] == ["s02_t00", "s02_t01", "s04_t00"]
     assert set(res["skipped"]) == {"s05q_t01", "s03_t00", "s01_t00", "s04_t01"}
     assert all(isinstance(v, str) and v for v in res["skipped"].values())
@@ -663,12 +670,12 @@ def test_tw45_run_rows_sorted_by_trial_id(temp_repo, tmp_path):
 def test_tw46_main_cli_flags_write_the_out_file(temp_repo, tmp_path, capsys):
     """TW-46: main(argv) with --trials --repo --operator-times --out writes the CSV and exits 0."""
     out = tmp_path / "cli" / "w.csv"
-    rc = tw_main.main(["--trials", "s02_t00", "s04_t01", "--repo", str(temp_repo),
+    rc = tw_main.main(["--trials", "s02_t00", "s05q_t01", "--repo", str(temp_repo),
                        "--operator-times", str(tmp_path / "none.csv"), "--out", str(out)])
     assert rc in (0, None)
     with open(out, newline="", encoding="utf-8") as fh:
         assert [r["trial_id"] for r in csv.DictReader(fh)] == ["s02_t00"]
-    assert "s04_t01" in capsys.readouterr().out      # a skipped (clock-only) trial is reported, not silently dropped
+    assert "s05q_t01" in capsys.readouterr().out     # a skipped (quarantined) trial is reported, not silently dropped
 
 
 # ------------------------------------------------------------------------------------------ follow-ups (owner 2026-11-12)
@@ -827,7 +834,7 @@ def test_tw53c_refused_trial_without_db_is_skipped_not_raised(tmp_path):
     skipped with a reason; a non-t00 trial is NOT refused any more, so its missing DB is the hard error."""
     repo = _simple_repo(tmp_path, ["s02_t00"], [("s02", "t00", at(-3600), at(3600))])
     res = tw_main.run(repo, ["s04_t01", "s07_t01", "s05q_t03", "s01_t00", "s02_t00"], tmp_path / "none.csv",
-                      tmp_path / "o.csv")
+                      tmp_path / "o.csv", clock_only_trials=INJECTED_CLOCK_ONLY)
     assert set(res["skipped"]) == {"s04_t01", "s07_t01", "s05q_t03", "s01_t00"}
     assert all(res["skipped"].values())
     assert [r["trial_id"] for r in res["rows"]] == ["s02_t00"]
@@ -1057,7 +1064,8 @@ def test_tw64_raw_basis_reproduces_the_old_edges_and_leaves_the_clock_columns_em
 def test_tw64b_raw_basis_still_refuses_quarantine_and_clock_only_trials(tmp_path):
     """TW-64b: the raw basis (GTA-06) skips the clock-file checks only; the id refusals stay."""
     repo = _simple_repo(tmp_path, ["s04_t01"], [("s04", "t01", at(-3600), at(3600))])
-    res = tw_main.run(repo, ["s04_t01", "s05q_t01"], tmp_path / NO_OPERATOR, tmp_path / "w.csv", time_basis="raw")
+    res = tw_main.run(repo, ["s04_t01", "s05q_t01"], tmp_path / NO_OPERATOR, tmp_path / "w.csv", time_basis="raw",
+                      clock_only_trials=INJECTED_CLOCK_ONLY)
     assert res["rows"] == [] and set(res["skipped"]) == {"s04_t01", "s05q_t01"}
 
 
@@ -1120,7 +1128,8 @@ def test_tw67_refusals_write_no_row_and_say_why(tmp_path):
     # clock-only and quarantine
     repo = _simple_repo(tmp_path / "d", ["s04_t01", "s05q_t01"], [("s04", "t01", at(-3600), at(3600)),
                                                                   ("s05q", "t01", at(-3600), at(3600))])
-    res = tw_main.run(repo, ["s04_t01", "s05q_t01"], tmp_path / NO_OPERATOR, tmp_path / "w.csv")
+    res = tw_main.run(repo, ["s04_t01", "s05q_t01"], tmp_path / NO_OPERATOR, tmp_path / "w.csv",
+                      clock_only_trials=INJECTED_CLOCK_ONLY)
     assert res["rows"] == [] and "clock-only" in res["skipped"]["s04_t01"].lower()
     assert "quarantine" in res["skipped"]["s05q_t01"].lower()
     # CO-17: a window starting on/after 2026-10-26 with a none host that has events
@@ -1368,7 +1377,7 @@ def test_gtt14a_run_never_opens_ground_truth_on_real_inputs(tmp_path, monkeypatc
     """GTT-14a (spec 7): run() and main() on one real t00 trial open no path under ground_truth/."""
     db = PROCESSED / "s02_t00.sqlite3"
     if not db.exists():
-        pytest.skip(f"{db} missing")
+        missing_input(f"{db} missing")
     rec = _Recorder()
     _install_recorders(monkeypatch, rec)
     out1, out2 = tmp_path / "a.csv", tmp_path / "b.csv"
@@ -1461,14 +1470,14 @@ def collect_uids(obj, path: tuple[str, ...] = ()) -> set[str]:
 def load_key(trial: str) -> dict:
     p = REPO / "ground_truth" / "approved" / f"{trial}.yaml"
     if not p.exists():
-        pytest.skip(f"{p} missing")
+        missing_input(f"{p} missing")
     return json.loads(p.read_text(encoding="utf-8"))
 
 
 def db_events(trial: str) -> dict[str, dict]:
     p = PROCESSED / f"{trial}.sqlite3"
     if not p.exists():
-        pytest.skip(f"{p} missing")
+        missing_input(f"{p} missing")
     con = ak_db.open_ro(p)
     try:
         return {r["event_uid"]: {"uid": r["event_uid"], "host": r["host"], "event_id": r["event_id"],
@@ -1536,7 +1545,7 @@ def gta06(tmp_path_factory):
 
 def _need(gta06: dict, trial: str) -> dict:
     if trial not in gta06:
-        pytest.skip(f"real data or approved key for {trial} missing")
+        missing_input(f"real data or approved key for {trial} missing")
     r = gta06[trial]
     assert "skipped" not in r, f"{trial}: no window written: {r.get('skipped')}"
     return r
@@ -1600,7 +1609,7 @@ def test_tw70_a_fresh_corrected_run_reproduces_data_trial_windows_csv(tmp_path):
     from clock_offset.params import DEVELOPMENT_TRIALS      # the 9 development trials (t00 x6 + 3 t01), never copied
     real = REPO / "data" / "trial_windows.csv"
     if not real.exists() or not all((PROCESSED / f"{t}.sqlite3").exists() for t in DEVELOPMENT_TRIALS):
-        pytest.skip("data/trial_windows.csv or a development-trial DB is missing")
+        missing_input("data/trial_windows.csv or a development-trial DB is missing")
     out = tmp_path / "w.csv"
     res = tw_main.run(REPO, list(DEVELOPMENT_TRIALS), REPO / "data" / "operator_times.csv", out)
     assert res["skipped"] == {}, res["skipped"]

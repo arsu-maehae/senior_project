@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from real_data import missing_input  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
@@ -64,7 +65,7 @@ def sha256(path: Path) -> str:
 def need_db(trial: str) -> Path:
     p = db_path(trial)
     if not p.exists():
-        pytest.skip(f"{p} missing (real-data check needs the processed trial DB)")
+        missing_input(f"{p} missing (real-data check needs the processed trial DB)")
     return p
 
 
@@ -108,7 +109,7 @@ def real(tmp_path_factory):
 
 def draft_of(real, trial: str) -> dict:
     if trial not in real:
-        pytest.skip(f"{db_path(trial)} missing")
+        missing_input(f"{db_path(trial)} missing")
     return real[trial][1]
 
 
@@ -290,7 +291,7 @@ def test_steps_fields_and_paths(real, trial):
 @pytest.mark.slow
 @pytest.mark.parametrize("trial", TRIALS)
 def test_build_is_deterministic_no_rows_lost_or_duplicated(real, trial, tmp_path):
-    repo, d1, _ = real[trial] if trial in real else pytest.skip("db missing")
+    repo, d1, _ = real[trial] if trial in real else missing_input("db missing")
     cmd_build(trial, repo)
     assert read_draft(repo, trial) == d1
 
@@ -994,7 +995,7 @@ def test_verify_real_drafts_pass(real):
 
 @pytest.mark.slow
 def test_verify_negative_control_wrong_existing_uid(real, tmp_path):
-    repo, d, _ = real["s02_t00"] if "s02_t00" in real else pytest.skip("db missing")
+    repo, d, _ = real["s02_t00"] if "s02_t00" in real else missing_input("db missing")
     d = json.loads(json.dumps(d))
     h = confirmed(d)[0]
     other = rows("s02_t00", "SELECT event_uid FROM events_dedup WHERE host='ep-02' AND event_id=4624 AND account_name!='svc_backup' LIMIT 1")
@@ -1296,7 +1297,7 @@ def _assert_structurally_masked(text: str) -> None:
 @pytest.mark.slow
 @pytest.mark.parametrize("trial", TRIALS)
 def test_drafts_never_contain_lab_password(real, trial):
-    text = (real[trial][0] / "ground_truth" / "drafts" / f"{trial}.yaml").read_text(encoding="utf-8") if trial in real else pytest.skip("db missing")
+    text = (real[trial][0] / "ground_truth" / "drafts" / f"{trial}.yaml").read_text(encoding="utf-8") if trial in real else missing_input("db missing")
     _assert_structurally_masked(text)
     for m in re.finditer(r"(?i)-(?:e|enc|ec|encodedcommand)\s+([A-Za-z0-9+/]{16,}={0,2})", text):
         try:
@@ -1714,7 +1715,7 @@ BACKGROUND_HOPS = {"s04_t00": "s04-t1", "s05_t00": "s05-t1", "s06_t00": "s06-t1"
 def committed(trial: str) -> dict:
     p = DRAFTS / f"{trial}.yaml"
     if not p.exists():
-        pytest.skip(f"{p} missing")
+        missing_input(f"{p} missing")
     return json.loads(p.read_text(encoding="utf-8"))
 
 
@@ -1961,7 +1962,7 @@ def _blockers(rep) -> list[str]:
 @pytest.mark.slow
 @pytest.mark.parametrize("trial", TRIALS)
 def test_ak21_verify_json_lock_fields_on_real_drafts(real, trial):
-    repo = real[trial][0] if trial in real else pytest.skip("db missing")
+    repo = real[trial][0] if trial in real else missing_input("db missing")
     cmd_verify(trial, repo)
     on_disk = json.loads((repo / "out" / "answer_key" / trial / "verify.json").read_text(encoding="utf-8"))
     assert on_disk["lock_ready"] is True and on_disk["lock_blockers"] == []
@@ -2118,7 +2119,7 @@ def manifest_span_independent(trial: str) -> tuple[datetime, datetime, int]:
 @pytest.mark.parametrize("trial", TRIALS)
 def test_ak22_manifest_span_matches_manifest_csv_committed_draft(trial):
     if not MANIFEST.exists():
-        pytest.skip("manifest missing")
+        missing_input("manifest missing")
     d = committed(trial)
     lo, hi, n = manifest_span_independent(trial)
     ms = d["agent"]["manifest_span"]
@@ -2133,7 +2134,7 @@ def test_ak22_manifest_span_matches_manifest_csv_committed_draft(trial):
 def test_ak22_manifest_span_matches_manifest_csv_fresh_build(full, trial):
     root, built = full
     if trial not in built or not MANIFEST.exists():
-        pytest.skip("db or manifest missing")
+        missing_input("db or manifest missing")
     d = read_draft(root, trial)
     lo, hi, _ = manifest_span_independent(trial)
     ms = d["agent"]["manifest_span"]
@@ -2206,7 +2207,7 @@ def test_ak22_s05_t1_shared_with_s06_and_s07_committed_draft():
 def test_ak22_s05_t1_shared_fresh_build_and_independent_content_check(full):
     root, built = full
     if not {"s05_t00", "s06_t00", "s07_t00"} <= set(built):
-        pytest.skip("need s05, s06, s07 DBs")
+        missing_input("need s05, s06, s07 DBs")
     h = hop_by_id(read_draft(root, "s05_t00"), "s05-t1")
     assert h["shared_with_trials"] == ["s06_t00", "s07_t00"] and "shared_with_trial" in h["flags"]
     sha = h["target_4624_content_sha256"]                    # independent: its 4624 content exists in the other two DBs
@@ -2224,7 +2225,7 @@ def test_ak22_s05_t1_shared_fresh_build_and_independent_content_check(full):
 def test_ak22_overlap_json_lists_shared_background_hop(full):
     root, built = full
     if not {"s05_t00", "s06_t00", "s07_t00"} <= set(built):
-        pytest.skip("need s05, s06, s07 DBs")
+        missing_input("need s05, s06, s07 DBs")
     run_cli("check-overlap", "--repo", str(root))
     rep = json.loads((root / "out" / "answer_key" / "overlap.json").read_text(encoding="utf-8"))
     assert rep["overlapping_pairs"] == []

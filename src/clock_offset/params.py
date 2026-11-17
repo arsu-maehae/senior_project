@@ -77,9 +77,14 @@ CLOCK_CHANGE_EVENTS: frozenset[tuple[str, int]] = frozenset({("Security", 4616),
 
 DEVELOPMENT_TRIALS: tuple[str, ...] = ("s02_t00", "s03_t00", "s04_t00", "s05_t00", "s06_t00", "s07_t00",
                                        "s02_t01", "s03_t01", "s06_t01")
-# Owner A1: measured for the offset method only, never gated or scored (COA-04).
-CLOCK_ONLY_TRIALS: tuple[str, ...] = ("s04_t01", "s07_t01")
-DEFAULT_TRIALS: tuple[str, ...] = DEVELOPMENT_TRIALS + CLOCK_ONLY_TRIALS
+# Decision 053 (amends 043 item 3): no trial id is clock-only today. The old clock-only trials s04_t01 and s07_t01 were
+# archived to archive_x10_v1/ and their ids now mean the x10_v2 reruns, which are development trials (034 item 4); the
+# old measurement is historical evidence only. The tuple stays, empty, so the labelling and refusal path (COA-04) can
+# still be used and tested with injected ids. A trial id is added here only by a decision record.
+CLOCK_ONLY_TRIALS: tuple[str, ...] = ()
+# The x10_v2 t01 trials join DEVELOPMENT_TRIALS (and so DEFAULT_TRIALS) one at a time, after ingest and a passing
+# validator, by a one-line owner-approved change recorded in decision 053. Not before.
+DEFAULT_TRIALS: tuple[str, ...] = DEVELOPMENT_TRIALS
 
 # CO-17: a trial whose window starts on or after this date is refused with an uncorrected host.
 CO17_DATE = RAW_TIME_CUTOFF_DATE

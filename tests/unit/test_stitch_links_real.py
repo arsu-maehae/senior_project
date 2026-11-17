@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from real_data import missing_input  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
@@ -44,7 +45,7 @@ def _paths_or_skip(trial: str):
     assert trial in DEV, trial                 # belt and braces: only development trials, ever
     paths = trial_paths(REPO, trial)
     if not paths.db.is_file() or not (paths.gate_dir / "stats.json").is_file():
-        pytest.skip(f"{trial}: trial DB or gate output missing")
+        missing_input(f"{trial}: trial DB or gate output missing")
     return paths
 
 
@@ -76,7 +77,7 @@ def test_t72_index_file_is_byte_identical_after_the_scan_extension(trial):
     paths = _paths_or_skip(trial)
     committed = REPO / CHECK_REL / trial / "t72_index.json"
     if not committed.is_file():
-        pytest.skip(f"{trial}: no committed t72_index.json")
+        missing_input(f"{trial}: no committed t72_index.json")
     data = run_check(REPO, trial)
     fresh = check_text(data).encode("utf-8")
     old = committed.read_bytes()
@@ -190,14 +191,14 @@ def _hopped(trial: str):
 def hopped(trial: str) -> Hopped:
     got = _hopped(trial)
     if got is None:
-        pytest.skip(f"{trial}: trial DB or gate output missing")
+        missing_input(f"{trial}: trial DB or gate output missing")
     return got
 
 
 def load_key(trial: str) -> dict:
     path = APPROVED / f"{trial}.yaml"
     if not path.is_file():
-        pytest.skip(f"no approved key for {trial}")
+        missing_input(f"no approved key for {trial}")
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -524,7 +525,7 @@ def _artefacted(trial: str):
 def artefacts(trial: str):
     got = _artefacted(trial)
     if got is None:
-        pytest.skip(f"{trial}: trial DB or gate output missing")
+        missing_input(f"{trial}: trial DB or gate output missing")
     return got
 
 
@@ -792,7 +793,7 @@ def _linked(trial: str):
 def linked(trial: str) -> Linked:
     got = _linked(trial)
     if got is None:
-        pytest.skip(f"{trial}: trial DB or gate output missing")
+        missing_input(f"{trial}: trial DB or gate output missing")
     return got
 
 

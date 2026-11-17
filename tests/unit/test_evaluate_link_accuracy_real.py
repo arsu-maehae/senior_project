@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from real_data import missing_input  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
@@ -70,7 +71,7 @@ def _evaluated(trial: str):
 def result(trial: str):
     got = _evaluated(trial)
     if got is None:
-        pytest.skip(_missing(trial))
+        missing_input(_missing(trial))
     return got
 
 
@@ -232,7 +233,7 @@ def test_stitch_files_keys_and_dbs_are_unchanged_since_the_baseline():
     rewritten by every stitch run (only `generated_utc` changes), so its own SHA is NOT compared: instead its `files`
     map and `db` block must equal the current SHA-256s of the nine files and of the DB."""
     if not BASELINE.is_file():
-        pytest.skip("out/evaluate_check/t76_baseline.json absent")
+        missing_input("out/evaluate_check/t76_baseline.json absent")
     base = json.loads(BASELINE.read_text(encoding="utf-8"))
     bad: list[str] = []
     for trial, entry in base.items():
@@ -267,7 +268,7 @@ def test_stitch_files_keys_and_dbs_are_unchanged_since_the_baseline():
 @pytest.mark.parametrize("trial", DEV)
 def test_db_unchanged_by_an_evaluation_and_equal_to_the_stitch_run(trial):
     if _missing(trial):
-        pytest.skip(_missing(trial))
+        missing_input(_missing(trial))
     db = REPO / "data" / "processed" / f"{trial}.sqlite3"
     before = sha256_of(db)
     evaluate.evaluate_trial(REPO, trial, "development", REPO / "out" / "stitch" / trial)
@@ -285,7 +286,7 @@ def test_every_development_trial_writes_labelled_outputs_through_the_cli(tmp_pat
     existed = {p.name: p.stat().st_mtime_ns for p in out_root.iterdir()} if out_root.is_dir() else None
     for trial in DEV:
         if _missing(trial):
-            pytest.skip(_missing(trial))
+            missing_input(_missing(trial))
         target = tmp_path / trial
         assert em.main(["--trial", trial, "--repo", str(REPO), "--out", str(target)]) == 0
         for p in sorted(target.glob("*.csv")):
@@ -344,7 +345,7 @@ def _variant_results(variant: str) -> dict[str, Any]:
 def variant(name: str) -> dict[str, Any]:
     got = _variant_results(name)
     if not got:
-        pytest.skip("development trial data missing")
+        missing_input("development trial data missing")
     return got
 
 
@@ -454,7 +455,7 @@ def test_sta07_recorded_changes_are_only_printed_not_asserted():
 def test_sta07_cli_with_stitch_dir_and_out_into_tmp(tmp_path):
     """The CLI on a harness-built stitch folder (group gap 5 s) writes only to --out."""
     if any(_missing(t) for t in DEV_T00):
-        pytest.skip("development trial data missing")
+        missing_input("development trial data missing")
     params = dataclasses.replace(StitchParams(), group_gap_s=5.0)
     trial = "s04_t00"
     li, checked, paths, before, after = run_links_checked(REPO, trial, params)

@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from real_data import missing_input  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
@@ -71,7 +72,7 @@ def _written(trial: str) -> dict | None:
 def written(trial: str) -> dict:
     got = _written(trial)
     if got is None:
-        pytest.skip(f"{trial}: trial DB or gate output missing")
+        missing_input(f"{trial}: trial DB or gate output missing")
     assert got["code"] == 0, f"{trial}: exit code {got['code']}"
     return got
 
@@ -79,7 +80,7 @@ def written(trial: str) -> dict:
 def load_key(trial: str) -> dict:
     path = APPROVED / f"{trial}.yaml"
     if not path.is_file():
-        pytest.skip(f"no approved key for {trial}")
+        missing_input(f"no approved key for {trial}")
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -414,7 +415,7 @@ def test_every_path_node_row_is_in_a_path_and_a_hop_of_that_path(trial):
 def test_the_three_t74_files_have_the_baseline_sha256_of_t74_run_info(trial):
     base = REPO / CHECK_REL / trial / "t74_run_info.json"
     if not base.is_file():
-        pytest.skip(f"{trial}: no t74_run_info.json baseline")
+        missing_input(f"{trial}: no t74_run_info.json baseline")
     want = json.loads(base.read_text(encoding="utf-8"))["files"]
     w = written(trial)
     for n in T74_FILES:
@@ -430,7 +431,7 @@ def test_t73_links_and_t72_index_files_are_byte_identical_to_fresh_check_data(tr
     for name, runner in (("t73_links.json", cl.run_check), ("t72_index.json", ci.run_check)):
         committed = REPO / CHECK_REL / trial / name
         if not paths.db.is_file() or not committed.is_file():
-            pytest.skip(f"{trial}: DB or committed {name} missing")
+            missing_input(f"{trial}: DB or committed {name} missing")
         data = runner(REPO, trial)
         fresh = ci.check_text(data).encode("utf-8")
         assert fresh == committed.read_bytes(), f"{trial}: {name} differs from the committed file"

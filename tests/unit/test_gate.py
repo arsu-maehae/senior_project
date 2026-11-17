@@ -1231,8 +1231,6 @@ REFUSALS = {
     "row_clock_changes_sha256_mismatch": dict(row_changes_sha="3" * 64),
     "row_offsets_sha256_empty": dict(row_offsets_sha=""),
     "row_clock_changes_sha256_empty": dict(row_changes_sha=""),
-    "clock_only_s04_t01": dict(trial="s04_t01"),
-    "clock_only_s07_t01": dict(trial="s07_t01"),
     # review SF-3 (spec 08 section 3 / spec 02 section 2): the offsets file must be bound to the changes file and the trial
     "sf3_changes_file_not_the_one_the_offsets_hash_names": dict(
         swap_changes=[cf.change(TRIAL, "ep-02", "2026-09-24T10:30:00.000000Z", shift_ms=8480, counted=True)]),
@@ -1286,22 +1284,29 @@ def test_gtt07_refused_run_leaves_a_previous_output_untouched(tmp_path):
     assert {f: (c.out_dir / f).read_bytes() for f in names} == before
 
 
-@pytest.mark.parametrize("trial", ["s02_t01", "s04_t05", "s03_t10", "s07_t02", "s06_t01"])
+@pytest.mark.parametrize("trial", ["s02_t01", "s04_t05", "s03_t10", "s07_t02", "s06_t01", "s04_t01", "s07_t01"])
 def test_gtt07_non_t00_trial_is_no_longer_refused(tmp_path, trial):
-    """GTT-07 (T6b.2): a non-t00 trial (not clock-only) is allowed when its clock files are valid."""
+    """GTT-07 (T6b.2; decision 053): a non-t00 trial (not clock-only) is allowed when its clock files are valid. s04_t01
+    and s07_t01 are in the list: they mean the x10_v2 reruns now and are no longer refused as clock-only."""
     c = make_case(tmp_path, [logon("L", 0, 10), share("S", 1, 10)], trial=trial)
     assert c.cli() == 0
     assert len(read_csv(c.out_dir / "triggers.csv")) == 1
 
 
+INJECTED_CLOCK_ONLY = ("s09_t03", "s09_t04")      # neutral ids: no lab trial is clock-only since decision 053
+
+
 def test_gtt07_clock_only_trial_refused_even_with_valid_clock_files(tmp_path):
-    """GTT-07 / spec 2: s04_t01 and s07_t01 are refused although every file, hash and row is valid (decision 034)."""
-    for i, trial in enumerate(("s04_t01", "s07_t01")):
+    """GTT-07 / spec 2: a trial listed in GateParams.clock_only_trials is refused although every file, hash and row is
+    valid (decision 034, mechanism kept by 053; the list is injected because the lab default is empty)."""
+    params = gparams.GateParams(clock_only_trials=INJECTED_CLOCK_ONLY)
+    for i, trial in enumerate(INJECTED_CLOCK_ONLY):
         c = make_case(tmp_path, [logon("L", 0, 10), share("S", 1, 10)], trial=trial, name=f"repo{i}")
         with pytest.raises(GateError) as ei:
-            c.run_raw()
+            c.run_raw(params=params)
         assert "clock-only" in str(ei.value).lower() or "clock only" in str(ei.value).lower(), str(ei.value)
         assert not c.out_dir.exists()
+        assert not (c.repo / "out").exists()
 
 
 def test_gtt07_refusal_reasons_name_the_cause(tmp_path):
@@ -3338,18 +3343,18 @@ def test_gtt21_clock_fixture_headers_equal_the_code_lists():
 # ====================================================================================== spec 5 parameters (T6b.2)
 def test_spec5_gate_clock_parameters_values():
     """Spec 5 (T6b.2): CLOCK_CORRECTION_AVAILABLE true, TIME_BASIS corrected, RAW_TIME_CUTOFF_DATE 2026-10-26 (the CO-17
-    date), CLOCK_ONLY_TRIALS s04_t01 and s07_t01; GateParams defaults carry them."""
+    date), CLOCK_ONLY_TRIALS empty (decision 053); GateParams defaults carry them."""
     from datetime import date
     from clock_offset import params as co_params
     assert gparams.CLOCK_CORRECTION_AVAILABLE is True
     assert gparams.TIME_BASIS == "corrected"
     assert gparams.RAW_TIME_CUTOFF_DATE == date(2026, 10, 26)
-    assert tuple(gparams.CLOCK_ONLY_TRIALS) == ("s04_t01", "s07_t01")
+    assert tuple(gparams.CLOCK_ONLY_TRIALS) == ()
     assert tuple(gparams.CLOCK_ONLY_TRIALS) == tuple(co_params.CLOCK_ONLY_TRIALS)
     p = gparams.GateParams()
     assert p.clock_correction_available is True and p.time_basis == "corrected"
     assert p.raw_time_cutoff_date == date(2026, 10, 26)
-    assert tuple(p.clock_only_trials) == ("s04_t01", "s07_t01")
+    assert tuple(p.clock_only_trials) == ()
 
 
 def test_spec5_clock_parameters_are_written_into_stats_parameters(tmp_path):
@@ -3357,7 +3362,7 @@ def test_spec5_clock_parameters_are_written_into_stats_parameters(tmp_path):
     pr = go(tmp_path, [noise()]).stats["parameters"]
     assert pr["time_basis"] == "corrected" and pr["clock_correction_available"] is True
     assert pr["raw_time_cutoff_date"] == "2026-10-26"
-    assert list(pr["clock_only_trials"]) == ["s04_t01", "s07_t01"]
+    assert list(pr["clock_only_trials"]) == []
 
 
 def test_spec2_window_row_columns_are_all_kept_in_stats_window_row(tmp_path):

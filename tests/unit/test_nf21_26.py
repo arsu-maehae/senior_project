@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from real_data import missing_input  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src" / "parsing_normalization"))
@@ -27,7 +28,7 @@ PROCESSED = REPO / "data" / "processed"
 def read_line(rel: str, line_no: int) -> dict:
     path = JSONL / rel
     if not path.exists():
-        pytest.skip(f"missing development JSONL: {path}")
+        missing_input(f"missing development JSONL: {path}")
     with open(path, encoding="utf-8", newline="") as fh:
         return json.loads(fh.read().split("\n")[line_no - 1])
 
@@ -208,7 +209,7 @@ SCENARIOS = ["s01", "s02", "s03", "s04", "s05", "s06", "s07"]
 def ro(sc: str) -> sqlite3.Connection:
     p = PROCESSED / f"{sc}_t00.sqlite3"
     if not p.exists():
-        pytest.skip(f"missing {p}")
+        missing_input(f"missing {p}")
     return sqlite3.connect(f"file:{p.as_posix()}?mode=ro", uri=True)
 
 

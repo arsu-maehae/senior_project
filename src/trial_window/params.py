@@ -45,7 +45,9 @@ TIME_BASIS = TIME_BASIS_CORRECTED
 # WHY a copy and not an import: clock_offset.params imports this module, so importing clock_offset here
 # would be a cycle. This tuple mirrors clock_offset.params.CLOCK_ONLY_TRIALS (decision 034, spec 08
 # COA-04: measured for the offset method only, never windowed or gated); a test checks they are equal.
-CLOCK_ONLY_TRIALS: tuple[str, ...] = ("s04_t01", "s07_t01")
+# Empty since decision 053: s04_t01 and s07_t01 now mean the x10_v2 reruns (development trials, 034 item 4); the old
+# clock-only trials are historical evidence in archive_x10_v1/.
+CLOCK_ONLY_TRIALS: tuple[str, ...] = ()
 
 # Quarantined trial ids (decision 030).
 QUARANTINE_PREFIX = "s05q_"
