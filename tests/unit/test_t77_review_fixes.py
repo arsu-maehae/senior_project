@@ -102,6 +102,37 @@ def test_atk17_evaluate_trial_files_are_the_writer_names():
     assert writers.LABEL_RECALL_FILE == "label_recall.csv"
 
 
+def test_atk17_out_allowed_files_are_the_trial_files_plus_rank_csv_and_trial_files_is_unchanged():
+    """T9.5: the ranking check writes `rank.csv` into the same trial folder, so an existing --out folder may hold it; the
+    link accuracy / label recall name list stays what T8.3 made it (the 7 names)."""
+    from evaluate import rank_report
+    assert rank_report.RANK_FILE == "rank.csv"
+    assert len(em.TRIAL_FILES) == 7 and "rank.csv" not in em.TRIAL_FILES
+    assert set(em.OUT_ALLOWED_FILES) == set(em.TRIAL_FILES) | {"rank.csv"} and len(em.OUT_ALLOWED_FILES) == 8
+    assert len(set(em.OUT_ALLOWED_FILES)) == len(em.OUT_ALLOWED_FILES)
+
+
+def test_atk17_evaluate_out_folder_holding_rank_csv_is_accepted_and_the_file_is_carried_over(tmp_path):
+    w = good_world(tmp_path)
+    target = tmp_path / "mine"
+    target.mkdir()
+    (target / "rank.csv").write_text(f"trial_id,x\n{w.trial},1\n", encoding="utf-8")
+    assert cli(w, target) == 0
+    assert (target / "rank.csv").read_text(encoding="utf-8") == f"trial_id,x\n{w.trial},1\n"        # LINK_KEEP carries it
+    assert "link_accuracy.json" in {p.name for p in target.iterdir()}
+
+
+def test_atk17_evaluate_out_folder_with_a_rank_csv_of_another_trial_is_refused_and_left_untouched(tmp_path, capsys):
+    w = good_world(tmp_path)
+    target = tmp_path / "mine"
+    target.mkdir()
+    (target / "rank.csv").write_text("trial_id,x\ns09_t00,1\n", encoding="utf-8")
+    before = sf.snapshot(tmp_path)
+    assert cli(w, target) == 2
+    assert capsys.readouterr().err.startswith("refused:")
+    assert sf.snapshot(tmp_path) == before
+
+
 def test_atk17_stitch_and_evaluate_share_one_rule():
     assert stitch_outdir.protected_reason is lab_outdir.protected_reason
     assert stitch_outdir.foreign_entries is lab_outdir.foreign_entries

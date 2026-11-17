@@ -505,3 +505,23 @@ def test_order_table_and_parameters_are_recorded_in_every_run_info(run):
         assert info["order_table_sha256"] == sp.ORDER_TABLE_SHA256
         assert info["parameters"]["lam"] == pytest.approx(1 / math.log(2))
         assert info["parameters"]["w1"] == pytest.approx(1 / 3)
+
+
+# ------------------------------------------------------------------------------------------------ stats.json host_time gaps (L-ST5)
+def test_stats_host_time_edge_gaps_on_s05_t00_equal_the_stitch_chain_edges(run):
+    """Spec 05 section 3.5 / spec 03 STA-09: s05_t00 has two host_time chain edges (s05-t1 -> s05-h2 and s05-h1 -> s05-h2);
+    stats.json reports their gaps (L-ST5 measurement), read from path_edges.csv."""
+    stats = json.loads((run("s05_t00") / "stats.json").read_text(encoding="utf-8"))
+    edges = [e for e in read_rows(REPO / "out" / "stitch" / "s05_t00" / "path_edges.csv") if e["link_type"] == "host_time"]
+    gaps = sorted(int(e["time_delta_ms"]) for e in edges)
+    assert len(gaps) == 2
+    assert stats["host_time_edge_gaps_ms"] == {"count": 2, "min": gaps[0], "max": gaps[-1], "values": gaps}
+    assert gaps == [118827, 450762]
+
+
+@pytest.mark.parametrize("trial", [t for t in DEV if t != "s05_t00"])
+def test_stats_host_time_edge_gaps_are_empty_where_the_trial_has_no_chain_edge(run, trial):
+    stats = json.loads((run(trial) / "stats.json").read_text(encoding="utf-8"))
+    edges = [e for e in read_rows(REPO / "out" / "stitch" / trial / "path_edges.csv") if e["link_type"] == "host_time"]
+    assert stats["host_time_edge_gaps_ms"]["count"] == len(edges) == 0
+    assert stats["host_time_edge_gaps_ms"]["values"] == [] and stats["host_time_edge_gaps_ms"]["min"] is None

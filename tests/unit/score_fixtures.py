@@ -122,12 +122,12 @@ def base_world() -> World:
     w = World()
     w.hops = [
         hop("h1", tier="B", first="2026-09-24T10:00:10.000000Z"),
-        hop("h2", tier="B", proto="winrm", first="2026-09-24T10:05:00.000000Z"),
+        hop("h2", tier="B", proto="winrm", first="2026-09-24T10:05:00.000000Z", acct="admin_it"),
         hop("h3", tier="D", cand="0", first="2026-09-24T10:06:00.000000Z", acct="dc-01$"),
         hop("h4", tier="D", cand="0", first="2026-09-24T10:07:00.000000Z", acct="usr"),
         hop("h5", tier="D", cand="0", first="2026-09-24T10:08:00.000000Z", acct="svc2"),
-        hop("h6", tier="A", first="2026-09-24T10:10:00.000000Z"),
-        hop("h7", tier="C", proto="winrm", first="2026-09-24T10:09:00.000000Z", mcp="1", clock="1"),
+        hop("h6", tier="A", first="2026-09-24T10:10:00.000000Z", acct="svc6"),
+        hop("h7", tier="C", proto="winrm", first="2026-09-24T10:09:00.000000Z", mcp="1", clock="1", acct="u7"),
     ]
     w.paths = [
         path("p0001", "h1"), path("p0002", "h2", hosts="ep-02>ep-03"), path("p0003", "h3"),
