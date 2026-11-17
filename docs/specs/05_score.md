@@ -1,7 +1,8 @@
 # Stage spec: 05_score
 
-**Owner:** <stage owner> · **Status:** **draft (2026-11-18)**; data-checker, researcher and attacker review merged
-([review](../reviews/05_score-spec-2026-11-18.md)); awaiting owner answers to §8 ·
+**Owner:** <stage owner> · **Status:** **approved (owner, 2026-11-18)**: all §8 proposals accepted, with two
+changes (Q4: weak templates named in L-SC7; Q13: H3 strict, MRR(`full`) > MRR(`b1`)); data-checker, researcher and
+attacker review merged ([review](../reviews/05_score-spec-2026-11-18.md)); records 062–066 ·
 **Last updated:** 2026-11-18
 
 Decisions this spec rests on: Correction G (NodeScore substitution, no isolated-path filter), Correction J (rank, no
@@ -47,7 +48,7 @@ Location `out/score/<trial_id>/` (or `--out`). Files are byte-identical between 
 | Column | Type | Meaning |
 |---|---|---|
 | `trial_id` | str | |
-| `variant` | str | `full` or `b1` (§3.6) |
+| `variant` | str | `full`, `b1` or `b2` (§3.6) |
 | `rank` | int | competition rank (1, 1, 3 …): tied paths share the best rank (SC-41) |
 | `tie_size` | int | number of paths sharing this rank (1 = no tie) |
 | `path_id` | str | from `paths.csv` |
@@ -88,12 +89,15 @@ b, ε, order-table SHA-256), input file SHA-256s, output file SHA-256s and rows.
 |---|---|---|---|
 | `full` | stitch paths | w1·L + w2·N + w3·I | Full |
 | `b1` | stitch paths | (w1·L + w2·N) / (w1 + w2): linking without IdentityCoherence; renormalised so scores stay in [0, 1] and comparable across trials (S06 check) | B3 ("full with w₃ = 0") |
-| `b0` | **no linking**: every labelled event unit (`count_key`) of the trial window, any host, any `context` (OPEN Q12) | NodeScore of the one unit (L and I are 0 by construction: no sequence, no hop) | B0 ("alerts only") |
+| `b2` | stitch paths | NodeScore only (w = 0, 1, 0): order-blind (owner Q12) | B2 ("order-blind scoring, NodeScore only, HADES-style") |
+| `b0` | **no linking**: every labelled event unit (`count_key`) of the trial window, any host, any `context` (owner Q12) | NodeScore of the one unit (L and I are 0 by construction: no sequence, no hop) | B0 ("alerts only") |
+| chance line | stitch paths | none: the expected value of a uniformly random order (computed by `evaluate --rank`, no rows here) | – |
 
 `b0` rows go to `b0_ranked.csv` (`trial_id, variant, rank, tie_size, unit_id (= count_key), event_uids, host,
 techniques, level_value, score`). The handoff's B1 (linked, time order) and B2 (NodeScore only) are not built here
-(OPEN Q12). T9 runs all variants on development trials only; T10 runs them on the test trials beside `full` with the
-frozen parameters.
+(owner Q12: `b2` and the chance line are added; the handoff's time-order B1 is not built). T9 runs all variants on
+development trials only; T10 runs them on the test trials beside `full` with the frozen parameters. `ranked_paths.csv`
+holds the `full`, `b1` and `b2` rows (`variant` column); `stats.json` reports paths per trial for the chance line.
 
 ## 4. Rules
 | ID | Rule | Source |
@@ -113,7 +117,7 @@ frozen parameters.
 | SC-32 | **No labelled unit** → NodeScore 0, `n_node_units` 0 (OPEN Q2). | spec 04 §9 |
 | SC-33 | **Levels** as locked: informational 0, low 1, medium 2, high 3, critical 4; own rules low (056 item 5). Q13 asymmetry: OPEN Q1. | 056 |
 | SC-50 | **Hop crossing value (Correction K).** For a hop and one member account: 1 iff some counted LSASS read (SC-51) on the source host has `order_ok` = 1 (move ≥ dump − 5 s, decision 014) **and** a non-empty `open_session_uids`; else 0. Uses only the moving account and the source host (013), so `target_only` hops get a value. | Correction K; 013; 014; ST-60..63 |
-| SC-51 | **Counted reads** (OPEN Q7): proposal (b′): the `R1_lsass` rows minus reads whose source image is one of `wmiprvse.exe`, `MsMpEng.exe`, `csrss.exe`, `wininit.exe` **at its stated system folder** (`C:\Windows\System32\…`, the Defender platform folder) **and** whose `dump_account` is a system account; a same-named binary elsewhere or under a user account still counts (review ATK-SC-04). `end_unknown` sessions are not counted as open (ST-63). | 056 item 8; spec 03 Q9 |
+| SC-51 | **Counted reads** (OPEN Q7): proposal (b′): the `R1_lsass` rows minus reads whose source image is one of `wmiprvse.exe`, `MsMpEng.exe`, `csrss.exe`, `wininit.exe` **at its stated system folder** (case-insensitive: `C:\Windows\System32\wbem\wmiprvse.exe`, `C:\Windows\System32\csrss.exe`, `C:\Windows\System32\wininit.exe`, `C:\ProgramData\Microsoft\Windows Defender\Platform\<version>\MsMpEng.exe`, `C:\Program Files\Windows Defender\MsMpEng.exe` — all five forms occur on development data) **and** whose `dump_account` is `system`, `network service` or `local service`; a same-named binary elsewhere or under a user account still counts (review ATK-SC-04). `end_unknown` sessions are not counted as open (ST-63). | 056 item 8; spec 03 Q9 |
 | SC-52 | **Applicable crossings.** A (hop, account) with `not_applicable` set (machine account, unknown source host, source host without logs) is not a crossing. A hop's value = max over its applicable accounts (OPEN Q8). The path's crossings = its hops with at least one applicable account. | Correction K item 4; ST-60 |
 | SC-53 | **IdentityCoherence** = coherent crossings / crossings. A path with no crossing → 0 (handoff §12.4 code), shown with `n_crossings` = 0 (OPEN Q9). Each (hop, account) row carries `identity_status` = `exposed` / `not_exposed` / `unknown:<reason>` (machine account, source host unknown, source host without logs, no logoff seen for a counted session) so "no evidence" is never read as "not exposed" in the report, although both score 0 (review ATK-SC-06). | handoff §12.4; review ATK-SC-06 |
 | SC-54 | **Clock flag (044 (c)).** The value uses `order_ok` unchanged; `identity_low` / `identity_high` recompute the path value with flagged crossings (`order_within_uncertainty` = 1 on a deciding or a rejecting read) at 0 and at 1. | 044 (c); ST-62 |
@@ -218,7 +222,8 @@ trials = S01–S05, S07 t02–t10 (k per handoff §14.2: 1, S07 2). A key attack
 Jaccard ≥ 0.5 (handoff §14.2).
 
 **Tie reading (review ATK-SC-01).** Primary: **expected value under a random order inside each tie group** — a match
-in a tie group of size t starting at rank r has expected rank r + (t − 1)/2, top-1 credit 1/t when r = 1, and top-k
+in a tie group of size t starting at rank r has expected rank r + (t − 1)/2 (owner 2026-11-18: s04 A/B, a 2-way tie at
+the top, counts as rank 1.5, reciprocal rank 1/1.5), top-1 credit 1/t when r = 1, and top-k
 credit = the expected share of the group inside the first k places. Optimistic (r) and pessimistic (r + t − 1)
 readings are reported as sensitivity. `path_id` order is never used.
 
@@ -229,7 +234,7 @@ the value a uniformly random order would get (expected top-1 = 1/n), so a held h
 |---|---|
 | H1 | `full`: top-1 rate (primary tie reading) ≥ 0.80 over attack test trials. |
 | H2 | `full`: MRR ≥ 0.85 over attack test trials (replaces "top k + 2", which is vacuous in trials with ≤ 3 paths). |
-| H3 | `full` vs `b1` (identity term ablation): top-1 rate and MRR of `full` ≥ those of `b1`; the difference is reported; a zero gain is a valid result (Correction K item 1). By construction I ≥ 0, so H3 can fail only through identity values on non-key paths; this is stated with the result. |
+| H3 | **IdentityCoherence adds ranking value** (identity term ablation, owner 2026-11-18: strict): MRR(`full`) **>** MRR(`b1`) over attack test trials. Top-1 rates and the difference are reported beside it. Equal MRR means H3 is not held; that is a valid, reportable result (Correction K item 1). |
 | H4 | `full` vs `b0`, **equal node budgets** (review ATK-SC-02): `b0` takes its highest-ranked units until it holds as many event nodes as `full`'s top-k paths; node recall against the key attack nodes is higher for `full`. |
 | H5 | S06 check, per trial: in each S06 test trial the highest benign path score under `full` is below the **lowest** key attack path score of the S01–S05, S07 test trials (primary); the share of attack trials whose key attack path scores above it is reported (handoff §14.2 "distribution"). |
 
@@ -258,6 +263,13 @@ No hypothesis is worded as "reduces false positives", "detects stolen accounts" 
 | Q13 | Success criteria | tie reading (expected value; optimistic / pessimistic as sensitivity), H1–H5 numbers and the chance line (§7.3) — owner sets them now; frozen with λ/w in one record with the commit hash | no |
 | Q14 | NodeScore protocol asymmetry and the dump (ATK-SC-03): the attacker estimates an exposed benign WinRM path and an SMB attack path both near 0.62 under the defaults, inside the noise of α and the templates | (a) keep 056 item 7 (`context` = 0 only), report `node_score_ctx1` and the margin — **proposal**; (b) reopen 056 item 7 by council (count `context` = 1 labels) | only for (b) |
 
+**Owner answers 2026-11-18:** every proposal above accepted (Q12: `b2` and the chance line added; Q14 (a), no
+council), with two changes: Q4 — R5 and R1's first step named as weakly supported in L-SC7; Q13 — numbers accepted,
+H3 strict (MRR(`full`) > MRR(`b1`)), ties by expected rank (2-way tie at the top = rank 1.5). Records:
+[062](../decisions/062-score-order-reference-and-sequence.md) (Q3–Q6), [063](../decisions/063-score-nodescore-readings.md)
+(Q1, Q2, Q14), [064](../decisions/064-score-identity-readings.md) (Q7–Q10), [065](../decisions/065-score-baselines-and-success-criteria.md)
+(Q12, Q13), [066](../decisions/066-score-parameter-freeze.md) (Q11).
+
 **Council:** none proposed. Every choice above is local to `src/score`, recomputed in seconds and does not change a
 locked decision. Q7 (b) narrows Correction K's "credential-access event" by image and Q5 removes one TPPR term; both
 are recorded as stated substitutions.
@@ -277,8 +289,10 @@ data. A UI threshold. Any claim that a score is a probability.
   not the definition (ATK-SC-02).
 - L-SC6 Correction K sets no upper bound on the dump-to-move gap: a session that stays open makes any later move by
   that account count as exposed (ATK-SC-07).
-- L-SC7 Two templates (R1's first link, R5) are weakly supported, and R4/R5 were written after the development
-  sequences were seen (ATK-SC-10).
+- L-SC7 **Weakly supported templates (owner Q4):** R5 (T1078 → T1003.001 → T1021.006) and R1's first step
+  (T1078 → T1003.001) are supported only at campaign level, not as a stated sequence
+  ([research](../research/score_order_templates.md)). R4 and R5 were written after the development sequences were
+  seen (ATK-SC-10).
 
 ## 10. Measurements (development trials only, read-only, 2026-11-18)
 Scripts: scratchpad `measure_paths.py`, `measure_identity.py` (to be committed under `tools/score_measure/` in 9.2).
