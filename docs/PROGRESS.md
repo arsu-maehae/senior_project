@@ -191,3 +191,29 @@ A summary block at the end of each big task. Newest at the bottom.
 2026-11-17 · T7 7.7 task 1 (out/ guard, --out; decision 054) · measured on 9152db1: one full suite (REQUIRE_REAL_DATA=1, 4469 passed, 1 skipped, 1 xfailed) rewrote out/stitch (9 run_info changed, 81 same-byte rewrites), out/stitch_check t73 x9, out/gate_tests/gta_report.md and out/trial_window/gta06.md (same bytes); `python -m stitch`, `stitch.check_index`, `stitch.check_links` get `--out DIR` (checked after ST-00 by lab_common.outdir: inside the repo only below out/, an existing stitch folder may hold only the ten spec files; default folder unchanged); root conftest.py guards all of out/ (sha256 + mtime, fails the session); real-data writers moved to tmp (stitch outputs/paths real, links_real c1, GTA report, gta06 report; the two report files in out/ are frozen copies of 2026-11-17); new read-only checks: committed out/stitch = fresh run, out/evaluate = fresh evaluation, evaluate's recorded stitch hashes = files, whole-file ST-01 window check on real outputs (PLAN 7.7 sentence); out/evaluate refreshed once (10 run_info.json changed, 44 files byte-identical); tests test_stitch_out_option 46, test_out_guard 11; fast suite 3431 passed, 1 xfailed; edited slow files 987 passed, 1 skipped · see commit · 054
 2026-11-17 · T7 7.7 task 2 (missing tests) · test_stitch_clock_refusals 19 (CO-17 none/stale refused from 2026-10-26 00:00:00.000, 1 ms before passes, wide runs, host without events passes; clock_scan incomplete/unknown/empty refused; check_allowed + three CLIs, nothing written, stale gate folder); test_stitch_log_clear 7 (1102 end to end through `python -m stitch --out`: in-window, pre-window look-back, at-read boundary, other host, uid in no file, only hop_identity.csv changes); test_stitch_clock_flags 4 (STT-12 hops.csv clock_unreliable vs gate_clock_unreliable); STT/STA audit: every clause mapped to its tests, 5 gaps filled (map in docs/reviews/03_stitch-2026-11-17.md) · see commit · 054
 2026-11-17 · T7 7.7 stage review (attacker + data-checker) · data-checker: no mismatch against committed outputs on 9 checks (DB hashes, STA-01 284 hops, members, ST-01 0 out-of-window uids, 6 ties, identity 407 rows / 700 sessions 0 violations and 15/15 keyed, tiers = 049, 2 host_time edges, evaluate 15/15 reproduced); spec 10.4 23 vs 21 groups = the two S06 WinRM follow-up groups attached by ST-26; attacker ATK-17..30: fixed ATK-17 (blocking: evaluate --out could replace any folder, now lab_common.outdir), ATK-23 (joined session uid cell), ATK-24a (key agent uid absent from the DB refused, not background), ATK-27 (unterminated quote in a service path); development outputs unchanged (committed-equals-fresh tests pass, 190 passed); 27 regression tests; owner questions OQ-1 (ST-05 copies in hops.csv), OQ-2 (target_only_ok with unresolved rows), OQ-3 (rule items ATK-18/19/20/22/25) open; PLAN 7.7 stays open · see commit · 054
+2026-11-17 · T7 7.7 owner rulings (decision 055) · OQ-1: hops.csv member_logon_uids keeps each member's ST-05 copies joined by '|' (columns stay parallel), evaluate ST-25 match and key_logons_in_hop accept any copy; OQ-2: target_only_ok = a target_only row and no candidate session (051 item 6 amended); OQ-3: no rule change, spec 03 9.1 L-ST5..L-ST9 (ATK-18/19/20/22/25), ATK-18 to be measured on the t01 reruns; development outputs unchanged; 4 tests; fast suite 3435 passed, 1 xfailed · see commit · 055
+2026-11-17 · T7 7.7 done · full suite with REQUIRE_REAL_DATA=1: 4623 passed, 1 skipped (GTA-05, a data property), 1 xfailed, 46 min; the root conftest guard and an outside snapshot of out/ show 0 paths added, removed, changed or rewritten; review docs/reviews/03_stitch-2026-11-17.md closed; PLAN 7.7 [x], T7 done (STA-09 on the six keyed development trials) · see commit · 054, 055
+
+### T7.7 summary (2026-11-17)
+- **Built:**
+  - `--out` for `python -m stitch`, `stitch.check_index`, `stitch.check_links` and a guarded `python -m evaluate --out`, sharing one check (`src/lab_common/outdir.py`).
+  - A root `conftest.py` that fails any test session writing under `out/`. Real-data tests now write to tmp.
+  - Read-only checks that the committed `out/stitch` and `out/evaluate` equal a fresh run, which ends the stale evaluate run_info hash.
+- **Missing tests added:**
+  - CO-17 and incomplete-scan refusals inside the stitcher (19);
+  - log clear end to end (7);
+  - hop clock flags (4);
+  - whole-file ST-01 check on real outputs;
+  - `--out` (46) and guard (11).
+  - Every STT/STA clause is mapped to its tests in the review doc.
+- **Stage review (attacker + data-checker):**
+  - Data-checker: no mismatch against the committed outputs.
+  - Fixed ATK-17 (blocking: evaluate `--out` could replace any folder), ATK-23, ATK-24a and ATK-27.
+  - Owner rulings in 055 (OQ-1 copies, OQ-2 `target_only_ok`, OQ-3 limitations).
+  - Development numbers unchanged.
+- **Decisions:** [054](decisions/054-t77-out-guard-and-out-option.md), [055](decisions/055-t77-review-owner-rulings.md); spec 03 and 051 amended by 055.
+- **Tests:** full suite 4623 passed, 1 skipped, 1 xfailed (`REQUIRE_REAL_DATA=1`).
+- **Open:**
+  - L-ST5..L-ST9 go to T9/T10, ATK-18 to be measured on the t01 reruns.
+  - The frozen report copies `out/gate_tests/gta_report.md` and `out/trial_window/gta06.md` are no longer refreshed by the suite.
+- **Next:** T8 (Sigma labelling) / T9.
