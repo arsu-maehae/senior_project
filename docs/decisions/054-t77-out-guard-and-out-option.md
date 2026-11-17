@@ -1,4 +1,4 @@
-# 054 — Tests write nothing under `out/`; `--out` for the stitch CLIs
+# 054 — Tests write nothing under `out/`; a checked `--out` for the stitch and evaluate CLIs
 
 **Date:** 2026-11-17 · **Status:** accepted (owner, T7.7 plan with the owner changes, 2026-11-17) · **Task:** T7.7 · **Relates to:** 046, 049, 051, 053
 
@@ -22,6 +22,7 @@
    - Because the folder is swapped in and the old one deleted, an existing DIR may hold only the ten spec file names. Anything else is refused, and the refusal names at most three entries.
    - `check_index` / `check_links --out DIR` put their one check file into DIR, under the same repository rule. They delete nothing, so a shared folder is fine.
    - ST-00 still comes first: a test trial is refused before DIR is looked at (046).
+   - **Review ATK-17 (2026-11-17):** `python -m evaluate --out` had no such check, so a wrong DIR could replace any folder (e.g. `ground_truth/approved`). The rules now live in `lab_common/outdir.py` (stitch and evaluate may not import each other, 051 item 1). Both CLIs use them, and evaluate allows the six trial file names in an existing folder.
    - The bytes of every output except `run_info.json` do not depend on DIR: `run_info` records the DB path relative to the repository, not the output path.
 2. **Guard.** The root `conftest.py` has a session-scoped autouse fixture (logic in `tests/unit/out_guard.py`). It snapshots all of `out/` (folders, and files by SHA-256 plus `mtime_ns`) at session start and end, and fails the session (exit ≠ 0) on any added, removed, changed or rewritten path. It lives in the root conftest so the normaliser tests under `src/` are covered too.
 3. **Tests moved to tmp:**
