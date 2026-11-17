@@ -90,9 +90,11 @@ Never tune code or weights on the test set.
 
 ## T8. Sigma labelling — depends on: T4 (alongside T7) — spec: docs/specs/04_label.md
 - [x] 8.1 *(done 2026-11-17: docs/specs/04_label.md approved by the owner; candidate list committed before measurement (2628082); review docs/reviews/04_label-spec-2026-11-17.md (data-checker + attacker); rule list locked by decision 056: 14 rules (P1 adapted SR-10, P2 SR-42 dropped, P3′ SR-31 filter), own Sigma-subset matcher, own rules low, dump only through identity, context = 1 out of NodeScore; Q13 level asymmetry = first question of the T9 spec; measurement scripts committed in 8.2)* In-scope techniques; 1–3 rules each (rule, source, level); lock the list
-- [ ] 8.2 Run rules; join matches to events/nodes
-- [ ] 8.3 Labelling recall vs development keys
-- [ ] 8.4 Tests + stage review
+- [x] 8.2 *(done 2026-11-17: PyYAML (057); src/label/rules 14 locked rule files + manifest, DRL 1.1 attribution; src/label stage (`python -m label --trial/--development/--out`); out/label/<trial>/ event_labels, node_labels, hop_labels, rules_manifest, stats, report, run_info on the 9 dev trials; counts = spec §10.4/§10.2; readings 058; SR-20 share literal fix 059; measurement scripts in tools/label_measure)* Run rules; join matches to events/nodes
+- [x] 8.3 *(done 2026-11-17: src/evaluate `--label-recall`; out/evaluate/<trial>/label_recall.csv, out/evaluate/development/label_recall.md; decision 060; rule coverage of key events, DEVELOPMENT numbers, not results: T1003.001 14/14, T1021.002 5/23, T1570 10/15, T1569.002 8/8, T1021.006 9/9, overall 46/69; t01 counts only)* Labelling recall vs development keys
+- [x] 8.4 *(done 2026-11-17: tests LBT-01..10, LBA-01..06; stage review docs/reviews/04_label-stage-2026-11-17.md (data-checker 6/6 OK; attacker ATK-S01 blocking: rule lock pinned in code, decision 061; S03-S06 fixed; L-LB5, L-LB6); fact-check of 056-058 no blocking item; full suite with REQUIRE_REAL_DATA=1 passes)* Tests + stage review
+
+**Done when:** on the 6 keyed development trials every key LSASS dump is labelled T1003.001 (LBA-02) and every key attack hop has a labelled `context` = 0 node (LBA-03); the labelling recall table is written for all 9 development trials (t01 without right/wrong); the stage review has no open blocking item. **T8 done 2026-11-17:** LBA-02 14/14 dumps, LBA-03 holds on every key attack hop, recall written for 9/9 trials, ATK-S01 fixed (061).
 
 ## T9. Scoring and identity — depends on: T7, T8 — spec: docs/specs/05_score.md
 - [ ] 9.1 Own tactic-order table (decision record: substitute for TPPR's tree)
