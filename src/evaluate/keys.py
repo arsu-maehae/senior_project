@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping, Sequence
 
-from .inputs import BootRow, EventRow, LogonRow
+from .inputs import BootRow, EvalError, EventRow, LogonRow
 from .params import BOOT_SHUTDOWN_IDS, BOOT_STARTUP_IDS
 
 __all__ = ["KeySession", "MatchResult", "iso_to_us", "parse_hex", "hex_id", "split_list", "key_account",
@@ -229,15 +229,23 @@ def session_lookup_requests(key_hop: Mapping[str, Any], event_keys: Mapping[str,
     - explicit id (``source_session_logon_id`` / ``session_evidence.session_id``) on the key ``source_host``;
     - else the (host, session_id) of the key's Sysmon 1 agent events, session_id from the DB (NULL skipped).
     An empty list means the key hop has no source session (background, ``time_account_only``).
+    A Sysmon 1 agent uid of the key that is absent from ``events_dedup`` is refused (EvalError): the key and the DB
+    (whose hashes match) disagree, and skipping the uid would silently turn a keyed hop into a background hop
+    (review ATK-24). The message names the key hop id and a count, never a uid or other key value.
     """
     sid = explicit_session_id(key_hop)
     if sid is not None:
         host = str(key_hop.get("source_host"))
         return [(host, sid, _explicit_commands(key_hop, event_keys, host))]
     by_session: dict[tuple[str, int], list[str]] = {}
-    for uid in sysmon1_agent_uids(key_hop, event_keys):
-        ev = events.get(uid)
-        if ev is None or ev.session_id is None:
+    agent = sysmon1_agent_uids(key_hop, event_keys)
+    missing = sum(1 for uid in agent if uid not in events)
+    if missing:
+        raise EvalError(f"refused: key hop {key_hop.get('hop_id', '?')}: {missing} Sysmon 1 agent event(s) of the key "
+                        "are not in the DB view events_dedup")
+    for uid in agent:
+        ev = events[uid]
+        if ev.session_id is None:
             continue
         by_session.setdefault((ev.host, ev.session_id), []).append(uid)
     return [(h, s, tuple(u)) for (h, s), u in sorted(by_session.items())]

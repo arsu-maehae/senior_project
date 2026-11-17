@@ -88,7 +88,9 @@ def binary_file_name(image_path: Any) -> str:
 
     Strip whitespace; a leading quote means the path is the quoted text, otherwise the first
     whitespace-separated token (the rest are arguments); then the base name. WHY: ``"C:\\x y\\a.exe" -k``
-    and ``C:\\Windows\\a.exe -k`` must both give ``a.exe``. An unterminated quote takes the rest of the text.
+    and ``C:\\Windows\\a.exe -k`` must both give ``a.exe``. An unterminated quote is read like an unquoted path
+    (its first whitespace-separated token): taking the rest of the text would let argument text, cut at its last
+    ``\\``, reach the ``names`` column of ``hop_artefacts.csv`` (review ATK-27; ST-32 compares a binary file name).
     """
     if image_path is None:
         return ""
@@ -97,7 +99,11 @@ def binary_file_name(image_path: Any) -> str:
         return ""
     if text[0] in "\"'":
         end = text.find(text[0], 1)
-        path = text[1:end] if end > 0 else text[1:]
+        if end > 0:
+            path = text[1:end]
+        else:
+            rest = text[1:].split()
+            path = rest[0] if rest else ""
     else:
         path = text.split()[0]
     return base_name(path)

@@ -5,6 +5,9 @@
 
 ``--trial`` evaluates one development trial into ``out/evaluate/<trial>/``; ``--development`` evaluates every
 trial of ``clock_offset.params.DEVELOPMENT_TRIALS`` in order, then writes ``out/evaluate/development/`` (summary).
+A ``--out`` folder is checked before anything is written (``lab_common.outdir``, decision 054; review ATK-17): inside
+the repository it must lie strictly below ``out/``, and an existing folder may hold only the six trial file names,
+because the folder swap deletes the old folder.
 
 The allowlist is checked first, before any file is opened (decision 046 style; 051 item 1): a test trial or a
 malformed id is refused with exit code 2 and nothing is created. Any other refusal (051 items 2 and 9) also exits 2
@@ -18,12 +21,17 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
+from lab_common.outdir import out_target_refusal
+
 from .inputs import EvalError, check_trial_allowed, repo_relative
 from .params import DEVELOPMENT_TRIALS, split_of
 from .run import (default_out_dir, default_stitch_dir, evaluate_trial, summary_dir, summary_files, utc_now)
-from .writers import replace_folder
+from .writers import FACTS_FILE, JSON_FILE, KEYED_FILE, MD_FILE, RUN_INFO_FILE, TOTALS_FILE, replace_folder
 
 REPO = Path(__file__).resolve().parents[2]
+# The names one trial folder can hold (the keyed file only on keyed trials): the only entries an existing --out
+# folder may contain (decision 054).
+TRIAL_FILES: tuple[str, ...] = (KEYED_FILE, FACTS_FILE, TOTALS_FILE, JSON_FILE, MD_FILE, RUN_INFO_FILE)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -43,7 +51,12 @@ def _one(repo: Path, trial: str, stitch_dir: Path | None, out: Path | None) -> i
     """Evaluate and write one trial; the allowlist check comes before anything else."""
     check_trial_allowed(trial)
     res = evaluate_trial(repo, trial, split_of(trial), stitch_dir or default_stitch_dir(repo, trial))
-    target = out or default_out_dir(repo, trial)
+    target = default_out_dir(repo, trial)
+    if out is not None:                       # decision 054 / ATK-17: the default folder is rebuilt as before
+        target = out.resolve()
+        reason = out_target_refusal(target, repo, TRIAL_FILES)
+        if reason:
+            raise EvalError(f"refused: {reason}")
     replace_folder(target, res.files)
     print(repo_relative(target, repo))
     return 0

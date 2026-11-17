@@ -180,9 +180,18 @@ def compare_mode(sessions: Sequence[KeySession], cand_rows: Sequence[Mapping[str
     return "ambiguous_boot"
 
 
-def _cand_id(row: Mapping[str, str], mode: str) -> Any:
-    """A candidate row's session identity under the compare mode."""
-    return row[_SESSION_UID] if mode == "logon_uid" else (row.get("source_host", ""), int(row[_SESSION_ID]))
+def _cand_id(row: Mapping[str, str], mode: str, key_uids: frozenset[str] = frozenset()) -> Any:
+    """A candidate row's session identity under the compare mode.
+
+    Under ``logon_uid`` the stitcher's ``source_session_logon_uid`` may hold several ``;``-joined uids of ONE session
+    (ST-05 copies, or a second 4624 while the session was open). WHY the key uid when it is one of them: the key names
+    one 4624 of the session, and comparing it with the whole cell would score a correct session as wrong (review
+    ATK-23). A cell holding no key uid keeps its whole text as the identity."""
+    if mode != "logon_uid":
+        return (row.get("source_host", ""), int(row[_SESSION_ID]))
+    cell = row[_SESSION_UID]
+    hits = sorted(u for u in cell.split(";") if u in key_uids)
+    return hits[0] if hits else cell
 
 
 def _key_id(s: KeySession, mode: str) -> Any:
@@ -204,8 +213,9 @@ def session_verdicts(sessions: Sequence[KeySession], hop_rows: Sequence[Mapping[
     if mode == "ambiguous_boot":
         return out
     key_set = {_key_id(s, mode) for s in sessions}
-    cand_set = {_cand_id(r, mode) for r in cand}
-    first = {_cand_id(r, mode) for r in rank1_rows(hop_rows)}
+    key_uids = frozenset(k for k in key_set if isinstance(k, str))
+    cand_set = {_cand_id(r, mode, key_uids) for r in cand}
+    first = {_cand_id(r, mode, key_uids) for r in rank1_rows(hop_rows)}
     if not cand_set:
         rank1 = "no_candidate"
     elif first == key_set:
@@ -214,7 +224,7 @@ def session_verdicts(sessions: Sequence[KeySession], hop_rows: Sequence[Mapping[
         rank1 = "tied_correct"
     else:
         rank1 = "wrong"
-    mine = [r for r in cand if _cand_id(r, mode) in key_set]
+    mine = [r for r in cand if _cand_id(r, mode, key_uids) in key_set]
     out.update(among_candidates=_flag(bool(cand_set) and key_set <= cand_set), rank1=rank1,
                only_candidate=_flag(cand_set == key_set),
                key_session_tier=join_distinct(r.get("confidence_tier", "") for r in mine),
