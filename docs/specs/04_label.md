@@ -1,8 +1,9 @@
 # Stage spec: 04_label
 
-**Owner:** <stage owner> · **Status:** **draft (T8.1), not approved.** Candidate rule list written 2026-11-17 before
-any rule-hit measurement (§3.1, commit `2628082`); measurements §10; data-checker and attacker review merged
-([review](../reviews/04_label-spec-2026-11-17.md)); owner answers Q1–Q14 pending, then the lock decision record (Q12).
+**Owner:** <stage owner> · **Status:** **approved (owner, 2026-11-17).** Candidate rule list written before any
+rule-hit measurement (§3.1, commit `2628082`); measurements §10; data-checker and attacker review merged
+([review](../reviews/04_label-spec-2026-11-17.md)); owner answers Q1–Q14 merged (§8); **rule list locked by
+[056](../decisions/056-sigma-rule-list-lock.md)** (§3.5: 14 rules).
 · **Last updated:** 2026-11-17
 
 Decisions this spec rests on: Correction G (NodeScore = Sigma rule level), Correction J (no threshold), Correction G.4
@@ -117,8 +118,9 @@ decides how its order table treats them (OPEN Q10).
 | `910ab938` Transferring Files with Credential Data via Network Shares | Credential files (T1003.002/.003), not tool transfer |
 
 ### 3.2 Changes after measurement
-**Nothing below is applied.** Each row is a proposal made **after** measurement 4 (§10.4) and is therefore a
-development-set choice. The owner accepts or rejects each one (OPEN Q11). §3.1 stays the record of what was chosen
+**Owner 2026-11-17 (Q11, decision 056): P1, P2 and P3′ accepted.** P1 is recorded as an adapted SigmaHQ rule
+(field-format fix). Each row was a proposal made **after** measurement 4 (§10.4) and is therefore a
+development-set choice (Q11 answered: all accepted, decision 056). §3.1 stays the record of what was chosen
 before measurement.
 
 | # | Rule | Proposed change | Reason | Numbers (§10) |
@@ -127,6 +129,26 @@ before measurement.
 | P2 | SR-42 | (a) `' = ServerRemoteHost '` → `' = ServerRemoteHost'` (derived); or (b) drop SR-42 | The stored ContextInfo has a newline after the value, not a space: 170 of 170 rows that contain it in the nine DBs (whole DBs; 108 in the windows; data-checker count, which corrects a first count of 139 over three DBs). As written: 0 matches. Every WinRM hop already gets T1021.006 from SR-40 / SR-41 (§10.6). Proposal: **(b) drop** | 4103 rows with `ServerRemoteHost` + `wsmprovhost.exe`: 2 / 1 / 48 / 57 (s03_t00, s05_t00, s03_t01, s06_t01), else 0 |
 | P3 | SR-31 | ~~add `filter: SubjectUserName|endswith: '$'`~~ → **P3′: add `filter: ServiceType` in (`0xd0`, `0xe0`)** (per-user service template instances) | Any 4697 also matches the per-user service instances Windows creates at each logon (`OneSyncSvc_<id>`, `UnistoreSvc_<id>` …), all under a machine account. None is a path node, but a labels-only baseline (B0) would count them. **Review ATK-L05:** an account filter would also drop a real install made by an attacker-controlled SYSTEM / machine-account context, so P3 is replaced by P3′, which filters the service kind and not the account | SR-31: 459 window matches, 451 by a machine account; the 8 by a user account are exactly the 8 hop installs (node rows: 8). Whole DBs of the six keyed trials: `ServiceType` 0xe0 883 and 0xd0 41 (all `<name>_<id>` instances under a machine account); 0x10 7 (the installs) |
 | – | SR-03, SR-11, SR-12, SR-50, SR-61 | none | 0 matches; kept as written. SR-03 / SR-50: no WinRM dump or RDP in the data. SR-11: the lab copies to `ADMIN$`, not `C$`. SR-12: no `svcctl` 5145 is logged. SR-61: `LogonProcessName` is padded (`NtLmSsp `), but trimming it gives 0 as well | §10.4, §10.5 |
+
+### 3.5 Locked list (decision 056)
+| Rule | Technique | Source | Level | Note |
+|---|---|---|---|---|
+| SR-01 | T1003.001 | SigmaHQ `a49fa4d5` | high | as written |
+| SR-02 | T1003.001 | SigmaHQ `5ef9853e` | medium | as written |
+| SR-03 | T1003.001 | SigmaHQ `aa35a627` | high | as written; no development match |
+| SR-10 | T1021.002 | SigmaHQ adapted from `098d7118` | low | P1: `ShareName|endswith: '\ADMIN$'`; new id, `related: derived` (§3.3) |
+| SR-11 | T1021.002 | SigmaHQ `b210394c` | high | as written; no development match |
+| SR-12 | T1021.002 | SigmaHQ `586a8d6b` | medium | as written; no development match |
+| SR-20 | T1570 | own | low | as §3.1 |
+| SR-30 | T1569.002 | own | low | as §3.1 |
+| SR-31 | T1569.002 | own | low | P3′: filter `ServiceType` 0xd0 / 0xe0 |
+| SR-40 | T1021.006 | SigmaHQ `734f8d9b` | medium | as written |
+| SR-41 | T1021.006 | SigmaHQ `c539afac` | high | as written |
+| SR-50 | T1021.001 | own | low | as §3.1; no development match |
+| SR-60 | T1078 | SigmaHQ `941e5c45` | medium | as written |
+| SR-61 | T1550.002 | SigmaHQ `8eef149c` | medium | as written; no development match |
+
+SR-42 is dropped (P2). After the lock, changes need a new decision record (LB-10, §9).
 
 ### 3.3 Licence
 SigmaHQ rules are released under the **Detection Rule License (DRL) 1.1** (SigmaHQ `LICENSE`, commit above:
@@ -263,20 +285,20 @@ Expected technique per key event (the recall table):
 ## 8. OPEN questions
 | # | Question | Options / proposal | Status |
 |---|---|---|---|
-| Q1 | **Measured (§10.2):** every key LSASS dump is a path node, but **only as a `context` = 1 source-session event** (spec 03 ST-71: tier A/B source session, at or before the hop). T1003.001 is never on a `context` = 0 node. If T9 counts only `context` = 0 nodes, no path gets a credential-access label; with a tier C/D link the dump is not a node at all | (a) T9 counts `context` = 1 nodes that carry a label; (b) T9 adds the labelled `hop_identity` dumps of each hop as nodes (`hop_labels.csv` lists them); (c) the dump enters only through IdentityCoherence. **Changed after review ATK-L07: proposal (c).** Option (b) would give a benign hop from a dumped host a high T1003.001 label, which repeats the "exposed ≠ stolen" error inside NodeScore and counts the dump twice with w3. Cost of (c): no path carries a credential-access technique for T9's order table unless T9 reads `hop_labels` | open |
-| Q2 | Spec 03 Q9: which `R1_lsass` rows count as the credential-access event, and do `end_unknown` sessions count? | **Measured (§10.5):** 70 R1_lsass rows, 20 labelled T1003.001; every labelled read is an R1 row; all 14 key dump events are labelled; the 50 others come from `wmiprvse`, `csrss`, `wininit`, `MsMpEng`. **First proposal ("only labelled R1 rows count") withdrawn after review ATK-L01 / ATK-L02:** it couples the locked identity value to label coverage. The lab uses one dump technique, so 14 of 14 shows no coverage of other tools, and a look-back dump before the window is never labelled. Options for T9: (a) R1 rows as now (spec 03 ST-61), with `dump_labelled` shown as a fact; (b) R1 rows minus a stated source-image exclusion list (`wmiprvse`, `MsMpEng`, `csrss`, `wininit`), decided in the T9 spec with its own record. T8 itself never filters identity. `end_unknown`: not counted (as now) | open |
-| Q3 | T1059.001 and T1078 as labels | (a) only as second tags of SR-03, SR-40..42 and SR-60 (as listed); (b) own rules | open |
-| Q4 | Sigma evaluator | (a) own subset matcher, LB-05 (recommended: no new dependency, every function explainable); (b) pySigma (new dependency, its own field pipelines) | open |
-| Q5 | Level of own rules | (a) low (LB-07); (b) medium; (c) the level of the nearest SigmaHQ rule | open |
-| Q6 | `context` = 1 nodes | labelled the same way (LB-08); T9 decides whether they count. Review ATK-L07: exclude them from NodeScore (they hold the SR-41 duplicates and the dumps). Measured: on `context` = 0 nodes s04 A (benign) and s04 B (attack) are identical (§10.7) | open (T9) |
-| Q7 | SR-42 (PowerShell 4103) matches nothing as written | see P2: drop (proposed) or derive | open |
-| Q8 | No tier columns on label rows (§3.4) | confirm | open |
-| Q9 | Discovery techniques (T1087, T1018) | out of scope unless the key steps contain such events (§10.1) | open |
-| Q10 | T1550.002 (SR-61) and T1078 (SR-60) in T9's order table | T9 spec | open |
-| Q11 | Changes after measurement P1–P3 (§3.2) | accept / reject each; an accepted change is recorded in the rule-list decision | open |
-| Q13 | **Level asymmetry (review ATK-L03).** With SR-10 dead and own rules at `low`, every SMB attack hop averages 1.00 on its `context` = 0 nodes, against 2.00–2.33 for the benign WinRM hops (§10.7). A NodeScore over these labels orders protocols, not attack against benign | options: (a) accept and state it: separating attack from benign is the identity term's job (Correction K), and NodeScore is reported as protocol-sensitive; (b) own rules at `medium` (Q5 b); (c) T9 counts one label per technique per hop. Any choice is a development-set choice, made in the T9 spec with the B2 baseline in view. **Not decided here** | open (T9) |
-| Q14 | Measurement scripts are in `out/label_measure/` (gitignored, as `out/stitch_measure/` was), so the audit is not in git (review ATK-L09) | (a) keep as is (precedent spec 03 §10); (b) commit them under a tracked folder (counts only) in 8.2 | open |
-| Q12 | Lock record | after Q3, Q4, Q5, Q11: one decision record locks the list (rules, levels, own-rule level, evaluator, SigmaHQ commit), then 8.2 copies the files with the §3.3 attribution | open |
+| Q1 | **Measured (§10.2):** every key LSASS dump is a path node, but **only as a `context` = 1 source-session event** (spec 03 ST-71: tier A/B source session, at or before the hop). T1003.001 is never on a `context` = 0 node. If T9 counts only `context` = 0 nodes, no path gets a credential-access label; with a tier C/D link the dump is not a node at all | (a) T9 counts `context` = 1 nodes that carry a label; (b) T9 adds the labelled `hop_identity` dumps of each hop as nodes (`hop_labels.csv` lists them); (c) the dump enters only through IdentityCoherence. **Changed after review ATK-L07: proposal (c).** Option (b) would give a benign hop from a dumped host a high T1003.001 label, which repeats the "exposed ≠ stolen" error inside NodeScore and counts the dump twice with w3. Cost of (c): no path carries a credential-access technique for T9's order table unless T9 reads `hop_labels` | **Owner 2026-11-17: (c).** The dump counts only through identity, never NodeScore (056) | answered |
+| Q2 | Spec 03 Q9: which `R1_lsass` rows count as the credential-access event, and do `end_unknown` sessions count? | **Measured (§10.5):** 70 R1_lsass rows, 20 labelled T1003.001; every labelled read is an R1 row; all 14 key dump events are labelled; the 50 others come from `wmiprvse`, `csrss`, `wininit`, `MsMpEng`. **First proposal ("only labelled R1 rows count") withdrawn after review ATK-L01 / ATK-L02:** it couples the locked identity value to label coverage. The lab uses one dump technique, so 14 of 14 shows no coverage of other tools, and a look-back dump before the window is never labelled. Options for T9: (a) R1 rows as now (spec 03 ST-61), with `dump_labelled` shown as a fact; (b) R1 rows minus a stated source-image exclusion list (`wmiprvse`, `MsMpEng`, `csrss`, `wininit`), decided in the T9 spec with its own record. T8 itself never filters identity. `end_unknown`: not counted (as now). **Owner 2026-11-17:** the identity input stays the gate's `R1_lsass` rows; T9 decides any exclusion (056) | answered (exclusions: T9) |
+| Q3 | T1059.001 and T1078 as labels | (a) only as second tags of SR-03, SR-40, SR-41 and SR-60 (as listed); (b) own rules | **Owner: (a)** (056) | answered |
+| Q4 | Sigma evaluator | (a) own subset matcher, LB-05 (recommended: no new dependency, every function explainable); (b) pySigma (new dependency, its own field pipelines) | **Owner: (a)**, rule files kept in standard Sigma YAML (056) | answered |
+| Q5 | Level of own rules | (a) low (LB-07); (b) medium; (c) the level of the nearest SigmaHQ rule | **Owner: (a) low** (056) | answered |
+| Q6 | `context` = 1 nodes | labelled the same way (LB-08); T9 decides whether they count. Review ATK-L07: exclude them from NodeScore (they hold the SR-41 duplicates and the dumps). Measured: on `context` = 0 nodes s04 A (benign) and s04 B (attack) are identical (§10.7) | **Owner 2026-11-17:** `context` = 1 nodes stay out of NodeScore; they are still labelled and written (LB-08) (056) | answered |
+| Q7 | SR-42 (PowerShell 4103) matches nothing as written | see P2: drop (proposed) or derive | **Owner: dropped (P2)** | answered |
+| Q8 | No tier columns on label rows (§3.4) | confirm | **Owner: confirmed** (spec's answer) | answered |
+| Q9 | Discovery techniques (T1087, T1018) | out of scope unless the key steps contain such events (§10.1) | **Owner: out of scope** (none in the key steps) | answered |
+| Q10 | T1550.002 (SR-61) and T1078 (SR-60) in T9's order table | T9 spec | **Owner: T9 spec** | answered |
+| Q11 | Changes after measurement P1–P3 (§3.2) | accept / reject each; an accepted change is recorded in the rule-list decision | **Owner: P1 (adapted SigmaHQ rule, field-format fix), P2 and P3′ accepted** (056) | answered |
+| Q13 | **Level asymmetry (review ATK-L03).** With SR-10 dead and own rules at `low`, every SMB attack hop averages 1.00 on its `context` = 0 nodes, against 2.00–2.33 for the benign WinRM hops (§10.7). A NodeScore over these labels orders protocols, not attack against benign | options: (a) accept and state it: separating attack from benign is the identity term's job (Correction K), and NodeScore is reported as protocol-sensitive; (b) own rules at `medium` (Q5 b); (c) T9 counts one label per technique per hop. Any choice is a development-set choice, made in the T9 spec with the B2 baseline in view. **Not decided here** | **Owner 2026-11-17: deferred to the T9 spec as its first question** | deferred (T9 Q1) |
+| Q14 | Measurement scripts are in `out/label_measure/` (gitignored, as `out/stitch_measure/` was), so the audit is not in git (review ATK-L09) | (a) keep as is (precedent spec 03 §10); (b) commit them under a tracked folder (counts only) in 8.2 | **Owner: (b)**, committed in 8.2 | answered |
+| Q12 | Lock record | after Q3, Q4, Q5, Q11: one decision record locks the list (rules, levels, own-rule level, evaluator, SigmaHQ commit), then 8.2 copies the files with the §3.3 attribution | **[056](../decisions/056-sigma-rule-list-lock.md)** | answered |
 
 ## 9. Out of scope
 NodeScore value (including the value for a path with no labelled node), tactic order table, ranking (T9). Any change
@@ -291,8 +313,10 @@ matches on development data stays in the list as locked (review ATK-L09).**
   does not label (handoff §7.2 caveat). S01 is not ingested.
 - **L-LB3 Hops without artefacts.** A hop with no service install, executable copy or WinRM process has no labelled
   node: SR-10 (after P1) is the only rule on a plain share access, and nothing labels a target 4624.
-- **L-LB4 Rules dead on this data.** 7 of 15 rules match nothing in the development trials (§10.4), 3 of them because
-  of value formats (P1, P2; SR-61's selection fails even with trimming).
+- **L-LB4 Rules dead on this data.** 7 of the 15 candidates matched nothing in the development trials as written
+  (§10.4). After 056, 5 of the 14 locked rules still match nothing (SR-03, SR-11, SR-12, SR-50, SR-61). Two of the 7 failed
+  because of value formats and were fixed or dropped (SR-10 P1, SR-42 P2). SR-61's field is padded too, but its
+  selection fails even with trimming.
 
 ## 10. Measurements (development trials only, read-only, 2026-11-17)
 Scripts in `out/label_measure/` (gitignored): `measure_t81.py`, `diag_t81.py`, `perhop_t81.py`. They import the
