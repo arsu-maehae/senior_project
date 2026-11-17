@@ -89,7 +89,7 @@ Never tune code or weights on the test set.
 **Done when:** the attack path is among the candidates in every development trial. **T7 done 2026-11-17:** STA-09 holds on the six keyed development trials (s02-s07 t00: every key attack hop is a seed in exactly one path; s05-p1 by host_time chaining); the three t01 development trials have no approved key yet and are reported without a right/wrong label (STA-06).
 
 ## T8. Sigma labelling — depends on: T4 (alongside T7) — spec: docs/specs/04_label.md
-- [ ] 8.1 In-scope techniques; 1–3 rules each (rule, source, level); lock the list
+- [~] 8.1 *(2026-11-17: spec draft docs/specs/04_label.md with the candidate list committed before measurement (2628082), development measurements §10, proposals P1–P3 after measurement, review docs/reviews/04_label-spec-2026-11-17.md (data-checker + attacker); awaiting owner answers Q1–Q12, then the lock decision record)* In-scope techniques; 1–3 rules each (rule, source, level); lock the list
 - [ ] 8.2 Run rules; join matches to events/nodes
 - [ ] 8.3 Labelling recall vs development keys
 - [ ] 8.4 Tests + stage review

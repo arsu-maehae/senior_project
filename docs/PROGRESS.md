@@ -217,3 +217,5 @@ A summary block at the end of each big task. Newest at the bottom.
   - L-ST5..L-ST9 go to T9/T10, ATK-18 to be measured on the t01 reruns.
   - The frozen report copies `out/gate_tests/gta_report.md` and `out/trial_window/gta06.md` are no longer refreshed by the suite.
 - **Next:** T8 (Sigma labelling) / T9.
+
+2026-11-17 · T8.1 spec draft · docs/specs/04_label.md: 15 candidate rules committed before measurement (2628082); development measurements (9 trials, DB hashes unchanged, s02_t02 refused); proposals P1 (SR-10 ADMIN$ format), P2 (drop SR-42), P3' (SR-31 per-user service filter) after measurement; data-checker: all re-derived numbers match, 7 fixes; attacker: 11 cases, Q2 proposal withdrawn, Q1 changed to (c), level asymmetry Q13 for T9; review docs/reviews/04_label-spec-2026-11-17.md; awaiting owner Q1-Q14 · see commit · –
