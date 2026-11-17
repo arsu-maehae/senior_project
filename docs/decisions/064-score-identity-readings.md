@@ -16,7 +16,7 @@ equals the key on 15 of 15 keyed hops. In-path read events: rundll32 18; wmiprvs
 |---|---|---|---|
 | Q7 (a) every R1 read | no list | AV / OS reads with a session open make a benign move "exposed" | ATK-SC-04 |
 | Q7 (b) image-name exclusion | simple | a renamed dumper is missed | ATK-SC-04 |
-| Q7 (b′) exclusion only for the four images in their system folder **and** under a system account (**chosen**) | fits Correction K's "credential-access event" | a dump injected into a real system process is missed | §10.3 |
+| Q7 (b′) exclusion only for the four images in their system folder **and** under a system account (**chosen**) | narrows Correction K's "credential-access event" to reads that are not routine OS / AV activity (a stated substitution; 056 item 8 left any exclusion to this spec) | a dump injected into a real system process is missed | §10.3 |
 | Q8 max over a hop's accounts (**chosen**) vs per-account crossings | hop is the unit (CLAUDE.md) | an exposed co-member lifts the hop | s06 (both 0) |
 | Q9 no crossing → 0 (**chosen**) | handoff §12.4 code | "no evidence" scores like "not exposed" → `identity_status` | ATK-SC-06 |
 | Q10 value from `order_ok`, low/high beside it (**chosen**) | 044 (c): flag only | — | 0 flagged on dev |
@@ -27,8 +27,11 @@ non-empty `open_session_uids`; else 0. Counted reads = `R1_lsass` rows minus (b�
 `C:\Windows\System32\wbem\wmiprvse.exe`, `…\System32\csrss.exe`, `…\System32\wininit.exe`,
 `C:\ProgramData\Microsoft\Windows Defender\Platform\<version>\MsMpEng.exe` or `C:\Program Files\Windows
 Defender\MsMpEng.exe`, **and** `dump_account` in {system, network service, local service}. On development data these
-cover 331 of 457 read rows; all 126 rundll32 rows (svc_backup 94, admin_it 26, system 6) stay counted. `end_unknown` sessions are not
-open (ST-63). Machine accounts, unknown source host and source host without logs are not crossings. Hop value = max
+cover 331 of 457 read rows; all 126 rundll32 rows (svc_backup 94, admin_it 26, system 6) stay counted. `end_unknown` sessions (Security log cleared between opening and dump) are not
+open (ST-63); a session with no logoff event is open (handoff §12.4). Sessions with system logon IDs
+0x3e4/0x3e5/0x3e7 and machine accounts are never open sessions (Correction K item 4, ST-63). Machine accounts (K item
+4), unknown source host and source host without logs (ST-60, 049) are not crossings; since they leave the
+denominator, a path with one exposed hop and one unknown hop gets 1, not 0.5. Hop value = max
 over its applicable accounts; IdentityCoherence = coherent crossings / crossings, 0 when there are none. Every row
 carries `identity_status` (`exposed`, `not_exposed`, `unknown:<reason>`); `identity_low` / `identity_high` give the
 path value with clock-flagged crossings at 0 and 1. Only the moving account and the source host are used (013), so

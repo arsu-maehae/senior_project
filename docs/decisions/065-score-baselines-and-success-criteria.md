@@ -22,7 +22,9 @@ rank 1, decide H1 by `path_id`, and that "top k + 2" is vacuous in trials with t
 ## Decision
 **Variants** (one scorer, one ranker): `full`; `b1` = (w1·L + w2·N)/(w1 + w2) (handoff's "B3, w₃ = 0"); `b2` = NodeScore
 only (handoff B2); `b0` = one candidate per labelled event unit, no linking (handoff B0); a chance line = expected value
-of a uniformly random order. **Ties:** a match in a tie group of size t at rank r has expected rank r + (t − 1)/2 (a
+of a uniformly random order. The handoff's B1 (linked paths in time order, no ranking) is not built; the chance line
+is the "linked, not ranked" reference that takes its place in the comparison promised in handoff §24 (B1 vs Full).
+**Ties:** a match in a tie group of size t at rank r has expected rank r + (t − 1)/2 (a
 2-way tie at the top = rank 1.5), top-1 credit 1/t; optimistic and pessimistic reported as sensitivity.
 **Hypotheses** (attack test trials S01–S05, S07 t02–t10; match = node Jaccard ≥ 0.5; expected, to be measured):
 - H1 top-1 rate (`full`) ≥ 0.80.
@@ -44,7 +46,7 @@ of a uniformly random order. **Ties:** a match in a tie group of size t at rank 
 ## Committee answer
 **EN:** We wrote what success means before scoring any test trial: how often the attack path comes first, its average
 reciprocal rank, whether the identity term improves that rank, and how we compare with alerts-only and order-blind
-baselines. Ties count by their expected position, so a tie between an attack and a benign path counts as rank 1.5.
+baselines. Ties count by their expected position, so an attack path tied with one benign path at the top counts as rank 1.5.
 **TH:** เรากำหนดเกณฑ์ความสำเร็จไว้ก่อนให้คะแนนข้อมูลทดสอบใด ๆ ได้แก่ เส้นทางโจมตีขึ้นอันดับหนึ่งบ่อยเพียงใด ค่าเฉลี่ยส่วนกลับของอันดับ
 ค่าความสอดคล้องของตัวตนช่วยให้อันดับดีขึ้นหรือไม่ และเปรียบเทียบกับเส้นฐานที่ใช้เพียงการแจ้งเตือนและที่ไม่สนใจลำดับ
-กรณีคะแนนเท่ากันนับตามตำแหน่งที่คาดหมาย เส้นทางโจมตีที่เสมอกับเส้นทางปกติจึงนับเป็นอันดับ 1.5
+กรณีคะแนนเท่ากันนับตามตำแหน่งที่คาดหมาย เส้นทางโจมตีที่เสมอกับเส้นทางปกติหนึ่งเส้นที่อันดับหนึ่งจึงนับเป็นอันดับ 1.5

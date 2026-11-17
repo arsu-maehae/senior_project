@@ -18,7 +18,7 @@ no weight can separate s04 track A from B (equal L and N, both exposed).
 | A-priori values, sweep for stability only (**chosen**) | no tuning; explainable | may be far from best | handoff l. 977 |
 
 ## Decision
-Values: **λ = 1/ln 2** (one transition gives length factor 0.5), **w1 = w2 = w3 = 1/3**, **α = β = 0.5** (ScoreNI weight
+Values: **λ = 1/ln 2** (one technique transition, i.e. two techniques, gives length factor 0.5), **w1 = w2 = w3 = 1/3**, **α = β = 0.5** (ScoreNI weight
 0, 062), **a = b = 1**, **ε = 0.01** (TPPR: "a negligible probability for unobserved transitions"). The development
 sweep (w on the simplex, step 0.1; λ ∈ {0.5, 1, 1/ln 2, 2, 3, 5}) is reported for stability only and never moves a
 value; only the owner may change one, by its own record, before the freeze. If S01 t01 is ingested before the freeze,
@@ -41,8 +41,8 @@ After this commit no value changes on test data; T10 reports sensitivity around 
 - A value in `src/score/params.py` differs from the freeze table (pin test fails) → the run is invalid.
 
 ## Committee answer
-**EN:** The base paper does not publish its weights, so we fixed simple values in advance: equal weights for the three
-terms and a length constant that gives a one-step path half credit. We checked on development data only that rankings
-stay stable around them, and froze them before opening the test answer keys.
+**EN:** The base paper does not publish its weights, so we fix simple values in advance: equal weights for the three
+terms and a length constant that gives a path with one technique transition half credit. We check on development
+data only that rankings stay stable around them, and freeze them before the test answer keys are opened.
 **TH:** งานต้นแบบไม่ได้เผยแพร่ค่าน้ำหนัก เราจึงกำหนดค่าง่าย ๆ ไว้ล่วงหน้า คือให้น้ำหนักสามองค์ประกอบเท่ากัน และค่าคงที่ความยาวที่ให้เส้นทาง
-หนึ่งขั้นได้คะแนนครึ่งหนึ่ง เราตรวจบนข้อมูลพัฒนาเท่านั้นว่าอันดับคงที่รอบค่าเหล่านี้ แล้วล็อกค่าไว้ก่อนเปิดเฉลยชุดทดสอบ
+ที่มีการเปลี่ยนเทคนิคหนึ่งครั้งได้คะแนนครึ่งหนึ่ง เราตรวจบนข้อมูลพัฒนาเท่านั้นว่าอันดับคงที่รอบค่าเหล่านี้ และล็อกค่าไว้ก่อนเปิดเฉลยชุดทดสอบ
