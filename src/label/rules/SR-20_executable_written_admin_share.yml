@@ -1,0 +1,33 @@
+# SR-20 — own rule of the attack-path-poc project (spec 04_label section 3.1, decision 056); not from SigmaHQ.
+title: Executable Written to an Admin Share
+id: 0fb2d16c-59a1-477d-a47a-e0851228a4a4
+status: experimental
+description: |
+    Detects a file with an executable or script extension written (WriteData, %%4417) through the ADMIN$ or C$
+    administrative share. Handoff gate rule R4 (SMB); labels the tool transfer of a lateral movement.
+author: attack-path-poc project
+date: 2026-11-17
+tags:
+    - attack.lateral-movement
+    - attack.t1570
+logsource:
+    product: windows
+    service: security
+detection:
+    selection:
+        EventID: 5145
+        ShareName|endswith:
+            - 'ADMIN$'
+            - 'C$'
+        RelativeTargetName|endswith:
+            - '.exe'
+            - '.dll'
+            - '.ps1'
+            - '.bat'
+            - '.cmd'
+            - '.vbs'
+        AccessList|contains: '%%4417'
+    condition: selection
+falsepositives:
+    - Software deployment through administrative shares
+level: low

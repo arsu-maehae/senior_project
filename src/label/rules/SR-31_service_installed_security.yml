@@ -1,0 +1,27 @@
+# SR-31 — own rule of the attack-path-poc project (spec 04_label section 3.1, decision 056); not from SigmaHQ.
+title: Service Installed (Security 4697)
+id: 15076c2c-31ac-49ba-8336-4fa95cee374d
+status: experimental
+description: |
+    Detects a service installation logged in the Security log (event 4697). Handoff gate rule R6 (remote service).
+    The per-user service instances Windows creates at each logon (ServiceType 0xd0 and 0xe0) are excluded
+    (decision 056, P3'); the filter is on the service kind, not on the account.
+author: attack-path-poc project
+date: 2026-11-17
+tags:
+    - attack.execution
+    - attack.t1569.002
+logsource:
+    product: windows
+    service: security
+detection:
+    selection:
+        EventID: 4697
+    filter_per_user_service:
+        ServiceType:
+            - '0xd0'
+            - '0xe0'
+    condition: selection and not filter_per_user_service
+falsepositives:
+    - Legitimate software installation
+level: low

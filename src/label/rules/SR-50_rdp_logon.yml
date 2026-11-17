@@ -1,0 +1,23 @@
+# SR-50 — own rule of the attack-path-poc project (spec 04_label section 3.1, decision 056); not from SigmaHQ.
+title: Remote Desktop Logon (Logon Type 10)
+id: 2710de8c-ab44-4e9d-b223-fa28cc34c53e
+status: experimental
+description: |
+    Detects a successful logon of type 10 (RemoteInteractive), the logon a Remote Desktop session creates.
+    Handoff gate rule R5 (RDP). An RDP logon recorded as type 3 is not covered (spec 04_label L-LB2).
+author: attack-path-poc project
+date: 2026-11-17
+tags:
+    - attack.lateral-movement
+    - attack.t1021.001
+logsource:
+    product: windows
+    service: security
+detection:
+    selection:
+        EventID: 4624
+        LogonType: 10
+    condition: selection
+falsepositives:
+    - Legitimate Remote Desktop use
+level: low

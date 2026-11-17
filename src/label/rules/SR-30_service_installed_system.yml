@@ -1,0 +1,23 @@
+# SR-30 — own rule of the attack-path-poc project (spec 04_label section 3.1, decision 056); not from SigmaHQ.
+title: Service Installed (System 7045)
+id: dd9932cc-a031-425f-abd4-2bd5701e753f
+status: experimental
+description: |
+    Detects a service installation logged by the Service Control Manager in the System log (event 7045).
+    Handoff gate rule R6 (remote service); labels service execution.
+author: attack-path-poc project
+date: 2026-11-17
+tags:
+    - attack.execution
+    - attack.t1569.002
+logsource:
+    product: windows
+    service: system
+detection:
+    selection:
+        Provider_Name: 'Service Control Manager'
+        EventID: 7045
+    condition: selection
+falsepositives:
+    - Legitimate software installation
+level: low
