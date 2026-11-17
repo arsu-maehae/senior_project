@@ -17,7 +17,7 @@ match §10.2.
 | 4 extra DB columns | `process_id`, `service_name` are read | – | LB-11 pairing needs them; they are not command text |
 | 5 LB-11 pairing set | all in-window events, labelled or not; 2 s (`StitchParams.process_collapse_s`), 5 s (`GateParams.service_pair_s`, GT-12) | labelled events only | the pair is a property of the events, not of the labels; reuses the stitch and gate tolerances |
 | 6 a field stored as `[null]` | absent | the empty string | Sigma treats a missing field as no match |
-| 7 SR-10 adapted | shown by its own id `2495f327-…`, `related: 098d7118… derived`, a `report.md` line | a manifest notes column | the §3.4 manifest columns stay as approved |
+| 7 SR-10 adapted | the rule file has its own id `2495f327-…` and `related: 098d7118… derived`. `manifest.csv` and the `sigma_id` of label rows keep the upstream `098d7118…` for attribution, and `report.md` says the rule is adapted | a manifest notes column | the §3.4 manifest columns stay as approved |
 | 8 folder swap / JSON writers | imported from `stitch.__main__` | from `evaluate.writers` | `evaluate` reads answer keys; `src/label` must not import it |
 | 9 rules folder | any file other than `*.yml` and `manifest.csv` is refused | ignored | LB-10 lock: nothing unlisted near the rules |
 | 10 stitch file hashes | recorded in `run_info.json`, no refusal | refuse when they differ | the stitch outputs are re-run often; T9 checks the chain |

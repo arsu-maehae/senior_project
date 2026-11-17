@@ -10,8 +10,9 @@ and the list was committed before any rule ran on a trial (`2628082`). Measureme
 - SR-10: 0 matches in 9 of 9 trials, because `ShareName` is logged as `\\*\ADMIN$`, so no T1021.002 label exists at
   all;
 - SR-42: 0 matches, because ContextInfo has a newline after the value where the rule expects a space (170 of 170 rows);
-- SR-31: 459 matches, 451 of them per-user service instances (`ServiceType` 0xd0 / 0xe0, 924 rows in the six keyed
-  DBs); the real installs are 0x10.
+- SR-31: 459 matches, 451 of them under machine accounts. 450 of those are per-user service instances (`ServiceType`
+  0xd0 / 0xe0, 924 rows in the six keyed DBs), and one is a real 0x10 install; real installs are 0x10. After P3′, 9
+  matches remain (058).
 
 All 14 key LSASS dumps are labelled, but only on `context` = 1 nodes. Measured on `context` = 0 nodes, SMB attack hops
 average level 1.00 and benign WinRM hops 2.00–2.33 (§10.7).
@@ -20,7 +21,7 @@ average level 1.00 and benign WinRM hops 2.00–2.33 (§10.7).
 | Option | Pros | Cons | Evidence |
 |---|---|---|---|
 | A. Lock §3.1 exactly as written | no development-set choice | T1021.002 never labelled; SR-42 dead; B0 counts 451 per-user services | §10.4 |
-| B. §3.1 + P1 (adapted SR-10), P2 (drop SR-42), P3′ (SR-31 service-kind filter) (**chosen**) | fixes format errors, not detection logic; every change has its numbers in §3.2 | three development-set choices, stated as such | §3.2; review DC-3, ATK-L05 |
+| B. §3.1 + P1 (adapted SR-10), P2 (drop SR-42), P3′ (SR-31 service-kind filter) (**chosen**) | P1 fixes a field format; P2 drops a dead rule; P3′ adds one service-kind filter; every change has its numbers in §3.2 | three development-set choices, stated as such | §3.2; review DC-3, ATK-L05 |
 | C. pySigma as the matcher | maintained library | new dependency, its own field pipelines, harder to explain function by function | spec 04 Q4 |
 | D. Own Sigma-subset matcher over standard Sigma YAML (**chosen**) | no dependency; every function explainable; rule files stay portable Sigma | the subset must be tested (LBT-04) | spec 04 LB-04, LB-05 |
 | E. Count the dump in NodeScore (Q1 a/b) | credential access visible in the path's levels | "exposed ≠ stolen" moves into NodeScore and counts twice with w3 | review ATK-L07 |
@@ -60,6 +61,9 @@ is added, dropped or changed by looking at test-trial counts, and a rule that ne
   identity.
 - Leaving `context` = 1 out of NodeScore means no path's NodeScore reflects the dump, and s04 track A and track B
   look alike on `context` = 0 nodes. Telling them apart is the identity term's job, as Correction K intends.
+- CLAUDE.md defines NodeScore as the mean level of "labelled nodes" and sets no context filter. The T9 spec must state
+  that leaving `context` = 1 nodes out is a reading of which nodes belong to the path, not a change to the locked
+  formula (fact-check T8.4).
 
 ## Kill criteria
 - On the development data after 8.2, a key LSASS dump is not labelled T1003.001, or a key attack hop has no
@@ -69,7 +73,10 @@ is added, dropped or changed by looking at test-trial counts, and a rule that ne
 
 ## Committee answer
 **EN:** We took detection rules from the public SigmaHQ set and fixed the list before running it on any trial. We
-then changed only what failed because of how Windows stores a field, and wrote down each change with its numbers.
-Rule severity feeds the node score, but a credential dump only counts through the identity term, so an exposed
-account is never scored as a stolen one twice.
-**TH:** เราเลือกกฎตรวจจับจากชุด SigmaHQ ที่เปิดเผยต่อสาธารณะ และล็อกรายการไว้ก่อนนำไปรันกับข้อมูลทดลองใด ๆ หลังจากนั้นแก้เฉพาะกฎที่ไม่ทำงานเพราะรูปแบบการบันทึกฟิลด์ของ Windows และบันทึกทุกการแก้พร้อมตัวเลข ระดับความรุนแรงของกฎใช้คำนวณคะแนนโหนด แต่การดัมพ์รหัสผ่านนับผ่านค่าความสอดคล้องของตัวตนเท่านั้น บัญชีที่ถูกเปิดเผยจึงไม่ถูกนับซ้ำเหมือนถูกขโมย
+then made three stated changes: one field-format fix, one dead rule dropped, and one filter for per-user services.
+Each change is written down with its numbers. Rule severity feeds the node score. A credential dump counts only
+through the identity term, which measures exposure, not theft, so the dump is never counted twice.
+**TH:** เราเลือกกฎตรวจจับจากชุด SigmaHQ ที่เปิดเผยต่อสาธารณะ และล็อกรายการไว้ก่อนนำไปรันกับข้อมูลทดลองใด ๆ หลังจากนั้นเปลี่ยนสามจุดที่ระบุไว้ชัดเจน คือแก้รูปแบบฟิลด์หนึ่งกฎ ตัดกฎที่ไม่มีวันทำงานหนึ่งกฎ และเพิ่มตัวกรองบริการรายผู้ใช้หนึ่งตัว ทุกการเปลี่ยนบันทึกพร้อมตัวเลข ระดับความรุนแรงของกฎใช้คำนวณคะแนนโหนด ส่วนการดัมพ์รหัสผ่านนับผ่านค่าความสอดคล้องของตัวตนเท่านั้น ซึ่งวัดการถูกเปิดเผย ไม่ใช่การถูกขโมย จึงไม่ถูกนับซ้ำ
+
+**Errata (2026-11-17, fact-check T8.4):** the SR-31 numbers in Context, the option B wording and the committee answer were
+corrected. The decision itself is unchanged.

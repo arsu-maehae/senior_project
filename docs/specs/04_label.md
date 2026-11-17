@@ -401,7 +401,8 @@ subjectusername, targetusername`). Formats:
     trial, 0 matching.
   - SR-03, SR-50: no such events.
 - **SR-31 machine-account matches** are per-user service instances created at logon (for example `OneSyncSvc_<id>`,
-  `UnistoreSvc_<id>`, `CaptureService_<id>`), one each. The user-account 4697s are the two `PktDropService` and two
+  `UnistoreSvc_<id>`, `CaptureService_<id>`), one each. Erratum (T8.4 fact-check): one of the 451 is a real `0x10`
+  install under `ENDPOINT-02$` in s02_t00. P3′ keeps it, so SR-31 has 9 matches after P3′ (decision 058). The user-account 4697s are the two `PktDropService` and two
   `BenignMon` installs plus the other hop installs: 8 in total, which equals the 8 node rows.
 
 ### 10.5 R1_lsass rows and T1003.001 (spec 03 Q9 input)
