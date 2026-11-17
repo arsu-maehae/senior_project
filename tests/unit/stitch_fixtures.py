@@ -133,16 +133,17 @@ def make_repo(tmp_path: Path, rows: Sequence[Mapping] | None = None, trial: str 
               skip_gate_file: str | None = None, time_basis: str = "corrected",
               stats_offsets_sha: str | None = None, stats_changes_sha: str | None = None,
               stats_db_sha_after: str | None = None, stats_window_changes: Mapping[str, str] | None = None,
-              ) -> FakeRepo:
+              clock_scan: str = "complete") -> FakeRepo:
     """A temp repo with one allowlisted synthetic trial that passes ST-00; keyword arguments break one thing
-    at a time. ZERO clock offsets by default (every host `ok`)."""
+    at a time. ZERO clock offsets by default (every host `ok`). `clock_scan` is written to every offsets row (SF-4;
+    T7.7); the gate stats record the hashes of the files as written, so only the stitcher's own check can refuse."""
     repo = tmp_path / name
     paths = trial_paths(repo, trial)
     write_events_db(paths.db, rows if rows is not None else [logon("E0", 1.0, 1000)], drop_columns=drop_columns,
                     as_view=as_view)
     db_sha = sha256_of(paths.db)
     o_sha, c_sha = cf.write_clock_files(repo, trial, db_sha, cf.default_offsets() if offsets is None else offsets,
-                                        changes)
+                                        changes, clock_scan=clock_scan)
     row = {"trial_id": trial, "start_utc": start, "end_utc": end, "window_source": "computed_agent_run",
            "margin_start_s": "60", "margin_end_s": "300", "rule": "synthetic test window", "db_sha256": db_sha,
            "time_basis": "corrected", "offsets_sha256": o_sha, "clock_changes_sha256": c_sha, "clock_flag": "",
