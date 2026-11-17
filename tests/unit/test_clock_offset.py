@@ -1535,13 +1535,19 @@ def test_contract_missing_db_for_allowed_trial_is_an_error_and_writes_nothing(tm
 
 # ====================================================================================== B. real data (COA)
 
-ALLOWLIST = ["s02_t00", "s03_t00", "s04_t00", "s05_t00", "s06_t00", "s07_t00", "s02_t01", "s03_t01", "s06_t01",
-             "s04_t01", "s07_t01"]
-DEVELOPMENT = ALLOWLIST[:9]
-CLOCK_ONLY = ALLOWLIST[9:]
+# The live real-data runs use the 9 development trials only. s04_t01 and s07_t01 (the clock-only trials of decision 043)
+# were archived to archive_x10_v1/ on 2026-11-17 (decision 034) and the ids are reused by the reruns, so the live run must
+# never look for them under data/processed/. Their T6b.1 measurement is HISTORICAL: it is checked read-only against the
+# frozen archive files (section "historical clock-only trials" below), never recomputed.
+DEVELOPMENT = ["s02_t00", "s03_t00", "s04_t00", "s05_t00", "s06_t00", "s07_t00", "s02_t01", "s03_t01", "s06_t01"]
+ALLOWLIST = DEVELOPMENT
+CLOCK_ONLY = ["s04_t01", "s07_t01"]
+ARCHIVE_LABEL = "archive_x10_v1"
+ARCHIVED_PROCESSED = PROCESSED / ARCHIVE_LABEL
+ARCHIVED_OUT = REPO / "out" / "clock_offset" / ARCHIVE_LABEL
 
 # T6b.1 reference (ms): host -> (n_pairs, median_ms); n = 0 -> no median.
-REFERENCE = {
+REFERENCE = {                       # the two clock-only entries are historical (archived trials), see CLOCK_ONLY
     "s02_t00": {"ep-01": (6, 1676.478), "ep-02": (3, 246.518), "ep-03": (0, None)},
     "s03_t00": {"ep-01": (6, 2610.994), "ep-02": (0, None), "ep-03": (4, 3803.286)},
     "s04_t00": {"ep-01": (6, -1140.990), "ep-02": (3, -1660.837), "ep-03": (0, None)},
@@ -1567,7 +1573,7 @@ def _db(trial: str) -> Path:
 
 @pytest.fixture(scope="module")
 def real():
-    """Runs the step once on the 11 allowlisted trials, in memory (write=False), recording every opened path."""
+    """Runs the step once on the 9 development trials, in memory (write=False), recording every opened path."""
     for t in ALLOWLIST:
         _db(t)
     before = {t: sha(PROCESSED / f"{t}.sqlite3") for t in ALLOWLIST}
@@ -1585,9 +1591,10 @@ def _rows(real, trial: str) -> dict[str, dict]:
 
 @pytest.mark.slow
 def test_coa_real_only_allowlisted_dbs_opened_and_no_ground_truth(real):
-    """Real-data guard: only the 11 allowlisted trial DBs are opened (no t02-t10, no S05 quarantine, no S01) and
-    nothing under ground_truth/ is opened; DB hashes are unchanged after the run (COT-11)."""
+    """Real-data guard: only the 9 development trial DBs are opened (no t02-t10, no S05 quarantine, no S01, nothing
+    under archive_x10_v1/) and nothing under ground_truth/ is opened; DB hashes are unchanged after the run (COT-11)."""
     dbs = {Path(p).name for p in real["paths"] if p.lower().endswith(".sqlite3")}
+    assert not [p for p in real["paths"] if ARCHIVE_LABEL in Path(p).parts], "the live run opened an archived file"
     assert dbs == {f"{t}.sqlite3" for t in ALLOWLIST}, sorted(dbs ^ {f"{t}.sqlite3" for t in ALLOWLIST})
     bad = [p for p in real["paths"] if _under(p, REPO / "ground_truth") or "ground_truth" in Path(p).parts]
     assert bad == []
@@ -1682,12 +1689,6 @@ def test_coa02_co10_no_pair_above_review_level_and_summary_matches(real):
 
 
 @pytest.mark.slow
-def test_coa02_co10_clock_only_trials_have_no_check_pairs(real):
-    """Spec 10.5: s04_t01 and s07_t01 have no endpoint-to-endpoint check pair (0 groups)."""
-    assert _check_rows(real, CLOCK_ONLY) == []
-
-
-@pytest.mark.slow
 def test_coa03_s06_t01_ep01_offset_and_winrm_check_pairs(real):
     """COA-03: s06_t01 ep-01 offset in [-19.5, -18.0] s and ok; the ep-01 -> ep-02 / ep-03 WinRM pairs go from
     raw ~16.7 / ~18.3 s to corrected |delta| <= 1 s."""
@@ -1706,17 +1707,12 @@ def test_coa03_s06_t01_ep01_offset_and_winrm_check_pairs(real):
 
 
 @pytest.mark.slow
-def test_coa04_clock_only_trials_produce_rows_and_are_labelled(real):
-    """COA-04: s04_t01 and s07_t01 produce offsets rows and are labelled clock-only; the development trials are not."""
-    for t in CLOCK_ONLY:
-        assert real["res"]["stats"][t]["trial_role"] == "clock-only"
-        assert len(real["res"]["rows"][t]) == 4
-        assert real["res"]["pairs"][t]
+def test_coa04_development_trials_are_labelled_development(real):
+    """COA-04 (live part): the 9 development trials are labelled development. The clock-only half of COA-04 is
+    historical and is checked on the archived files (test_hist_*)."""
+    assert set(real["res"]["stats"]) == set(DEVELOPMENT)
     for t in DEVELOPMENT:
         assert real["res"]["stats"][t]["trial_role"] == "development"
-    assert _rows(real, "s04_t01")["ep-01"]["offset_status"] == "ok"
-    assert _rows(real, "s04_t01")["ep-01"]["offset_ms"] < -14_000
-    assert _rows(real, "s07_t01")["ep-01"]["offset_ms"] < -12_000
 
 
 @pytest.mark.slow
@@ -1730,17 +1726,13 @@ def test_coa06_hosts_without_exported_logs_none_and_not_flagged(real, trial, hos
 
 
 @pytest.mark.slow
-def test_coa_s06_t01_ep03_wide_and_s07_t01_ep03_none(real):
-    """Spec 10.1 / 5: s06_t01 ep-03 is wide (loo shift 2.97 s > 2.5 s, still corrected, flagged); s07_t01 ep-03 has
-    1 pair -> none, flagged."""
+def test_coa_s06_t01_ep03_wide(real):
+    """Spec 10.1 / 5: s06_t01 ep-03 is wide (loo shift 2.97 s > 2.5 s, still corrected, flagged). The s07_t01 ep-03
+    half (1 pair -> none, flagged) is historical: test_hist_s07_t01_ep03_one_pair_none_and_flagged."""
     r = _rows(real, "s06_t01")["ep-03"]
     assert r["offset_status"] == "wide" and r["offset_ms"] is not None
     assert 2500 < r["offset_unc_ms"] <= 3200
     assert "ep-03" in real["res"]["stats"]["s06_t01"]["clock_flag"]
-    r7 = _rows(real, "s07_t01")["ep-03"]
-    assert r7["offset_status"] == "none" and r7["offset_ms"] is None and r7["n_pairs"] == 1
-    assert r7["host_has_events"] is True
-    assert "ep-03" in real["res"]["stats"]["s07_t01"]["clock_flag"]
 
 
 @pytest.mark.slow
@@ -3042,7 +3034,7 @@ JSONL_ROOT = (PROCESSED / "jsonl").resolve()
 
 @pytest.fixture(scope="module")
 def real_scan():
-    """The step with the CO-19 export scan on the 11 allowlisted trials (in memory, write=False), recording opens."""
+    """The step with the CO-19 export scan on the 9 development trials (in memory, write=False), recording opens."""
     for t in ALLOWLIST:
         _db(t)
     before = {t: sha(PROCESSED / f"{t}.sqlite3") for t in ALLOWLIST}
@@ -3056,7 +3048,7 @@ def real_scan():
 
 @pytest.mark.slow
 def test_coa07_scan_opens_only_allowlisted_trials(real_scan):
-    """COA-07 guard: the scan opens only the 11 allowlisted trial DBs and, under data/processed/jsonl/, only those
+    """COA-07 guard: the scan opens only the 9 development trial DBs and, under data/processed/jsonl/, only those
     trials' folders; nothing under ground_truth/; DB hashes unchanged; no file is written (write=False)."""
     dbs = {Path(p).name for p in real_scan["paths"] if p.lower().endswith(".sqlite3")}
     assert dbs == {f"{t}.sqlite3" for t in ALLOWLIST}
@@ -3076,7 +3068,7 @@ def _chg_rows(real_scan, trial: str) -> list[dict]:
 @pytest.mark.slow
 def test_coa07_hits_listed_per_trial_and_flag_matches_d3_rule(real_scan):
     """COA-07: the hits per trial are listed, every export file passes the sha256 check, and the trial flag equals the
-    D3 rule recomputed from the rows (a counted change classified between / after / no_pairs). Today it is false on all 11."""
+    D3 rule recomputed from the rows (a counted change classified between / after / no_pairs). Today it is false on all 9."""
     lines = []
     for t in ALLOWLIST:
         st = real_scan["res"]["stats"][t]
@@ -3089,7 +3081,7 @@ def test_coa07_hits_listed_per_trial_and_flag_matches_d3_rule(real_scan):
         assert scan["export_scan_run"] is True and scan["files_skipped"] == 0 and scan["coverage_complete"] is True, t
         assert st["clock_change_in_window"] is expect, t
         assert real_scan["res"]["clock"][t]["flag"] is expect
-        assert st["clock_change_in_window"] is False, f"{t}: owner expects false on all 11 today"
+        assert st["clock_change_in_window"] is False, f"{t}: owner expects false on all 9 today"
         assert {r["classification"] for r in rows} <= {"routine", "expected_before_first_pair"}, t
         assert all(r["source"] == "export" for r in rows), t          # the existing DBs hold no 4616 / System 1
     print("\nCOA-07 hits per trial\n" + "\n".join(lines))
@@ -3102,7 +3094,7 @@ def test_coa07_counted_expected_steps_on_ep02_and_routine_ones(real_scan):
     def pick(t, cls):
         return [r for r in _chg_rows(real_scan, t) if r["classification"] == cls]
 
-    for t in ("s02_t00", "s06_t00", "s07_t00", "s02_t01", "s03_t01", "s06_t01", "s04_t01", "s07_t01"):
+    for t in ("s02_t00", "s06_t00", "s07_t00", "s02_t01", "s03_t01", "s06_t01"):   # the clock-only t01s: test_hist_*
         exp = pick(t, "expected_before_first_pair")
         assert exp and {r["host"] for r in exp} == {"ep-02"}, t
         assert all(r["counted"] is True and abs(r["shift_ms"]) >= 1000 for r in exp), t
@@ -3113,13 +3105,13 @@ def test_coa07_counted_expected_steps_on_ep02_and_routine_ones(real_scan):
         assert rt and all(r["counted"] is False and abs(r["shift_ms"]) < 1000 for r in rt), t
     for t in ("s04_t00", "s05_t00"):
         assert _chg_rows(real_scan, t) == [], t
-    for t in ("s03_t01", "s06_t01", "s02_t01", "s04_t01", "s07_t01"):
+    for t in ("s03_t01", "s06_t01", "s02_t01"):
         assert pick(t, "routine") == [], t
 
 
 @pytest.mark.slow
 def test_coa07_offsets_unchanged_by_the_scan(real_scan, real):
-    """COA-07: the scan changes no offset: rows equal those of the run without the scan, on all 11 trials."""
+    """COA-07: the scan changes no offset: rows equal those of the run without the scan, on all 9 trials."""
     for t in ALLOWLIST:
         assert [(r["host"], r["offset_status"], r["offset_ms"], r["n_pairs"]) for r in real_scan["res"]["rows"][t]] == [
             (r["host"], r["offset_status"], r["offset_ms"], r["n_pairs"]) for r in real["res"]["rows"][t]], t
@@ -3216,8 +3208,8 @@ def _read_offsets_file(trial: str) -> tuple[list[str], list[dict]]:
 
 
 @pytest.mark.slow
-def test_sf4_real_clock_scan_is_complete_on_all_11_trials(real_scan):
-    """SF-4: on the 11 allowlisted trials every manifest-listed security/system export is read and every clock-change record
+def test_sf4_real_clock_scan_is_complete_on_all_9_trials(real_scan):
+    """SF-4: on the 9 development trials every manifest-listed security/system export is read and every clock-change record
     has a parseable time: clock_scan = complete in the fresh in-memory run (stats and rows), in the written offsets files
     under data/processed (read only), and in out/clock_offset/<trial>/clock_scan.json (read only)."""
     for t in ALLOWLIST:
@@ -3320,6 +3312,114 @@ def test_sf3_real_standalone_scan_equals_the_step_clock_events_and_scan_json(tmp
     for n in step:
         if (real_out / n).exists():
             assert (real_out / n).read_bytes() == step[n], n
+
+
+# ====================================================================================== historical clock-only trials
+#
+# s04_t01 and s07_t01 are the clock-only trials of decision 043 (spec 08 section 10). Their files were moved to
+# archive_x10_v1/ on 2026-11-17 (decision 034) and the ids now belong to the reruns, so nothing is recomputed here.
+# Each test reads the frozen T6b.1 result read-only: data/processed/archive_x10_v1/<trial>.clock_{offsets,changes}.csv and
+# out/clock_offset/archive_x10_v1/<trial>/{stats.json,clock_scan.json,pairs.csv}. It cannot be re-run from the archive
+# (the manifest rows moved to manifest_archive_x10_v1.csv), so these are frozen-evidence checks, not a regression of the code.
+# The folder missing altogether (another machine) skips; the folder present with a file missing FAILS, so the archive
+# cannot lose a file silently.
+
+def _hist_require_archive() -> None:
+    if not ARCHIVED_PROCESSED.is_dir() or not ARCHIVED_OUT.is_dir():
+        pytest.skip(f"archive {ARCHIVE_LABEL} not on this machine")
+
+
+def _hist_path(base: Path, *parts: str) -> Path:
+    _hist_require_archive()
+    p = base.joinpath(*parts)
+    assert p.is_file(), f"archive {ARCHIVE_LABEL} lost a file: {p}"
+    return p
+
+
+def _hist_offsets(trial: str) -> dict[str, dict]:
+    _, body = read_csv(_hist_path(ARCHIVED_PROCESSED, f"{trial}.clock_offsets.csv"))
+    return {r["host"]: r for r in body}
+
+
+def _hist_json(trial: str, name: str) -> dict:
+    return json.loads(_hist_path(ARCHIVED_OUT, trial, name).read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("trial", CLOCK_ONLY)
+def test_hist_offsets_equal_t6b1_reference(trial):
+    """COA-01 (historical): the archived offsets file equals the T6b.1 reference within 1 ms (the file rounds to whole ms)."""
+    rows = _hist_offsets(trial)
+    assert set(rows) == {"dc01", "ep-01", "ep-02", "ep-03"}
+    assert rows["dc01"]["offset_ms"] == "0" and rows["dc01"]["offset_status"] == "reference"
+    problems = []
+    for host, (n, med) in REFERENCE[trial].items():
+        r = rows[host]
+        if int(r["n_pairs"]) != n:
+            problems.append(f"{host}: n_pairs {r['n_pairs']} != {n}")
+        elif n <= 1:
+            if r["offset_status"] != "none" or r["offset_ms"] != "":
+                problems.append(f"{host}: {n} pairs must be none/empty, got {r['offset_status']}/{r['offset_ms']!r}")
+            if n == 1 and abs(float(r["median_ms"]) - med) > 1:
+                problems.append(f"{host}: median_ms {r['median_ms']} vs {med}")
+        elif r["offset_ms"] == "" or abs(float(r["offset_ms"]) - med) > 1 or r["offset_status"] not in ("ok", "wide"):
+            problems.append(f"{host}: offset {r['offset_ms']!r} / {r['offset_status']} vs {med}")
+    assert not problems, f"{trial}: " + "; ".join(problems)
+
+
+@pytest.mark.parametrize("trial", CLOCK_ONLY)
+def test_hist_trials_are_labelled_clock_only_and_have_pairs(trial):
+    """COA-04 (historical): the archived result labels the trial clock-only, has 4 rows, and its pairs.csv holds exactly
+    sum(n_pairs) rows; ep-01 sits more than 12 s behind dc01 (the skew of decision 032)."""
+    rows = _hist_offsets(trial)
+    assert _hist_json(trial, "stats.json")["trial_role"] == "clock-only"
+    assert len(rows) == 4
+    _, pairs = read_csv(_hist_path(ARCHIVED_OUT, trial, "pairs.csv"))
+    assert len(pairs) == sum(int(r["n_pairs"]) for r in rows.values()) > 0
+    assert rows["ep-01"]["offset_status"] == "ok"
+    assert float(rows["ep-01"]["offset_ms"]) < (-14_000 if trial == "s04_t01" else -12_000)
+
+
+@pytest.mark.parametrize("trial", CLOCK_ONLY)
+def test_hist_clock_only_trials_have_no_check_pairs(trial):
+    """Spec 10.5 (historical): neither trial has an endpoint-to-endpoint check pair (0 groups)."""
+    check = _hist_json(trial, "stats.json")["check"]
+    assert check["rows"] == [] and check["summary"]["groups"] == 0 and check["summary"]["pairs"] == 0
+
+
+def test_hist_s07_t01_ep03_one_pair_none_and_flagged():
+    """Spec 10.1 / 5 (historical): s07_t01 ep-03 has 1 pair -> none, has events, and is in clock_flag; s04_t01 has no flag."""
+    r = _hist_offsets("s07_t01")["ep-03"]
+    assert r["offset_status"] == "none" and r["offset_ms"] == "" and r["n_pairs"] == "1" and r["host_has_events"] == "true"
+    assert _hist_json("s07_t01", "stats.json")["clock_flag"] == ["ep-03"]
+    assert _hist_json("s04_t01", "stats.json")["clock_flag"] == []
+
+
+@pytest.mark.parametrize("trial", CLOCK_ONLY)
+def test_hist_counted_expected_steps_on_ep02_only_and_scan_complete(trial):
+    """COA-07 / SF-4 (historical): the only counted clock steps are the Security 4616 and System 1 of ep-02, classified
+    expected_before_first_pair, none routine; the scan was complete and no change fell inside the window."""
+    _, changes = read_csv(_hist_path(ARCHIVED_PROCESSED, f"{trial}.clock_changes.csv"))
+    assert changes and {r["host"] for r in changes} == {"ep-02"}
+    assert {r["classification"] for r in changes} == {"expected_before_first_pair"}
+    assert {r["channel"] for r in changes} == {"Security", "System"}
+    assert all(r["counted"] == "true" and abs(int(r["shift_ms"])) >= 1000 for r in changes)
+    stats, scan = _hist_json(trial, "stats.json"), _hist_json(trial, "clock_scan.json")
+    assert stats["clock_scan"] == scan["clock_scan"] == "complete"
+    assert stats["clock_change_in_window"] is False and scan["clock_change_in_window"] is False
+    assert scan["manifest_files_skipped"] == 0 and scan["clock_change_records_without_time"] == 0
+
+
+@pytest.mark.parametrize("trial", CLOCK_ONLY)
+def test_hist_archived_files_are_intact(trial):
+    """SF-3 (historical): the archived offsets file still names the archived DB and changes file by SHA-256 (the archive
+    moved them unchanged), and stats.json records the same DB hash before and after the original run."""
+    rows = _hist_offsets(trial)
+    db, changes = (_hist_path(ARCHIVED_PROCESSED, f"{trial}.sqlite3"),
+                   _hist_path(ARCHIVED_PROCESSED, f"{trial}.clock_changes.csv"))
+    assert {r["db_sha256"] for r in rows.values()} == {sha(db)}
+    assert {r["clock_changes_sha256"] for r in rows.values()} == {sha(changes)}
+    stats_db = _hist_json(trial, "stats.json")["db"]
+    assert stats_db["sha256_before"] == stats_db["sha256_after"] == sha(db)
 
 
 # ====================================================================================== clock_changes.csv dedupe (owner 2026-11-12)
