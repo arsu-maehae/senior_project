@@ -15,12 +15,14 @@ import shutil
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
+from .inputs import EvalError
 from .link_accuracy import FACT_COLUMNS, HOP_COUNTS, KEYED_COLUMNS, KEYED_COUNTS, TOTAL_COLUMNS, SCOPES
 from .params import PROTOCOL_GROUP_ORDER, SPLIT_DEVELOPMENT, TIER_ORDER
 
 __all__ = ["KEYED_FILE", "FACTS_FILE", "TOTALS_FILE", "JSON_FILE", "MD_FILE", "RUN_INFO_FILE", "SUMMARY_CSV",
-           "SUMMARY_MD", "SUMMARY_COLUMNS", "SENTENCES", "md_header", "csv_text", "json_text", "file_facts",
-           "trial_json", "trial_md", "summary_rows", "summary_md", "replace_folder"]
+           "SUMMARY_MD", "LABEL_RECALL_FILE", "LABEL_RECALL_MD", "SUMMARY_COLUMNS", "SENTENCES", "md_header",
+           "csv_text", "json_text", "file_facts",
+           "trial_json", "trial_md", "summary_rows", "summary_md", "kept_file_refusal", "replace_folder"]
 
 KEYED_FILE = "link_accuracy_hops.csv"
 FACTS_FILE = "link_facts_hops.csv"
@@ -30,6 +32,9 @@ MD_FILE = "link_accuracy.md"
 RUN_INFO_FILE = "run_info.json"
 SUMMARY_CSV = "link_accuracy_summary.csv"
 SUMMARY_MD = "link_accuracy_summary.md"
+# Labelling recall (PLAN T8.3; spec 04 LBA-04): one CSV per keyed trial folder, one report in the summary folder.
+LABEL_RECALL_FILE = "label_recall.csv"
+LABEL_RECALL_MD = "label_recall.md"
 
 # The three statements every report carries (051 item 8; spec 03 STA-05, L-ST1; spec 07 section 8).
 SENTENCES: tuple[str, ...] = (
@@ -231,13 +236,64 @@ def _remove(path: Path) -> None:
         path.unlink()
 
 
-def replace_folder(target: Path, files: Mapping[str, str]) -> None:
+def _csv_trial_ids(path: Path) -> set[str] | None:
+    """The distinct ``trial_id`` values of a CSV, or None when it has no such column or cannot be read."""
+    try:
+        with open(path, encoding="utf-8", newline="") as fh:
+            reader = csv.DictReader(fh)
+            if "trial_id" not in (reader.fieldnames or []):
+                return None
+            return {r["trial_id"] for r in reader}
+    except (OSError, UnicodeDecodeError, csv.Error):
+        return None
+
+
+def kept_file_refusal(target: Path, files: Mapping[str, str], keep: Iterable[str], trial_id: str) -> str | None:
+    """Why the files ``replace_folder`` would carry over from ``target`` do not belong to ``trial_id``, else None
+    (stage review S06).
+
+    WHY: the carry-over copies the other evaluation's files into the new folder. With ``--out`` naming another
+    trial's folder, those would be another trial's outputs presented under this trial. Every kept CSV must have a
+    ``trial_id`` column whose values all equal ``trial_id`` (a header-only CSV passes); every kept JSON object must
+    have ``trial_id`` = ``trial_id``. Other kept files (``.md``) are not read. Reads only; names files, never content.
+    """
+    for name in sorted(set(keep) - set(files)):
+        path = Path(target) / name
+        if not path.is_file():
+            continue
+        if name.endswith(".csv"):
+            ids = _csv_trial_ids(path)
+            if ids is None or not ids <= {trial_id}:
+                return f"kept file {name} in {Path(target).name} is not an output of trial {trial_id}"
+        elif name.endswith(".json"):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                data = None
+            if not isinstance(data, dict) or data.get("trial_id") != trial_id:
+                return f"kept file {name} in {Path(target).name} is not an output of trial {trial_id}"
+    return None
+
+
+def replace_folder(target: Path, files: Mapping[str, str], keep: Iterable[str] = (),
+                   trial_id: str | None = None) -> None:
     """Write ``files`` into a fresh ``.<name>.tmp`` sibling, then swap it in for ``target``.
 
     WHY: the folder is rebuilt on each run, and a reader must never see a mix of old and new files. If the swap
     fails the old folder is renamed back.
+
+    ``keep`` names files of the OTHER evaluation that shares the folder (link accuracy and labelling recall, T8.3):
+    an existing ``target/<name>`` in ``keep`` and not in ``files`` is copied unchanged (bytes and times) into the new
+    folder before the swap, so running either evaluation never deletes the other's output. Anything else in the old
+    folder is still dropped, as before. With ``trial_id`` given, the kept files must belong to that trial
+    (``kept_file_refusal``); otherwise EvalError before anything is written.
     """
     target = Path(target)
+    keep = tuple(keep)
+    if trial_id is not None:
+        reason = kept_file_refusal(target, files, keep, trial_id)
+        if reason:
+            raise EvalError(f"refused: {reason}")
     parent = target.parent
     tmp, old = parent / f".{target.name}.tmp", parent / f".{target.name}.old"
     parent.mkdir(parents=True, exist_ok=True)
@@ -247,6 +303,9 @@ def replace_folder(target: Path, files: Mapping[str, str]) -> None:
     for name, text in sorted(files.items()):
         with open(tmp / name, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(text)
+    for name in sorted(set(keep) - set(files)):
+        if (target / name).is_file():
+            shutil.copy2(target / name, tmp / name)
     had_old = target.exists()
     if had_old:
         target.rename(old)

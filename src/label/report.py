@@ -77,14 +77,18 @@ def node_counts(node_rows: Sequence[Mapping[str, str]]) -> dict[str, Any]:
 
 
 def hop_counts(hop_rows: Sequence[Mapping[str, str]]) -> dict[str, Any]:
-    """Hops, hops in a path, hops with / without a labelled node (L-LB3), and the LSASS reads of the dump columns."""
+    """Hops, hops in a path, hops with a labelled node (any context, and context 0), hops in a path without a
+    labelled context = 0 node (L-LB3; stage review S03: a dump on a context = 1 node does not make a movement hop
+    labelled), and the LSASS reads of the dump columns."""
     states = [s for h in hop_rows for s in h["dump_labelled"].split(";") if s]
     in_path = [h for h in hop_rows if h["in_path"] == "1"]
     return {
         "rows": len(hop_rows),
         "in_path": len(in_path),
         "with_labelled_node": sum(1 for h in hop_rows if int(h["n_labelled_node_events"]) > 0),
-        "in_path_without_labelled_node": sum(1 for h in in_path if int(h["n_labelled_node_events"]) == 0),
+        "with_labelled_context0_node": sum(1 for h in hop_rows if int(h["n_labelled_context0_node_events"]) > 0),
+        "labelled_context0_node_events": sum(int(h["n_labelled_context0_node_events"]) for h in hop_rows),
+        "in_path_without_labelled_node": sum(1 for h in in_path if int(h["n_labelled_context0_node_events"]) == 0),
         "with_dump_reads": sum(1 for h in hop_rows if h["dump_event_uids"]),
         "dump_reads": len(states),
         "dump_reads_labelled": states.count("1"),
@@ -158,8 +162,12 @@ def report_md(stats: Mapping[str, Any], rules: Sequence[Rule]) -> str:
               "", "## Nodes and hops", "",
               f"- node rows: {nod['rows']}; labelled: {nod['labelled_rows']} ("
               + (", ".join(f"{k} {v}" for k, v in nod["labelled_rows_by_role_context"].items()) or "none") + ")",
-              f"- hops: {hop['rows']}; in a path: {hop['in_path']}; with a labelled node: {hop['with_labelled_node']};"
-              f" in a path without a labelled node (L-LB3): {hop['in_path_without_labelled_node']}",
+              f"- hops: {hop['rows']}; in a path: {hop['in_path']}; with a labelled node (any context): "
+              f"{hop['with_labelled_node']}; with a labelled context 0 node: {hop['with_labelled_context0_node']} "
+              f"({hop['labelled_context0_node_events']} labelled context 0 node events); in a path without a "
+              f"labelled context 0 node (L-LB3): {hop['in_path_without_labelled_node']}",
+              "- hop `techniques` and the L-LB3 count use context 0 nodes only: context 1 nodes (source-session "
+              "events, including the LSASS reads) stay out of NodeScore (Q6, decision 056).",
               f"- LSASS reads of the hop identity rows (facts only; they never change identity): "
               f"{hop['dump_reads']} (labelled {hop['dump_reads_labelled']}, unlabelled "
               f"{hop['dump_reads_unlabelled']}, outside the window {hop['dump_reads_outside_window']})"]

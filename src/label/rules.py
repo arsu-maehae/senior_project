@@ -8,7 +8,10 @@ subset. Anything else is refused, so a label can always be traced to one pinned 
 Hashes are taken over LF-normalised bytes (LB-13): a CRLF checkout of the same file hashes the same. Rule files are
 read only with ``yaml.safe_load`` (057). ``build_manifest_rows`` recomputes the manifest from the files and the
 locked table ``params.RULE_TABLE``; the run refuses a manifest that differs from it, and the same function wrote
-the committed ``manifest.csv`` (``python -m label.rules --write-manifest``).
+the committed ``manifest.csv`` (``python -m label.rules --write-manifest``). Because that check is self-referential,
+every rule file and the manifest are also pinned by literal SHA-256 values in ``params`` (``RULE_SHA256``,
+``MANIFEST_SHA256``; stage review S01): ``--write-manifest`` may rewrite the manifest, but loading refuses it until
+the pins are updated too, which needs a decision record.
 """
 from __future__ import annotations
 
@@ -28,12 +31,12 @@ from stitch.outputs import csv_text
 
 from .errors import LabelError
 from .matcher import Detection, compile_detection
-from .params import (LEVEL_VALUE, LICENSE_DRL, LICENSE_OWN, MANIFEST_COLUMNS, MANIFEST_FILE, OWN_RULE_LEVEL,
-                     RULE_TABLE, RULES_DIR, SIGMA_COMMIT, SOURCE_OWN, RuleEntry)
+from .params import (LEVEL_VALUE, LICENSE_DRL, LICENSE_OWN, MANIFEST_COLUMNS, MANIFEST_FILE, MANIFEST_SHA256,
+                     OWN_RULE_LEVEL, RULE_SHA256, RULE_TABLE, RULES_DIR, SIGMA_COMMIT, SOURCE_OWN, RuleEntry)
 
 __all__ = ["LogSource", "LOGSOURCES", "Rule", "RuleSet", "lf_bytes", "lf_sha256", "technique_tags", "tactic_tags",
            "parse_logsource", "parse_rule", "manifest_row", "build_manifest_rows", "manifest_text",
-           "parse_manifest_text", "check_rule_files", "load_rules", "main"]
+           "parse_manifest_text", "check_rule_files", "check_pins", "load_rules", "main"]
 
 _TECH = re.compile(r"^t\d{4}(\.\d{3})?$")
 _TACTIC = re.compile(r"^[a-z]+(-[a-z]+)*$")
@@ -297,14 +300,42 @@ def _row_differences(a: Mapping[str, str], b: Mapping[str, str]) -> list[str]:
     return [c for c in MANIFEST_COLUMNS if a.get(c) != b.get(c)]
 
 
-def load_rules(rules_dir: Path = RULES_DIR, table: Sequence[RuleEntry] = RULE_TABLE) -> RuleSet:
-    """Read the manifest, check the files against it (LB-10), check it equals the manifest recomputed from the files
-    and the locked table, and compile every rule (LB-04, LB-05). LabelError on any refusal."""
+_PIN_HINT = "a rule change needs a new decision record and updated pins in label/params.py (LB-10)"
+
+
+def check_pins(rules_dir: Path, table: Sequence[RuleEntry], manifest_raw: bytes,
+               pins: Mapping[str, str], manifest_pin: str) -> None:
+    """LB-10 pinned in code (stage review S01): every table rule has a pin, its file's LF SHA-256 equals the pin,
+    and the manifest's LF SHA-256 equals ``manifest_pin``. WHY before the manifest checks: the manifest is
+    recomputed from the same files, so only these literals catch a changed rule plus a rewritten manifest."""
+    d = Path(rules_dir)
+    unpinned = sorted({e.rule_id for e in table} ^ set(pins))
+    if unpinned:
+        raise LabelError(f"refused: rule ids {unpinned} differ between the locked table and the pins; {_PIN_HINT}")
+    for e in table:
+        path = d / e.file
+        if not path.is_file():
+            raise LabelError(f"refused: rule {e.rule_id} has no file {e.file} (LB-10)")
+        got = lf_sha256(path.read_bytes())
+        if got != pins[e.rule_id]:
+            raise LabelError(f"refused: rule file {e.file} SHA-256 {got} differs from its pin; {_PIN_HINT}")
+    got = lf_sha256(manifest_raw)
+    if got != manifest_pin:
+        raise LabelError(f"refused: rules manifest SHA-256 {got} differs from its pin; {_PIN_HINT}")
+
+
+def load_rules(rules_dir: Path = RULES_DIR, table: Sequence[RuleEntry] = RULE_TABLE,
+               pins: Mapping[str, str] = RULE_SHA256, manifest_pin: str = MANIFEST_SHA256) -> RuleSet:
+    """Read the manifest, check every rule file and the manifest against the pins in ``params`` (LB-10, S01), check
+    the files against the manifest, check it equals the manifest recomputed from the files and the locked table,
+    and compile every rule (LB-04, LB-05). LabelError on any refusal. ``pins`` / ``manifest_pin`` are arguments
+    only so that a test can load a synthetic rule set with its own pins; the run uses the defaults."""
     d = Path(rules_dir)
     mpath = d / MANIFEST_FILE
     if not mpath.is_file():
         raise LabelError(f"refused: rules manifest not found: {mpath}")
     raw = mpath.read_bytes()
+    check_pins(d, table, raw, pins, manifest_pin)
     text = lf_bytes(raw).decode("utf-8")
     rows = parse_manifest_text(text)
     check_rule_files(d, rows)

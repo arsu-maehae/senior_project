@@ -17,8 +17,8 @@ detection:
     selection:
         EventID: 5145
         ShareName|endswith:
-            - 'ADMIN$'
-            - 'C$'
+            - '\ADMIN$'
+            - '\C$'
         RelativeTargetName|endswith:
             - '.exe'
             - '.dll'

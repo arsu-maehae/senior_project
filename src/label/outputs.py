@@ -37,7 +37,8 @@ NODE_COLUMNS: tuple[str, ...] = (
     "max_level_value",
 )
 HOP_COLUMNS: tuple[str, ...] = (
-    "hop_id", "in_path", "n_node_events", "n_labelled_node_events", "techniques", "dump_event_uids", "dump_labelled",
+    "hop_id", "in_path", "n_node_events", "n_labelled_node_events", "n_labelled_context0_node_events", "techniques",
+    "dump_event_uids", "dump_labelled",
     "dump_rule_ids", "dump_max_level_value",
 )
 

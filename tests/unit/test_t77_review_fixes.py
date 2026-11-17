@@ -98,7 +98,8 @@ def test_atk17_evaluate_default_folder_unchanged_behaviour(tmp_path):
 def test_atk17_evaluate_trial_files_are_the_writer_names():
     from evaluate import writers
     assert set(em.TRIAL_FILES) == {writers.KEYED_FILE, writers.FACTS_FILE, writers.TOTALS_FILE, writers.JSON_FILE,
-                                   writers.MD_FILE, writers.RUN_INFO_FILE}
+                                   writers.MD_FILE, writers.RUN_INFO_FILE, writers.LABEL_RECALL_FILE}   # T8.3, 060
+    assert writers.LABEL_RECALL_FILE == "label_recall.csv"
 
 
 def test_atk17_stitch_and_evaluate_share_one_rule():

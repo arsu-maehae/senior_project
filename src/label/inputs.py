@@ -17,7 +17,7 @@ import json
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterator, Mapping
+from typing import Any, Callable, Iterator, Mapping, Sequence
 
 from answer_key.db import open_ro, sha256_file
 from stitch import inputs as st_inputs
@@ -26,11 +26,11 @@ from stitch.inputs import CheckedInputs, TrialPaths
 
 from .errors import LabelError
 from .events import EventScan, scan_events
-from .params import DB_COLUMNS, STITCH_FILES, STITCH_OUT_REL, VIEW
+from .params import DB_COLUMNS, STITCH_CSV_COLUMNS, STITCH_FILES, STITCH_OUT_REL, VIEW
 
 __all__ = ["StitchData", "DbRead", "stitch_call", "check_allowlist", "trial_paths", "stitch_dir", "check_allowed",
-           "missing_stitch_files", "read_json", "read_csv_rows", "load_stitch", "check_stitch_db", "check_columns",
-           "read_events"]
+           "missing_stitch_files", "read_json", "read_csv_rows", "check_stitch_file_hashes", "load_stitch",
+           "check_stitch_fresh", "check_stitch_db", "check_columns", "read_events"]
 
 
 def stitch_call(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
@@ -81,13 +81,24 @@ def read_json(path: Path) -> tuple[dict[str, Any], str]:
     return obj, hashlib.sha256(data).hexdigest()
 
 
-def read_csv_rows(path: Path) -> tuple[list[dict[str, str]], str]:
-    """All rows of a stitch CSV as text, and the SHA-256 of the bytes read (recorded in run_info.json)."""
+def read_csv_rows(path: Path, required: Sequence[str] = ()) -> tuple[list[dict[str, str]], str]:
+    """All rows of a stitch CSV as text, and the SHA-256 of the bytes read (recorded in run_info.json).
+
+    Refused when the header lacks a ``required`` column or a row's field count differs from the header (stage
+    review S05 c). WHY: the join must never read a missing column as empty text, which would quietly turn into
+    zero counts or unlabelled nodes."""
     try:
         data = Path(path).read_bytes()
-        rows = [dict(r) for r in csv.DictReader(io.StringIO(data.decode("utf-8"), newline=""))]
+        reader = csv.DictReader(io.StringIO(data.decode("utf-8"), newline=""))
+        rows = [dict(r) for r in reader]
     except (OSError, UnicodeDecodeError, csv.Error) as exc:
         raise LabelError(f"refused: cannot read {path}: {exc}") from exc
+    missing = [c for c in required if c not in (reader.fieldnames or [])]
+    if missing:
+        raise LabelError(f"refused: {Path(path).name} lacks required column(s): {', '.join(missing)}")
+    for i, r in enumerate(rows, start=1):
+        if None in r or any(v is None for v in r.values()):
+            raise LabelError(f"refused: {Path(path).name} data row {i} has a field count that differs from the header")
     return rows, hashlib.sha256(data).hexdigest()
 
 
@@ -102,8 +113,25 @@ class StitchData:
     file_sha256: dict[str, str] = field(default_factory=dict)
 
 
+def check_stitch_file_hashes(run_info: Mapping[str, Any], file_sha256: Mapping[str, str]) -> None:
+    """Stage review S05 b (replaces decision 058 point 10): every stitch CSV read must have the SHA-256 that the
+    stitch ``run_info.json`` records for it. WHY: the stitcher writes run_info last with every file's hash, so a
+    file regenerated or edited afterwards belongs to another stitch run and must not be joined. Pure."""
+    files = run_info.get("files")
+    for name, sha in sorted(file_sha256.items()):
+        if name == "run_info.json":
+            continue
+        rec = files.get(name) if isinstance(files, Mapping) else None
+        want = rec.get("sha256") if isinstance(rec, Mapping) else None
+        if not isinstance(want, str) or not want:
+            raise LabelError(f"refused: stitch run_info.json records no SHA-256 for {name}")
+        if want.lower() != sha.lower():
+            raise LabelError(f"refused: stitch {name} SHA-256 {sha} differs from stitch run_info.json {want}")
+
+
 def load_stitch(folder: Path) -> StitchData:
-    """Read the five stitch files (spec 2); LabelError naming every missing one."""
+    """Read the five stitch files (spec 2); LabelError naming every missing one, a CSV lacking a column the join
+    reads (``STITCH_CSV_COLUMNS``), or a CSV whose hash differs from the stitch run_info (S05 b, c)."""
     missing = missing_stitch_files(folder)
     if missing:
         raise LabelError(f"refused: stitch output(s) missing in {folder}: {', '.join(missing)}")
@@ -112,10 +140,39 @@ def load_stitch(folder: Path) -> StitchData:
     data.run_info, data.file_sha256["run_info.json"] = read_json(d / "run_info.json")
     for name, attr in (("path_nodes.csv", "path_nodes"), ("hops.csv", "hops"),
                        ("hop_artefacts.csv", "hop_artefacts"), ("hop_identity.csv", "hop_identity")):
-        rows, sha = read_csv_rows(d / name)
+        rows, sha = read_csv_rows(d / name, STITCH_CSV_COLUMNS[name])
         setattr(data, attr, rows)
         data.file_sha256[name] = sha
+    check_stitch_file_hashes(data.run_info, data.file_sha256)
     return data
+
+
+def _recorded(run_info: Mapping[str, Any], *path: str) -> str:
+    """A non-empty text value at ``path`` of the stitch run_info, lower-cased; LabelError when absent."""
+    cur: Any = run_info
+    for p in path:
+        cur = cur.get(p) if isinstance(cur, Mapping) else None
+    if not isinstance(cur, str) or not cur.strip():
+        raise LabelError(f"refused: stitch run_info.json lacks {'.'.join(path)}")
+    return cur.strip().lower()
+
+
+def check_stitch_fresh(run_info: Mapping[str, Any], checked: CheckedInputs) -> None:
+    """Stage review S05 a: the stitch run must have read the current gate stats and clock files. Its run_info
+    ``gate_stats_sha256`` must equal the SHA-256 of the current gate ``stats.json``, and its ``window``
+    ``offsets_sha256`` / ``clock_changes_sha256`` the SHA-256 of the current clock files. WHY: after a gate or clock
+    re-run the stitch outputs are stale, and joining labels to them would mix two input states. Pure."""
+    want = _recorded(run_info, "gate_stats_sha256")
+    if want != checked.gate_stats_sha256.lower():
+        raise LabelError(f"refused: stitch run_info.json gate_stats_sha256 {want} differs from the current gate "
+                         f"stats.json {checked.gate_stats_sha256}; re-run the stitcher")
+    clock = checked.clock
+    for key, current in (("offsets_sha256", clock.offsets.file_sha256 if clock.offsets else ""),
+                         ("clock_changes_sha256", clock.changes.file_sha256 if clock.changes else "")):
+        want = _recorded(run_info, "window", key)
+        if want != str(current).lower():
+            raise LabelError(f"refused: stitch run_info.json window.{key} {want} differs from the current clock file "
+                             f"{current!r}; re-run the stitcher")
 
 
 def check_stitch_db(run_info: Mapping[str, Any], db_sha: str) -> None:

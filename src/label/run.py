@@ -19,8 +19,8 @@ from stitch.index import jsonable
 from stitch.inputs import CheckedInputs, TrialPaths
 
 from .events import count_keys
-from .inputs import (DbRead, StitchData, check_allowed, check_allowlist, load_stitch, read_events, stitch_dir,
-                     trial_paths)
+from .inputs import (DbRead, StitchData, check_allowed, check_allowlist, check_stitch_fresh, load_stitch,
+                     read_events, stitch_dir, trial_paths)
 from .join import hop_label_rows, label_facts, node_label_rows, stitch_copy_groups
 from .labels import Match, apply_rules, wanted
 from .outputs import (EVENT_COLUMNS, EVENT_LABELS_FILE, HOP_COLUMNS, HOP_LABELS_FILE, NODE_COLUMNS,
@@ -108,13 +108,16 @@ def build_files(repo: Path, trial_id: str, paths: TrialPaths, checked: CheckedIn
 def label_trial(repo: Path, trial_id: str, params: LabelParams = LabelParams(), rules_dir: Path = RULES_DIR,
                 generated_utc: str | None = None) -> TrialResult:
     """All refusals and reads, then ``build_files``. Order: allowlist (no file touched before it, LB-00); gate,
-    window and clock checks (``stitch.inputs.check_allowed``); stitch outputs present and readable; rule files and
-    manifest (LB-10); the DB hash bracket. Raises LabelError on any refusal; writes nothing."""
+    window and clock checks (``stitch.inputs.check_allowed``); stitch outputs present, with the columns the join
+    reads and the hashes their run_info records; the stitch run read the current gate stats and clock files (S05);
+    rule files and manifest against their pins (LB-10, S01); the DB hash bracket. Raises LabelError on any
+    refusal; writes nothing."""
     check_allowlist(trial_id)
     repo = Path(repo)
     paths = trial_paths(repo, trial_id)
     checked = check_allowed(paths)
     stitch = load_stitch(stitch_dir(repo, trial_id))
+    check_stitch_fresh(stitch.run_info, checked)
     rules = load_rules(rules_dir)
     db = read_events(checked, paths, stitch.run_info, wanted(rules.rules))
     return build_files(repo, trial_id, paths, checked, stitch, rules, db, params, generated_utc or utc_now())

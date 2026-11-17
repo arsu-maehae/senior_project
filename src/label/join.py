@@ -16,10 +16,11 @@ from typing import Iterable, Mapping, Sequence
 
 from gate.timeutil import to_us
 
+from .errors import LabelError
 from .labels import Match
 
 __all__ = ["MEMBER_SEP", "COPY_SEP", "DUMP_OUTSIDE", "LabelFacts", "label_facts", "stitch_copy_groups",
-           "uid_group", "node_facts", "node_label_rows", "dump_uids_of_hop", "hop_label_rows"]
+           "uid_group", "node_facts", "node_label_rows", "dump_time_us", "dump_uids_of_hop", "hop_label_rows"]
 
 MEMBER_SEP, COPY_SEP = ";", "|"
 DUMP_OUTSIDE = "outside_window"      # spec 3.4: a dump read that is not an in-window event (ST-63 look-back)
@@ -61,7 +62,7 @@ def stitch_copy_groups(hops: Iterable[Mapping[str, str]]) -> dict[str, frozenset
     """uid -> all uids of the same event as the stitcher lists them in ``member_logon_uids`` (ST-05 copies)."""
     out: dict[str, frozenset[str]] = {}
     for h in hops:
-        for item in (h.get("member_logon_uids") or "").split(MEMBER_SEP):
+        for item in h["member_logon_uids"].split(MEMBER_SEP):
             group = frozenset(u for u in item.split(COPY_SEP) if u)
             for u in group:
                 out[u] = out.get(u, frozenset()) | group
@@ -98,15 +99,27 @@ def node_label_rows(path_nodes: Sequence[Mapping[str, str]], facts: Mapping[str,
     ``context`` is carried unchanged so T9 can choose (Q6)."""
     rows = []
     for n in path_nodes:
-        f = node_facts(n.get("event_uid", ""), facts, copies)
+        f = node_facts(n["event_uid"], facts, copies)
         labelled = bool(f.rule_ids)
         rows.append({
-            "path_id": n.get("path_id", ""), "hop_id": n.get("hop_id", ""), "role": n.get("role", ""),
-            "context": n.get("context", ""), "host": n.get("host", ""), "event_uid": n.get("event_uid", ""),
+            "path_id": n["path_id"], "hop_id": n["hop_id"], "role": n["role"],
+            "context": n["context"], "host": n["host"], "event_uid": n["event_uid"],
             "labelled": "1" if labelled else "0", "rule_ids": _joined(f.rule_ids),
             "techniques": _joined(f.techniques), "max_level_value": _level_text(f.max_level_value),
         })
     return rows
+
+
+def dump_time_us(text: str, hop_id: str) -> int:
+    """A ``dump_utc_corrected`` cell as microseconds; LabelError when it is empty or does not parse (stage review
+    S05 d). WHY a refusal and not 0: a dump with no usable time would silently sort first and could hide which read
+    is which in ``dump_labelled``."""
+    try:
+        if not text:
+            raise ValueError("empty")
+        return to_us(text)
+    except (ValueError, TypeError) as exc:
+        raise LabelError(f"refused: hop_identity.csv hop {hop_id}: dump_utc_corrected does not parse ({exc})") from None
 
 
 def dump_uids_of_hop(identity_rows: Iterable[Mapping[str, str]]) -> dict[str, list[str]]:
@@ -114,12 +127,11 @@ def dump_uids_of_hop(identity_rows: Iterable[Mapping[str, str]]) -> dict[str, li
     dump's corrected time, then uid (the file has several rows per hop, one per account and read)."""
     seen: dict[str, dict[str, int]] = {}
     for r in identity_rows:
-        uid = r.get("dump_event_uid") or ""
+        uid = r["dump_event_uid"]
         if not uid:
             continue
-        t = r.get("dump_utc_corrected") or ""
-        us = to_us(t) if t else 0
-        slot = seen.setdefault(r.get("hop_id", ""), {})
+        us = dump_time_us(r["dump_utc_corrected"], r["hop_id"])
+        slot = seen.setdefault(r["hop_id"], {})
         slot[uid] = min(us, slot.get(uid, us))
     return {h: [u for u, _t in sorted(d.items(), key=lambda kv: (kv[1], kv[0]))] for h, d in seen.items()}
 
@@ -139,27 +151,36 @@ def hop_label_rows(hops: Sequence[Mapping[str, str]], node_rows: Sequence[Mappin
     """One ``hop_labels.csv`` row per ``hops.csv`` row, in its order (spec 3.4).
 
     ``n_node_events`` / ``n_labelled_node_events`` count distinct node event uids of the hop over all paths holding
-    it; ``techniques`` are those of its labelled node events. The dump columns are facts about the LSASS reads of the
+    it (any ``context``); ``n_labelled_context0_node_events`` counts those labelled on a ``context`` = 0 node row, and
+    ``techniques`` are those of the labelled ``context`` = 0 node rows only. WHY context 0 for techniques (stage
+    review S03; owner Q6 / 056: context 1 stays out of NodeScore): the context = 1 rows hold the source-session LSASS
+    reads (SR-01 / SR-02), so counting them would make a movement hop whose only label is a dump look labelled with
+    a movement technique family. The dump columns are facts about the LSASS reads of the
     hop's ``hop_identity.csv`` rows: ``dump_labelled`` holds one value per uid of ``dump_event_uids``, in the same
     order (several reads per hop are the rule in the data); they never change identity (Q1, Q2; ATK-L02).
     """
     by_hop: dict[str, dict[str, dict[str, str]]] = {}
+    ctx0: dict[str, dict[str, dict[str, str]]] = {}
     for n in node_rows:
         by_hop.setdefault(n["hop_id"], {})[n["event_uid"]] = n
+        if n["context"] == "0" and n["labelled"] == "1":
+            ctx0.setdefault(n["hop_id"], {})[n["event_uid"]] = n
     dumps = dump_uids_of_hop(identity_rows)
     rows = []
     for h in hops:
-        hid = h.get("hop_id", "")
+        hid = h["hop_id"]
         nodes = by_hop.get(hid, {})
         lab = [n for n in nodes.values() if n["labelled"] == "1"]
-        techs = {t for n in lab for t in n["techniques"].split(";") if t}
+        lab0 = ctx0.get(hid, {})
+        techs = {t for n in lab0.values() for t in n["techniques"].split(";") if t}
         d_uids = dumps.get(hid, [])
         d_facts = LabelFacts()
         for u in d_uids:
             d_facts.add(node_facts(u, facts, copies))
         rows.append({
-            "hop_id": hid, "in_path": h.get("in_path", ""), "n_node_events": str(len(nodes)),
-            "n_labelled_node_events": str(len(lab)), "techniques": _joined(techs),
+            "hop_id": hid, "in_path": h["in_path"], "n_node_events": str(len(nodes)),
+            "n_labelled_node_events": str(len(lab)), "n_labelled_context0_node_events": str(len(lab0)),
+            "techniques": _joined(techs),
             "dump_event_uids": ";".join(d_uids),
             "dump_labelled": ";".join(_dump_state(u, facts, in_window, copies) for u in d_uids),
             "dump_rule_ids": _joined(d_facts.rule_ids), "dump_max_level_value": _level_text(d_facts.max_level_value),

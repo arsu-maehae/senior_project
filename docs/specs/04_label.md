@@ -317,6 +317,11 @@ matches on development data stays in the list as locked (review ATK-L09).**
   (§10.4). After 056, 5 of the 14 locked rules still match nothing (SR-03, SR-11, SR-12, SR-50, SR-61). Two of the 7 failed
   because of value formats and were fixed or dropped (SR-10 P1, SR-42 P2). SR-61's field is padded too, but its
   selection fails even with trimming.
+- **L-LB5 Near duplicates with different payloads** (stage review ATK-S02). LB-03 matches only the smallest-uid copy.
+  A copy that would match while the representative does not is never labelled, and the other copies inherit the
+  representative's labels. There are 0 such groups in the development trials.
+- **L-LB6 Machine-account SMB** (stage review ATK-S07). SR-10 and SR-11 keep the SigmaHQ filter on subjects ending in
+  `$`, so SYSTEM-owned SMB access to admin shares is not labelled T1021.002.
 
 ## 10. Measurements (development trials only, read-only, 2026-11-17)
 Scripts in `out/label_measure/` (gitignored): `measure_t81.py`, `diag_t81.py`, `perhop_t81.py`. They import the
