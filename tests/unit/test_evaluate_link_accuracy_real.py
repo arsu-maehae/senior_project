@@ -68,6 +68,44 @@ def _evaluated(trial: str):
     return evaluate.evaluate_trial(REPO, trial, "development", REPO / "out" / "stitch" / trial)
 
 
+# ================================================================================================ committed out/ is current (T7.7)
+@pytest.mark.parametrize("trial", DEV)
+def test_committed_evaluate_run_info_records_the_current_stitch_files(trial):
+    """T7.7 / decision 054: out/evaluate/<trial>/run_info.json records the SHA-256 of the stitch files it read. With the
+    suite no longer rewriting out/stitch, the recorded hashes must equal the committed out/stitch files, run_info.json
+    included (this went stale after every full suite before T7.7)."""
+    if _missing(trial):
+        missing_input(_missing(trial))
+    info_path = REPO / "out" / "evaluate" / trial / "run_info.json"
+    if not info_path.is_file():
+        missing_input(f"{trial}: out/evaluate run_info.json missing")
+    inputs = json.loads(info_path.read_text(encoding="utf-8"))["inputs"]
+    stitch = REPO / "out" / "stitch" / trial
+    assert inputs["stitch_run_info_sha256"] == sha256_of(stitch / "run_info.json"),         f"{trial}: evaluate recorded another out/stitch run_info.json; rerun python -m evaluate --development"
+    for name, sha in sorted(inputs["stitch_files"].items()):
+        assert sha == sha256_of(stitch / name), f"{trial}: recorded stitch {name} hash is not the committed file's"
+
+
+@pytest.mark.parametrize("trial", DEV)
+def test_committed_out_evaluate_folder_equals_a_fresh_evaluation(trial):
+    """Every committed file but run_info.json is byte-identical to a fresh in-memory evaluation; run_info.json is
+    equal apart from generated_utc."""
+    res = _evaluated(trial)
+    if res is None:
+        missing_input(_missing(trial))
+    folder = REPO / "out" / "evaluate" / trial
+    if not folder.is_dir():
+        missing_input(f"{trial}: out/evaluate folder missing")
+    committed = {p.name: p.read_bytes() for p in sorted(folder.iterdir())}
+    assert sorted(committed) == sorted(res.files), f"{trial}: files {sorted(committed)}"
+    for name, text in res.files.items():
+        if name != "run_info.json":
+            assert committed[name] == text.encode("utf-8"), f"{trial}: out/evaluate/{trial}/{name} is not current"
+    old, new = json.loads(committed["run_info.json"]), json.loads(res.files["run_info.json"])
+    old.pop("generated_utc"), new.pop("generated_utc")
+    assert old == new, f"{trial}: run_info.json differs apart from generated_utc"
+
+
 def result(trial: str):
     got = _evaluated(trial)
     if got is None:

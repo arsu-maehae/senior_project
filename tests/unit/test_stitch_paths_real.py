@@ -6,18 +6,24 @@ Written from the spec, decision 050 and the approved t00 keys, not from the impl
 tests only (`src/stitch` never opens them). A key hop is matched to the stitch hop whose member 4624 uid is one of the
 key hop's `target_event_uids` (ST-25), through the `member_logon_uids` column of `hops.csv`.
 
-Writes: only through `stitch.__main__.main`, into `out/stitch/<development trial>/` (pipeline output, allowed). Nothing
-under `out/stitch_check/` is ever written; it is read as the T7.4 baseline. Assertion messages carry counts, hop ids
+Writes: only through `stitch.__main__.main --out`, into a tmp folder (`RUN_ROOT`, decision 054); nothing under out/ is
+ever written. `out/stitch_check/` is read as the T7.4 baseline, and `out/stitch/<trial>/` is read to check that the
+committed pipeline output equals a fresh run (T7.7). Assertion messages carry counts, hop ids
 and uids only, never command text.
 """
 from __future__ import annotations
 
+import atexit
 import csv
 import functools
 import hashlib
 import io
 import json
+import re
+import shutil
+import sqlite3
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +35,8 @@ sys.path.insert(0, str(REPO / "src"))
 
 from answer_key.db import sha256_file  # noqa: E402
 from clock_offset import params as co_params  # noqa: E402
+from clock_offset.correct import corrected_us, load_offsets  # noqa: E402
+from gate.timeutil import to_us  # noqa: E402
 from stitch import __main__ as stitch_main  # noqa: E402
 from stitch import check_index as ci  # noqa: E402
 from stitch import check_links as cl  # noqa: E402
@@ -47,6 +55,11 @@ CSV_TABLES = ["hop_artefacts.csv", "hop_identity.csv", "hops.csv", "links.csv", 
               "paths.csv"]
 T74_FILES = ["links.csv", "hop_artefacts.csv", "hop_identity.csv"]
 
+# T7.7 / decision 054: every `python -m stitch` run of this module writes into this tmp folder (`--out`), never under
+# out/ (the root conftest fails the session if anything under out/ is written). Removed when the process exits.
+RUN_ROOT = Path(tempfile.mkdtemp(prefix="stitch_paths_real_"))
+atexit.register(shutil.rmtree, RUN_ROOT, True)
+
 
 # ================================================================================================ helpers
 def _read(blob: bytes) -> list[dict[str, str]]:
@@ -60,8 +73,8 @@ def _written(trial: str) -> dict | None:
     paths = trial_paths(REPO, trial)
     if not paths.db.is_file() or not (paths.gate_dir / "stats.json").is_file():
         return None
-    code = stitch_main.main(["--trial", trial, "--repo", str(REPO)])
-    folder = REPO / "out" / "stitch" / trial
+    folder = RUN_ROOT / trial
+    code = stitch_main.main(["--trial", trial, "--repo", str(REPO), "--out", str(folder)])
     blobs = {p.name: p.read_bytes() for p in sorted(folder.iterdir())}
     tables = {n: _read(blobs[n]) for n in CSV_TABLES if n in blobs}
     return {"code": code, "blobs": blobs, "tables": tables, "folder": folder,
@@ -125,8 +138,8 @@ def test_the_run_writes_the_ten_files_with_the_expected_exit_code(trial):
 @pytest.mark.parametrize("trial", DEV)
 def test_two_runs_give_the_same_bytes_for_every_file_but_run_info(trial):
     first = written(trial)["blobs"]
-    assert stitch_main.main(["--trial", trial, "--repo", str(REPO)]) == 0
-    folder = REPO / "out" / "stitch" / trial
+    folder = RUN_ROOT / f"{trial}_second"
+    assert stitch_main.main(["--trial", trial, "--repo", str(REPO), "--out", str(folder)]) == 0
     for n in TEN_FILES:
         if n != "run_info.json":
             assert (folder / n).read_bytes() == first[n], f"{trial}: {n} differs between two runs"
@@ -327,6 +340,60 @@ def gate_remote_uids(trial: str) -> list[str]:
     return out
 
 
+# ================================================================================================ ST-01 over every file (PLAN 7.7)
+HEX64 = re.compile(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])")
+LOOKBACK_COLUMNS = ("open_session_uids", "end_unknown_session_uids")   # ST-63: the identity look-back only (039)
+US_PER_MS = 1000
+
+
+@functools.lru_cache(maxsize=None)
+def _corrected_times(trial: str) -> dict[str, int]:
+    """event uid -> corrected instant (CO-09: event_utc - offset of its host, through clock_offset.correct), read
+    from the DB read-only, independently of the stitcher's scan."""
+    db = REPO / "data" / "processed" / f"{trial}.sqlite3"
+    offsets = load_offsets(REPO / "data" / "processed" / f"{trial}.clock_offsets.csv")
+    con = sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True)
+    try:
+        rows = con.execute("select event_uid, host, event_utc from events_dedup").fetchall()
+    finally:
+        con.close()
+    return {u: corrected_us(to_us(t), h, offsets) for u, h, t in rows if u and t}
+
+
+def _window_us(trial: str) -> tuple[int, int]:
+    with open(REPO / "data" / "trial_windows.csv", encoding="utf-8", newline="") as fh:
+        (row,) = [r for r in csv.DictReader(fh) if r["trial_id"] == trial]
+    return to_us(row["start_utc"]), to_us(row["end_utc"])
+
+
+@pytest.mark.parametrize("trial", DEV)
+def test_st01_no_file_names_an_event_outside_the_window_except_the_identity_look_back_columns(trial):
+    """PLAN 7.7 / ST-01 / STT-12 on real data: an event outside the trial window is never a hop member, artefact,
+    source evidence or path node, in ANY of the ten files. Every 64-hex token that is an event uid of the DB must lie
+    in start <= t < end + 1 ms (corrected), except in `hop_identity.csv` `open_session_uids` /
+    `end_unknown_session_uids` (the ST-63 look-back, decision 039). Other 64-hex tokens are file hashes."""
+    w = written(trial)
+    times, (start, end) = _corrected_times(trial), _window_us(trial)
+
+    def outside(u: str) -> bool:
+        return u in times and not (start <= times[u] < end + US_PER_MS)
+
+    bad: list[str] = []
+    allowed_seen: set[str] = set()
+    for name, blob in w["blobs"].items():
+        if name == "hop_identity.csv":
+            for r in w["tables"][name]:
+                for col, value in r.items():
+                    for u in HEX64.findall(value or ""):
+                        if outside(u):
+                            (allowed_seen.add(u) if col in LOOKBACK_COLUMNS else bad.append(f"{name}:{col}:{u[:12]}"))
+        else:
+            bad += [f"{name}:{u[:12]}" for u in sorted(set(HEX64.findall(blob.decode("utf-8")))) if outside(u)]
+    assert bad == [], f"{trial}: {len(bad)} out-of-window uid(s) in the outputs: " + "; ".join(bad[:8])
+    # the exception is real: every look-back uid listed is a session open logged BEFORE the window, never after it
+    assert all(times[u] < start for u in allowed_seen), f"{trial}: a look-back uid after the window"
+
+
 @pytest.mark.parametrize("trial", DEV)
 def test_sta01_every_remote_logon_is_a_member_of_exactly_one_hops_row_or_a_followup_of_exactly_one(trial):
     w, hs = written(trial), _hopset(trial)
@@ -411,6 +478,25 @@ def test_every_path_node_row_is_in_a_path_and_a_hop_of_that_path(trial):
 
 
 # ================================================================================================ T7.2-T7.4 results unchanged
+@pytest.mark.parametrize("trial", DEV)
+def test_the_committed_out_stitch_folder_equals_a_fresh_run(trial):
+    """T7.7: the suite no longer rewrites out/stitch, so the committed folder must still BE the current output: the
+    same ten names, every file but run_info.json byte-identical to a fresh run, run_info.json equal apart from its
+    timestamp (spec 3)."""
+    folder = REPO / "out" / "stitch" / trial
+    if not (folder / "run_info.json").is_file():
+        missing_input(f"{trial}: out/stitch folder missing")
+    fresh = written(trial)["blobs"]
+    committed = {p.name: p.read_bytes() for p in sorted(folder.iterdir())}
+    assert sorted(committed) == sorted(fresh) == sorted(TEN_FILES), f"{trial}: files {sorted(committed)}"
+    for n in TEN_FILES:
+        if n != "run_info.json":
+            assert committed[n] == fresh[n], f"{trial}: out/stitch/{trial}/{n} differs from a fresh run"
+    old, new = (json.loads(committed["run_info.json"]), json.loads(fresh["run_info.json"]))
+    old.pop("generated_utc"), new.pop("generated_utc")
+    assert old == new, f"{trial}: run_info.json differs from a fresh run apart from generated_utc"
+
+
 @pytest.mark.parametrize("trial", DEV)
 def test_the_three_t74_files_have_the_baseline_sha256_of_t74_run_info(trial):
     base = REPO / CHECK_REL / trial / "t74_run_info.json"

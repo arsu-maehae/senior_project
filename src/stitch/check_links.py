@@ -1,4 +1,4 @@
-"""Development check of T7.3: ``python -m stitch.check_links --trial <id> [--repo PATH]``;
+"""Development check of T7.3: ``python -m stitch.check_links --trial <id> [--repo PATH] [--out DIR]``;
 run from the repository root after ``pip install -e .`` (see README).
 
 Runs ``links.run_links_checked`` (ST-00 with the development allowlist first, then one read-only hash bracket around
@@ -33,6 +33,7 @@ from .errors import StitchError
 from .hops import Hop
 from .index import jsonable, params_dict
 from .links import HostLimit, LinkIndex, run_links_checked
+from .outdir import check_out_target
 from .params import CHECK_OUT_REL, TOOL_VERSION, StitchParams
 from .source import LinkRow, SubjectLinks
 
@@ -182,11 +183,12 @@ def run_check(repo: Path, trial_id: str, params: StitchParams = StitchParams()) 
     return links_check_data(li, extra)
 
 
-def write_check(repo: Path, trial_id: str, data: dict[str, Any]) -> Path:
-    """Write ``out/stitch_check/<trial_id>/t73_links.json`` (UTF-8, LF) through a temporary file and ``os.replace``,
-    so an existing file is kept whole or replaced whole. The text is built before the folder is created."""
+def write_check(repo: Path, trial_id: str, data: dict[str, Any], out_dir: Path | None = None) -> Path:
+    """Write ``out/stitch_check/<trial_id>/t73_links.json`` (or ``<out_dir>/t73_links.json``, decision 054; UTF-8,
+    LF) through a temporary file and ``os.replace``, so an existing file is kept whole or replaced whole. The text
+    is built before the folder is created."""
     text = check_text(data)
-    out_dir = Path(repo) / CHECK_OUT_REL / trial_id
+    out_dir = Path(out_dir) if out_dir is not None else Path(repo) / CHECK_OUT_REL / trial_id
     out_dir.mkdir(parents=True, exist_ok=True)
     target = out_dir / CHECK_FILE
     tmp = out_dir / (CHECK_FILE + ".tmp")
@@ -201,14 +203,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="stitch.check_links", description=__doc__)
     ap.add_argument("--trial", required=True)
     ap.add_argument("--repo", type=Path, default=REPO)
+    ap.add_argument("--out", type=Path, default=None,
+                    help="folder of the check file (default out/stitch_check/<trial>)")
     a = ap.parse_args(argv)
     repo = a.repo.resolve()
     try:
         data = run_check(repo, a.trial)
+        out = a.out.resolve() if a.out is not None else None
+        if out is not None:
+            check_out_target(out, repo, None)       # decision 054: after ST-00; one file, nothing deleted
     except StitchError as exc:
         print(f"refused: {_reason(exc)}", file=sys.stderr)
         return 2
-    path = write_check(repo, a.trial, data)
+    path = write_check(repo, a.trial, data, out)
     c = data["counts"]
     print(f"{a.trial}: {c['hops']} hop(s), {c['followup_groups']} follow-up group(s), "
           f"{len(data['artefacts'])} artefact row(s), data limitation host(s): {c['data_limitation_hosts'] or 'none'}")

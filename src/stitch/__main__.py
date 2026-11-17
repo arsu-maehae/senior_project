@@ -1,10 +1,10 @@
-"""Stitch stage CLI: ``python -m stitch --trial <id> [--repo PATH]``; run from the repository root after
-``pip install -e .`` (see README).
+"""Stitch stage CLI: ``python -m stitch --trial <id> [--repo PATH] [--out PATH]``; run from the repository root
+after ``pip install -e .`` (see README).
 
 Runs ``links.run_links_checked`` (ST-00 with the development allowlist first, decision 046; every spec 2 refusal;
 then one read-only hash bracket around the scan, the command facts and the assembly), builds the T7.5 paths,
 nodes and notes (``nodes.build_path_outputs``, pure) and writes every file of spec 03_stitch section 3 to
-``out/stitch/<trial_id>/``:
+``out/stitch/<trial_id>/``, or to the folder given with ``--out`` (decision 054; mirrors ``python -m evaluate --out``):
 
 - ``links.csv``, ``hop_artefacts.csv``, ``hop_identity.csv`` (T7.4) and ``hops.csv``, ``paths.csv``,
   ``path_edges.csv``, ``path_nodes.csv`` (T7.5): text from ``stitch.outputs``, pure;
@@ -14,7 +14,11 @@ nodes and notes (``nodes.build_path_outputs``, pure) and writes every file of sp
   ``stats.json`` and ``report.md``, which are not tables). It is the only file with a timestamp
   (``generated_utc``), because spec 3 exempts it from byte-identity.
 
-A run replaces the whole folder with these ten files.
+A run replaces the whole folder with these ten files. A ``--out`` folder is checked after ST-00 and before anything
+is written (``outdir.check_out_target``): inside the repository it must lie below ``out/``, and an existing folder
+may hold only these ten names, because the swap below deletes the old folder (the default folder is rebuilt
+whatever it holds, spec 3). The bytes of every file except
+``run_info.json`` do not depend on the folder.
 
 WHY build everything first and write last: on any refusal nothing may be written and an existing folder must stay
 untouched (spec 2), so the texts are complete before the disk is touched. WHY a temporary sibling folder and two
@@ -42,6 +46,7 @@ from .index import jsonable, params_dict
 from .inputs import CheckedInputs, TrialPaths
 from .links import LinkIndex, run_links_checked
 from .nodes import PathNode, build_path_outputs
+from .outdir import check_out_target
 from .outputs import (ARTEFACT_COLUMNS, ARTEFACT_FILE, EDGES_COLUMNS, EDGES_FILE, HOPS_COLUMNS, HOPS_FILE,
                       IDENTITY_COLUMNS, IDENTITY_FILE, LINKS_COLUMNS, LINKS_FILE, NODES_COLUMNS, NODES_FILE,
                       PATHS_COLUMNS, PATHS_FILE, artefact_rows, csv_text, edge_rows, hop_rows, identity_rows,
@@ -50,11 +55,15 @@ from .params import STITCH_OUT_REL, TOOL_VERSION, StitchParams
 from .paths import PathSet
 from .report import report_md, stats_dict
 
-__all__ = ["RUN_INFO_FILE", "STATS_FILE", "REPORT_FILE", "check_db_unchanged", "csv_files", "path_csv_files",
-           "file_facts", "run_info", "run_info_text", "json_text", "build_files", "out_dir", "replace_folder", "main"]
+__all__ = ["RUN_INFO_FILE", "STATS_FILE", "REPORT_FILE", "OUTPUT_FILES", "check_db_unchanged", "csv_files",
+           "path_csv_files", "file_facts", "run_info", "run_info_text", "json_text", "build_files", "out_dir",
+           "replace_folder", "main"]
 
 RUN_INFO_FILE = "run_info.json"
 STATS_FILE, REPORT_FILE = "stats.json", "report.md"
+# The ten files of spec 3, sorted: the only names an existing ``--out`` folder may hold (decision 054).
+OUTPUT_FILES: tuple[str, ...] = tuple(sorted((LINKS_FILE, ARTEFACT_FILE, IDENTITY_FILE, HOPS_FILE, PATHS_FILE,
+                                              EDGES_FILE, NODES_FILE, STATS_FILE, REPORT_FILE, RUN_INFO_FILE)))
 
 
 def csv_files(li: LinkIndex) -> dict[str, tuple[str, int]]:
@@ -201,22 +210,28 @@ def _utc_now() -> str:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Parse arguments, run, write. Exit 0 on success (prints the folder), 2 on a refusal (reason on stderr,
-    nothing written, an existing folder left untouched)."""
+    nothing written, an existing folder left untouched). ``--out`` replaces the default ``out/stitch/<trial>``
+    folder (decision 054); it is checked only after ST-00, so a refused trial id still touches no file (046)."""
     ap = argparse.ArgumentParser(prog="stitch", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--trial", required=True)
     ap.add_argument("--repo", type=Path, default=REPO)
+    ap.add_argument("--out", type=Path, default=None,
+                    help="output folder (default out/stitch/<trial>); replaced whole on every run")
     a = ap.parse_args(argv)
     repo = a.repo.resolve()
     params = StitchParams()
     try:
         li, checked, paths, before, after = run_links_checked(repo, a.trial, params)
         check_db_unchanged(before, after)
+        target = out_dir(repo, a.trial)
+        if a.out is not None:                  # decision 054: the default folder is rebuilt as before (spec 3)
+            target = a.out.resolve()
+            check_out_target(target, repo, OUTPUT_FILES)
     except StitchError as exc:
         print(f"refused: {_reason(exc)}", file=sys.stderr)
         return 2
     files = build_files(repo, li, checked, paths, before, after, params, _utc_now())
-    target = out_dir(repo, a.trial)
     replace_folder(target, files)
     print(display_path(target, repo))
     return 0

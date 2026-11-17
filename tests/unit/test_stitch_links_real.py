@@ -1361,15 +1361,17 @@ def test_c1_other_test_trials_are_refused_before_any_file_of_them_is_opened(tria
 
 
 @pytest.mark.parametrize("trial", DEV)
-def test_c1_check_links_twice_gives_byte_identical_files_and_leaves_db_and_t72_index_unchanged(trial):
+def test_c1_check_links_twice_gives_byte_identical_files_and_leaves_db_and_t72_index_unchanged(trial, tmp_path):
+    """T7.7 / decision 054: both runs write into `tmp_path` (`--out`); out/stitch_check is only read."""
     paths = _paths_or_skip(trial)
     t72 = REPO / CHECK_REL / trial / "t72_index.json"
     t72_before = t72.read_bytes() if t72.is_file() else None
     sha_pre = sha256_file(paths.db)
-    out = REPO / CHECK_REL / trial / "t73_links.json"
-    assert cl.main(["--trial", trial, "--repo", str(REPO)]) == 0
+    out = tmp_path / "t73_links.json"
+    argv = ["--trial", trial, "--repo", str(REPO), "--out", str(tmp_path)]
+    assert cl.main(argv) == 0
     first = out.read_bytes()
-    assert cl.main(["--trial", trial, "--repo", str(REPO)]) == 0
+    assert cl.main(argv) == 0
     second = out.read_bytes()
     assert first == second, f"{trial}: two runs differ ({len(first)} / {len(second)} bytes)"
     assert first == check_text(_check_data(trial)).encode("utf-8")

@@ -29,4 +29,6 @@ python -m pytest
 
 Accepted values: `1`, `true`, `yes`, `on` (any case). Unset, empty or anything else means the default (skip). The switch lives in `tests/unit/real_data.py` (`missing_input`); a real-data test calls it, not `pytest.skip`, for an input that should exist on the owner's machine. A skip that is a property of the data or the machine (no symlink right, no `192.168.50.97` session in any development trial) stays a skip and is still counted: read the skip count and the reasons in the report. Decision 053 item 3.
 
+**Tests never write under `out/`** (decision 054). The root `conftest.py` snapshots all of `out/` when a session starts and ends, and fails the session if any file there was added, removed, changed or rewritten. A test that runs a CLI writes into a tmp folder: `python -m stitch --trial <id> --out DIR` (also `stitch.check_index` / `stitch.check_links --out DIR`, and `python -m evaluate --trial <id> --out DIR`). Inside the repository `--out` must lie below `out/`. After a real `python -m stitch` run, rerun `python -m evaluate --development`, because evaluate records the hashes of the stitch files it read and a test checks them.
+
 The full-import workflow was built for a specific dataset and is not a general-purpose importer. See the component README for its constraints, data links, commands and tests.

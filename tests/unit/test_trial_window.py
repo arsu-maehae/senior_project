@@ -1510,9 +1510,14 @@ def _gta06_one(trial: str, out_dir: Path) -> dict:
             "min_gap_s": min(gaps) if gaps else None, "n_uids": len(uids), "n_refs": len(refs), "missing": missing, "outside": outside}
 
 
+# Where the gta06 fixture wrote its report (a tmp folder; T7.7, decision 054).
+_GTA06_REPORT: dict[str, Path] = {}
+
+
 @pytest.fixture(scope="module")
 def gta06(tmp_path_factory):
-    """Computes all six trials once, prints the report and writes out/trial_window/gta06.md."""
+    """Computes all six trials once, prints the report and writes gta06.md into the module's tmp folder (T7.7, decision
+    054: tests write nothing under out/; the committed out/trial_window/gta06.md is the frozen copy of 2026-11-17)."""
     out_dir = tmp_path_factory.mktemp("gta06")
     results = {}
     for t in TRIALS:
@@ -1533,8 +1538,8 @@ def gta06(tmp_path_factory):
                          f"{len(r['outside'])} |")
     table = "\n".join(lines)
     print("\nGTA-06 report (report-only: end difference, smallest end gap)\n" + table)
-    dest = REPO / "out" / "trial_window" / "gta06.md"
-    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest = out_dir / "gta06.md"
+    _GTA06_REPORT["path"] = dest
     dest.write_text("# GTA-06 window start and containment (decision 040), RAW basis\n\n"
                     "Computed from the agent process tree on raw times (the keys are in raw time); the key is read by "
                     "the test only. "
@@ -1584,8 +1589,8 @@ def test_gta06_3_report_end_difference_and_min_gap(gta06, trial):
 
 @pytest.mark.slow
 def test_gta06_report_file_holds_six_rows(gta06):
-    """GTA-06 (report): out/trial_window/gta06.md has one row per trial."""
-    text = (REPO / "out" / "trial_window" / "gta06.md").read_text(encoding="utf-8")
+    """GTA-06 (report): the gta06.md report (in tmp) has one row per trial."""
+    text = _GTA06_REPORT["path"].read_text(encoding="utf-8")
     for t in TRIALS:
         assert f"| {t} |" in text
 

@@ -9,19 +9,22 @@ Groups: 1 T7.3 reproduced; 2 tiers and ranks; 3 identity facts against `identity
 files. Assertion messages carry counts, hop ids, session ids in hex, column names and uids only, never command text, a
 substring of one, or an account value that came from a command.
 
-Writes: only through `stitch.__main__.main`, into `out/stitch/<development trial>/` (pipeline output, allowed). The
-refused-trial test checks that nothing is written for `s02_t02`.
+Writes: only through `stitch.__main__.main --out`, into a tmp folder (`RUN_ROOT`, decision 054); nothing under out/.
+The refused-trial test checks that nothing is written for `s02_t02`.
 """
 from __future__ import annotations
 
+import atexit
 import collections
 import csv
 import functools
 import io
 import json
 import re
+import shutil
 import sqlite3
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -55,6 +58,10 @@ ENDPOINTS = {h for h in PARAMS.lab_host_ips if h.startswith("ep-")}
 TABLE_ORDER = ["s02_t00", "s02_t01", "s03_t00", "s03_t01", "s04_t00", "s05_t00", "s06_t00", "s06_t01", "s07_t00"]
 PORT, E4648, CMD, TARGET_ONLY = "sysmon3_port", "source_4648", "cmdline_target", "target_only"
 # T7.5: `python -m stitch` writes ten files (spec 03_stitch section 3)
+# T7.7 / decision 054: every `python -m stitch` run of this module writes into this tmp folder (`--out`), never under
+# out/ (the root conftest fails the session if anything under out/ is written). Removed when the process exits.
+RUN_ROOT = Path(tempfile.mkdtemp(prefix="stitch_outputs_real_"))
+atexit.register(shutil.rmtree, RUN_ROOT, True)
 TEN_FILES = ["hop_artefacts.csv", "hop_identity.csv", "hops.csv", "links.csv", "path_edges.csv", "path_nodes.csv",
              "paths.csv", "report.md", "run_info.json", "stats.json"]
 
@@ -650,11 +657,11 @@ def _written(trial: str) -> dict | None:
     paths = trial_paths(REPO, trial)
     if not paths.db.is_file() or not (paths.gate_dir / "stats.json").is_file():
         return None
-    folder = REPO / "out" / "stitch" / trial
+    folder = RUN_ROOT / trial
     names = ("links.csv", "hop_artefacts.csv", "hop_identity.csv")
     codes, got = [], []
     for _ in range(2):
-        codes.append(stitch_main.main(["--trial", trial, "--repo", str(REPO)]))
+        codes.append(stitch_main.main(["--trial", trial, "--repo", str(REPO), "--out", str(folder)]))
         got.append({n: (folder / n).read_bytes() for n in names})
     info = json.loads((folder / "run_info.json").read_text(encoding="utf-8"))
     return {"codes": codes, "files": got, "info": info, "extra": sorted(p.name for p in folder.iterdir())}
@@ -837,8 +844,8 @@ WHOLE_TEXT = ("stats.json", "report.md", "run_info.json")
 
 
 def _folder_bytes(trial: str) -> dict[str, bytes]:
-    written(trial)                                             # runs `python -m stitch` (twice, in process)
-    folder = REPO / "out" / "stitch" / trial
+    written(trial)                                             # runs `python -m stitch --out` (twice, in process)
+    folder = RUN_ROOT / trial
     return {p.name: p.read_bytes() for p in sorted(folder.iterdir())}
 
 

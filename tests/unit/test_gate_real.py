@@ -8,13 +8,14 @@ TEST only (`src/gate` never opens `ground_truth/`, GTT-14). GTA-06 (raw basis) l
 
 Read-only on the real files: `data/trial_windows.csv`, `data/processed/*` and `out/gate/<trial>/` are only READ (a
 module fixture checks their hashes before and after); every gate / window run writes into a temporary directory, and
-the report goes to `out/gate_tests/gta_report.md`.
+so does the report (T7.7, decision 054: tests write nothing under out/; the committed out/gate_tests/gta_report.md is
+the frozen copy of 2026-11-17).
 
 Expectations are built from the spec and the answer keys. The trigger-type event set of GTA-04 is computed here from
 the DB per spec section 3 (dispositions definition), not with the gate's own classifier.
 
 All tests are `@pytest.mark.slow`. Nothing is changed to make a test pass; a failure is reported as it is.
-`test_gta_report` writes `out/gate_tests/gta_report.md` (report only, asserts nothing beyond the file being written).
+`test_gta_report` writes the report into its `tmp_path` and prints it (report only; run with `-s` to read it).
 """
 from __future__ import annotations
 
@@ -44,7 +45,6 @@ TRIALS = ["s02_t00", "s03_t00", "s04_t00", "s05_t00", "s06_t00", "s07_t00"]
 PROCESSED = REPO / "data" / "processed"
 WINDOWS = REPO / "data" / "trial_windows.csv"
 OUT_GATE = REPO / "out" / "gate"
-OUT_REPORT = REPO / "out" / "gate_tests"          # the report is NOT written under out/gate (read-only for tests)
 APPROVED = REPO / "ground_truth" / "approved"
 #: spec 08 CO-09: statuses whose offset is subtracted; none / stale keep the raw time.
 APPLIED_STATUSES = frozenset({"reference", "ok", "wide"})
@@ -890,11 +890,10 @@ def raw_windows(tmp_path_factory: pytest.TempPathFactory) -> dict[str, dict[str,
 
 
 @pytest.mark.slow
-def test_gta_report(gate_runs, raw_windows):
-    """Report only: writes and prints `out/gate_tests/gta_report.md` (not under out/gate: tests only read that folder)."""
+def test_gta_report(gate_runs, raw_windows, tmp_path):
+    """Report only: writes the report into tmp and prints it (decision 054: nothing under out/ is written by a test)."""
     text = build_report(gate_runs, raw_windows)
-    OUT_REPORT.mkdir(parents=True, exist_ok=True)
-    dest = OUT_REPORT / "gta_report.md"
+    dest = tmp_path / "gta_report.md"
     dest.write_text(text, encoding="utf-8")
     print("\n" + text)
     assert dest.exists()
@@ -973,7 +972,7 @@ def test_gta07_every_key_hop_has_its_trigger_row_at_tier_a(gate_runs, trial, hop
 def test_gta07_near_window_counts_raw_and_corrected_are_reported_and_the_corrected_recount_agrees(
         gate_runs, raw_windows, trial):
     """GTA-07 (new): `near_window` counts on the raw and on the corrected basis are reported per trial (printed here and in
-    `out/gate_tests/gta_report.md`). The corrected counts of the gate (`stats.json`) must equal an independent recount from
+    the GTA report of `test_gta_report`). The corrected counts of the gate (`stats.json`) must equal an independent recount from
     the DB, the offsets file and the corrected window; the raw counts are report-only."""
     run = need(gate_runs, trial)
     if trial not in raw_windows:

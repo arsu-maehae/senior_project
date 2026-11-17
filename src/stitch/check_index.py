@@ -1,4 +1,4 @@
-"""Development check of T7.2: ``python -m stitch.check_index --trial <id> [--repo PATH]``;
+"""Development check of T7.2: ``python -m stitch.check_index --trial <id> [--repo PATH] [--out DIR]``;
 run from the repository root after ``pip install -e .`` (see README).
 
 Runs ST-00 (``check_allowed``), the read-only scan (``load_scan``) and the index (``build_index``), and writes
@@ -22,6 +22,7 @@ from gate.run import display_path
 from .errors import StitchError
 from .index import build_index, index_counts, params_dict
 from .inputs import CheckedInputs, check_allowed, load_scan, trial_paths
+from .outdir import check_out_target
 from .params import CHECK_OUT_REL, TOOL_VERSION, StitchParams
 
 REPO = Path(__file__).resolve().parents[2]
@@ -68,14 +69,16 @@ def check_text(data: Mapping[str, Any]) -> str:
     return json.dumps(data, sort_keys=True, indent=1, ensure_ascii=False) + "\n"
 
 
-def write_check(repo: Path, trial_id: str, data: Mapping[str, Any]) -> Path:
-    """Write ``out/stitch_check/<trial_id>/t72_index.json`` (UTF-8, LF) and return its path.
+def write_check(repo: Path, trial_id: str, data: Mapping[str, Any],
+                out_dir: Path | None = None) -> Path:
+    """Write ``out/stitch_check/<trial_id>/t72_index.json`` (or ``<out_dir>/t72_index.json``, decision 054) (UTF-8,
+    LF) and return its path.
 
     WHY a temporary file and ``os.replace``: an existing check file is either kept whole or replaced whole,
     never left half-written. The text is built before the folder is created.
     """
     text = check_text(data)
-    out_dir = Path(repo) / CHECK_OUT_REL / trial_id
+    out_dir = Path(out_dir) if out_dir is not None else Path(repo) / CHECK_OUT_REL / trial_id
     out_dir.mkdir(parents=True, exist_ok=True)
     target = out_dir / CHECK_FILE
     tmp = out_dir / (CHECK_FILE + ".tmp")
@@ -96,14 +99,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="stitch.check_index", description=__doc__)
     ap.add_argument("--trial", required=True)
     ap.add_argument("--repo", type=Path, default=REPO)
+    ap.add_argument("--out", type=Path, default=None,
+                    help="folder of the check file (default out/stitch_check/<trial>)")
     a = ap.parse_args(argv)
     repo = a.repo.resolve()
     try:
         data = run_check(repo, a.trial)
+        out = a.out.resolve() if a.out is not None else None
+        if out is not None:
+            check_out_target(out, repo, None)       # decision 054: after ST-00; one file, nothing deleted
     except StitchError as exc:
         print(f"refused: {_reason(exc)}", file=sys.stderr)
         return 2
-    path = write_check(repo, a.trial, data)
+    path = write_check(repo, a.trial, data, out)
     s, p = data["sessions"], data["processes"]
     print(f"{a.trial}: {sum(s['per_host'].values())} session(s), window_view {s['window_view']}, "
           f"{p['processes']} process(es), {p['collapsed_pairs']} collapsed pair(s)")
