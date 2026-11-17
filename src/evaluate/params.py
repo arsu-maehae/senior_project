@@ -11,7 +11,8 @@ from pathlib import Path
 
 from clock_offset.params import DEVELOPMENT_TRIALS
 
-__all__ = ["TOOL_VERSION", "EVAL_OUT_REL", "STITCH_OUT_REL", "LABEL_OUT_REL", "APPROVED_KEYS_REL", "KEY_LOCK_REL",
+__all__ = ["TOOL_VERSION", "EVAL_OUT_REL", "STITCH_OUT_REL", "LABEL_OUT_REL", "SCORE_OUT_REL", "APPROVED_KEYS_REL",
+           "KEY_LOCK_REL",
            "DB_REL",
            "DB_SUFFIX", "SUMMARY_DIR_NAME", "STITCH_FILES", "STITCH_RUN_INFO", "ENDPOINTS", "SPLIT_DEVELOPMENT",
            "SPLIT_TEST", "split_of", "Q9_READS", "Q9_VARIANTS", "DEFAULT_VARIANT", "SYSTEM_ACCOUNTS",
@@ -27,6 +28,9 @@ EVAL_OUT_REL = Path("out/evaluate")
 STITCH_OUT_REL = Path("out/stitch")
 # The label stage output read by the labelling recall (spec 04 §3.4; PLAN T8.3).
 LABEL_OUT_REL = Path("out/label")
+# The score stage output read by the development ranking check (spec 05 SCA-06; PLAN T9.5); read as files, never
+# imported (T9.5 brief, decision 051 item 1 spirit).
+SCORE_OUT_REL = Path("out/score")
 APPROVED_KEYS_REL = Path("ground_truth/approved")
 # Written by the owner only (decision 051 item 9); this package reads it for split = test and never writes it.
 KEY_LOCK_REL = Path("ground_truth/key_lock.csv")
