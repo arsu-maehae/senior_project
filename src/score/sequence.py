@@ -1,4 +1,4 @@
-"""Technique sequence of a path (spec 05_score SC-20, SC-21, SC-21b; decision 062 item 3, option S1).
+"""Technique sequence of a path (spec 05_score SC-20, SC-21, SC-21b; decision 062 item 4, option S1).
 
 A path's "edges" for TPPR Eq. 5-7 are the transitions of its technique sequence (SC-23 substitution). The sequence:
 hops in chain order (``path_edges``, then ``first_utc_corrected``, then ``hop_id``); within a hop its technique set
@@ -97,7 +97,7 @@ def sort_techniques(techniques: Iterable[str], stage: Mapping[str, int]) -> list
 def technique_sequence(chain: Sequence[str], hop_techs: Mapping[str, Mapping[str, tuple[str, ...]]],
                        stage: Mapping[str, int]) -> tuple[SeqItem, ...]:
     """The path's technique sequence (SC-21): hops in ``chain`` order, each hop's set sorted, first appearance kept.
-    Each item remembers its hop, so SC-21b can tell a hop-boundary transition from a within-hop one."""
+    Each item remembers its hop, so SC-21b can tell a chain-edge boundary from a within-hop or sibling one."""
     seen: set[str] = set()
     out: list[SeqItem] = []
     for hop in chain:

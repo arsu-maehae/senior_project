@@ -2,8 +2,9 @@
 
 WHY column tuples here and nowhere else: they are the spec contract, a test can compare them with the spec, and
 ``csv_text`` (the stitcher's) refuses a row whose keys differ from the column list, so a column cannot be added or
-dropped silently. Scores are written with 6 decimals after rounding to the 12-decimal tie value (SC-41), so the text
-of two tied paths is always equal. Pure: no file is opened.
+dropped silently. Scores and components are written with 12 decimals, the rounding ties are decided on (SC-41;
+ATK-SC-24, decision 069 item 4), so the written value IS the tie value: two tied paths always print equal, and two
+paths that print equal are tied. Pure: no file is opened.
 """
 from __future__ import annotations
 
@@ -28,11 +29,12 @@ STATS_FILE, REPORT_FILE, RUN_INFO_FILE = "stats.json", "report.md", "run_info.js
 OUTPUT_FILES: tuple[str, ...] = tuple(sorted((RANKED_FILE, STEPS_FILE, UNITS_FILE, IDENTITY_VALUES_FILE, B0_FILE,
                                               STATS_FILE, REPORT_FILE, RUN_INFO_FILE)))
 
-# Spec 3.1, in spec order.
+# Spec 3.1, in spec order; ``n_hops_unknown`` after ``n_crossings_flagged`` (ATK-SC-06, decision 069 item 5).
 RANKED_COLUMNS: tuple[str, ...] = (
     "trial_id", "variant", "rank", "tie_size", "path_id", "score", "length_score", "edge_score", "seq_len",
     "node_score", "n_node_units", "node_score_ctx1", "identity_coherence", "identity_low", "identity_high",
-    "n_crossings", "n_crossings_coherent", "n_crossings_flagged", "n_hops", "hop_ids", "hosts", "isolated",
+    "n_crossings", "n_crossings_coherent", "n_crossings_flagged", "n_hops_unknown", "n_hops", "hop_ids", "hosts",
+    "isolated",
     "merged_from", "multi_chain_parent", "technique_sequence", "best_tier_min", "clock_unreliable",
 )
 # Spec 3.2.
@@ -56,7 +58,8 @@ B0_COLUMNS: tuple[str, ...] = (
 
 
 def fmt_score(x: float) -> str:
-    """A score with 6 decimals, from the 12-decimal tie value (SC-41), so tied values print identically."""
+    """A score or component with 12 decimals, from the 12-decimal tie value (SC-41). WHY 12 and not 6 (ATK-SC-24):
+    evaluate and the sweep read the written values; at 6 decimals two paths ranked apart at 12 could read as tied."""
     return f"{tie_value(x):.{SCORE_DECIMALS}f}"
 
 
@@ -81,7 +84,8 @@ def _ranked_row(trial_id: str, variant: str, r: Ranked, ps: PathScore) -> dict[s
         "node_score_ctx1": fmt_score(ps.node_score_ctx1), "identity_coherence": fmt_score(idn.coherence),
         "identity_low": fmt_score(idn.low), "identity_high": fmt_score(idn.high),
         "n_crossings": str(idn.n_crossings), "n_crossings_coherent": str(idn.n_coherent),
-        "n_crossings_flagged": str(idn.n_flagged), "n_hops": p["n_hops"], "hop_ids": p["hop_ids"],
+        "n_crossings_flagged": str(idn.n_flagged), "n_hops_unknown": str(idn.n_unknown), "n_hops": p["n_hops"],
+        "hop_ids": p["hop_ids"],
         "hosts": p["hosts"], "isolated": p["isolated"], "merged_from": p["merged_from"],
         "multi_chain_parent": str(ps.multi_chain_parent), "technique_sequence": technique_sequence_text(ps),
         "best_tier_min": ps.best_tier_min, "clock_unreliable": str(ps.clock_unreliable),

@@ -13,16 +13,19 @@ from __future__ import annotations
 import csv
 import io
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from .inputs import EvalError, KeyData, StitchData, sha256_bytes
-from .params import SCORE_OUT_REL
+from .params import (FROZEN_ORDER_TABLE_SHA256, FROZEN_PARAM_TOLERANCE, FROZEN_SCORE_PARAMETERS,
+                     KEYED_DEVELOPMENT_TRIALS, LABEL_OUT_REL, SCORE_OUT_REL)
 
 __all__ = ["ScoreData", "SCORE_RUN_INFO", "RANKED_FILE", "B0_FILE", "UNITS_FILE", "RANKED_COLUMNS", "B0_COLUMNS",
-           "UNITS_COLUMNS", "PATH_VARIANTS", "default_score_dir", "load_score", "check_score_against_stitch",
-           "check_key_against_stitch", "default_params"]
+           "UNITS_COLUMNS", "PATH_VARIANTS", "default_score_dir", "default_label_dir", "load_score",
+           "check_score_against_stitch", "recorded_label_files", "label_file_hashes", "check_score_against_label",
+           "check_score_pins", "check_key_present", "check_key_against_stitch", "default_params"]
 
 SCORE_RUN_INFO = "run_info.json"
 RANKED_FILE = "ranked_paths.csv"
@@ -55,6 +58,11 @@ class ScoreData:
 def default_score_dir(repo: Path, trial: str) -> Path:
     """``out/score/<trial>``."""
     return Path(repo) / SCORE_OUT_REL / trial
+
+
+def default_label_dir(repo: Path, trial: str) -> Path:
+    """``out/label/<trial>`` (the label files the score run read, ATK-SC-18)."""
+    return Path(repo) / LABEL_OUT_REL / trial
 
 
 def _read(path: Path) -> bytes:
@@ -141,6 +149,73 @@ def check_score_against_stitch(score: ScoreData, stitch: StitchData) -> None:
         got = sorted(r["path_id"] for r in score.ranked if r["variant"] == variant)
         if got != want:
             raise EvalError(f"refused: score variant {variant} does not rank every stitch path exactly once (SC-04)")
+
+
+def recorded_label_files(score: ScoreData) -> dict[str, str]:
+    """name -> SHA-256 of every label file the score run read (its run_info ``inputs.label``). Refused when the map is
+    missing or empty, or names a path instead of a plain file name (it would point outside ``out/label/<t>/``)."""
+    recorded = (score.run_info.get("inputs") or {}).get("label")
+    if not isinstance(recorded, Mapping) or not recorded:
+        raise EvalError("refused: score run_info.json records no inputs.label hashes")
+    out: dict[str, str] = {}
+    for name, sha in sorted(recorded.items()):
+        if not isinstance(name, str) or Path(name).name != name or not isinstance(sha, str):
+            raise EvalError("refused: score run_info.json inputs.label holds an entry that is not file name -> hash")
+        out[name] = sha
+    return out
+
+
+def label_file_hashes(label_dir: Path, names: Sequence[str]) -> dict[str, str | None]:
+    """name -> current SHA-256 of ``label_dir/name`` (None when the file is missing). The only read of out/label."""
+    d = Path(label_dir)
+    return {n: (sha256_bytes((d / n).read_bytes()) if (d / n).is_file() else None) for n in names}
+
+
+def check_score_against_label(recorded: Mapping[str, str], current: Mapping[str, str | None]) -> None:
+    """ATK-SC-18 (decision 069 item 6): every label file the score run read must still have the hash it recorded.
+    WHY: after a label re-run the written NodeScore and sequences describe other labels; ranking them would mix two
+    input states, exactly what the score stage's own SC-02 refuses. Pure."""
+    for name, want in sorted(recorded.items()):
+        have = current.get(name)
+        if have is None:
+            raise EvalError(f"refused: label file {name} read by the score run is missing")
+        if have.lower() != want.lower():
+            raise EvalError(f"refused: label file {name} differs from the one the score run read; re-run score")
+
+
+def _close(a: float, b: float) -> bool:
+    """Equal within the absolute pin tolerance (1e-12)."""
+    return math.isclose(a, b, rel_tol=0.0, abs_tol=FROZEN_PARAM_TOLERANCE)
+
+
+def check_score_pins(score: ScoreData) -> None:
+    """ATK-SC-18 (decision 069 item 6): the score run must have used the frozen order table (run_info
+    ``order_table_sha256``) and the frozen parameters of decision 066 (run_info ``parameters``, each within 1e-12).
+    WHY: the development numbers are reported for one frozen method; a score run with another table or weights would
+    silently be evaluated as if it were that method. Parameters not pinned here (``order_tol_s``) are not compared.
+    Pure."""
+    sha = score.run_info.get("order_table_sha256")
+    if not isinstance(sha, str) or sha.lower() != FROZEN_ORDER_TABLE_SHA256:
+        raise EvalError("refused: score run_info.json order_table_sha256 differs from the frozen order table "
+                        "(decision 066)")
+    params = score.run_info.get("parameters")
+    if not isinstance(params, Mapping):
+        raise EvalError("refused: score run_info.json has no parameters map")
+    for name, want in sorted(FROZEN_SCORE_PARAMETERS.items()):
+        value = params.get(name)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise EvalError(f"refused: score run_info.json has no numeric parameters.{name}")
+        if not _close(float(value), want):
+            raise EvalError(f"refused: score run_info.json parameters.{name} = {value!r} differs from the frozen "
+                            f"value {want!r} (decision 066)")
+
+
+def check_key_present(trial: str, key: KeyData | None) -> None:
+    """ATK-SC-25 (decision 069 item 8): a development trial that must be keyed (``KEYED_DEVELOPMENT_TRIALS``) is
+    refused when no approved key file exists. WHY: ``load_key`` returns None for a missing development key, which
+    would silently drop the trial from top-1 / MRR / the S06 check. Pure."""
+    if key is None and trial in KEYED_DEVELOPMENT_TRIALS:
+        raise EvalError(f"refused: development trial {trial} must be keyed but has no approved key file")
 
 
 def check_key_against_stitch(key: KeyData | None, stitch: StitchData) -> None:

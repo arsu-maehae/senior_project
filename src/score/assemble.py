@@ -20,7 +20,8 @@ from .params import PATH_VARIANTS, TIER_ORDER, ScoreParams
 from .rank import Ranked, competition_ranks
 from .sequence import SeqItem, chain_order, hop_technique_uids, split_list, technique_sequence
 
-__all__ = ["PathScore", "TrialScores", "event_times", "first_times", "best_tier_min", "score_path", "score_trial"]
+__all__ = ["PathScore", "TrialScores", "event_times", "first_times", "best_tier_min", "identity_accounts",
+           "missing_member_accounts", "score_path", "score_trial"]
 
 Row = Mapping[str, str]
 
@@ -91,9 +92,10 @@ def score_path(path: Row, hop_ids: Sequence[str], edges: Sequence[Row], nodes: S
                params: ScoreParams) -> PathScore:
     """All components of one path: chain order and sequence (SC-21), steps and LengthScore (SC-21b..23), NodeScore
     with and without ``context`` = 1 (SC-30..32), IdentityCoherence (SC-53, SC-54), and each variant's score."""
-    chain = tuple(chain_order(hop_ids, [(e["from_hop_id"], e["to_hop_id"]) for e in edges], first_us))
+    pairs = [(e["from_hop_id"], e["to_hop_id"]) for e in edges]
+    chain = tuple(chain_order(hop_ids, pairs, first_us))
     seq = technique_sequence(chain, hop_technique_uids(nodes), ref.stage)
-    steps = tuple(transitions(seq, ref, params, event_us))
+    steps = tuple(transitions(seq, ref, params, event_us, frozenset(pairs)))     # ATK-SC-17: real edges only
     length = length_score(steps, params.lam)
     units = tuple(node_units(nodes, keys, ("0",)))
     n_score = node_score(units)
@@ -116,10 +118,28 @@ def _group(rows: Sequence[Row], key: str) -> dict[str, list[Row]]:
     return out
 
 
+def identity_accounts(accounts: Sequence[AccountIdentity]) -> dict[str, frozenset[str]]:
+    """hop_id -> the lower-cased accounts that have ``hop_identity.csv`` rows. WHY lower case: the stitcher groups a
+    hop's identity rows by the lower-cased member account (``stitch.identity.accounts_of``, account_key) and writes
+    the first member's spelling, so a member spelled in another case is the same account."""
+    out: dict[str, set[str]] = {}
+    for a in accounts:
+        out.setdefault(a.hop_id, set()).add(a.account.lower())
+    return {h: frozenset(v) for h, v in sorted(out.items())}
+
+
+def missing_member_accounts(hop_row: Row, have: frozenset[str]) -> list[str]:
+    """``hops.csv`` ``member_accounts`` of one hop (``;``-joined, one item per member; an empty item is a member with
+    a NULL account, which gives no identity row, decision 005) that have no identity row, lower-cased and sorted."""
+    return sorted({a.lower() for a in split_list(hop_row["member_accounts"])} - have)
+
+
 def _check_path_hops(path_id: str, hop_ids: Sequence[str], hop_rows: Mapping[str, Row],
-                     hop_ident: Mapping[str, HopIdentity]) -> None:
-    """Refuse a path whose hop is missing from ``hops.csv`` or from ``hop_identity.csv``: ST-60 writes identity rows
-    for every hop, so a gap means the stitch files disagree, and a silent gap would drop a crossing."""
+                     hop_ident: Mapping[str, HopIdentity], ident_accounts: Mapping[str, frozenset[str]]) -> None:
+    """Refuse a path whose hop is missing from ``hops.csv`` or from ``hop_identity.csv``, or whose hop names a member
+    account with no ``hop_identity.csv`` row: ST-60 writes identity rows for every (hop, member account), so a gap
+    means the stitch files disagree, and a silent gap would drop a crossing or an account from the denominator
+    (ATK-SC-20, decision 069 item 3; SC-02 refusal style)."""
     if not hop_ids:
         raise ScoreError(f"refused: paths.csv {path_id} lists no hop")
     for h in hop_ids:
@@ -127,6 +147,10 @@ def _check_path_hops(path_id: str, hop_ids: Sequence[str], hop_rows: Mapping[str
             raise ScoreError(f"refused: paths.csv {path_id} hop {h} is not in hops.csv")
         if h not in hop_ident:
             raise ScoreError(f"refused: paths.csv {path_id} hop {h} has no row in hop_identity.csv")
+        missing = missing_member_accounts(hop_rows[h], ident_accounts.get(h, frozenset()))
+        if missing:
+            raise ScoreError(f"refused: paths.csv {path_id} hop {h}: {len(missing)} hops.csv member account(s) "
+                             f"without a row in hop_identity.csv (ATK-SC-20)")
 
 
 def score_trial(inp: ScoreInputs, ref: OrderReference, params: ScoreParams) -> TrialScores:
@@ -141,11 +165,12 @@ def score_trial(inp: ScoreInputs, ref: OrderReference, params: ScoreParams) -> T
     event_us = event_times(inp.event_labels)
     accounts = tuple(account_identities(inp.hop_identity))
     hop_ident = hop_identities(accounts)
+    ident_accounts = identity_accounts(accounts)
     edges, nodes = _group(inp.path_edges, "path_id"), _group(inp.node_labels, "path_id")
     paths: list[PathScore] = []
     for p in sorted(inp.paths, key=lambda r: r["path_id"]):
         hop_ids = split_list(p["hop_ids"])
-        _check_path_hops(p["path_id"], hop_ids, hop_rows, hop_ident)
+        _check_path_hops(p["path_id"], hop_ids, hop_rows, hop_ident, ident_accounts)
         paths.append(score_path(p, hop_ids, edges.get(p["path_id"], []), nodes.get(p["path_id"], []), hop_rows,
                                 first_us, keys, event_us, hop_ident, ref, params))
     ranked = {v: tuple(competition_ranks((ps.path_id, ps.scores[v]) for ps in paths)) for v in PATH_VARIANTS}

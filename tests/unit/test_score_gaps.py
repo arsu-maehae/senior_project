@@ -2,8 +2,7 @@
 SC-52, SC-54, section 3.5 stats; decision 067 items 4, 5; review cases ATK-SC-19, ATK-SC-20).
 
 Written from the spec and decisions, not from the code. Synthetic (fast); the real-data stats check is in
-`test_score_real.py`. The `xfail(strict=True)` tests are cases the current code is expected to fail: they must flip to
-passing when the fix lands (a strict xfail that passes is a failure, so the marker has to be removed then).
+`test_score_real.py`. Decision 069 items 1-3 (sibling boundary, per-account low / high, member account refusal).
 """
 from __future__ import annotations
 
@@ -113,14 +112,41 @@ def sibling_world():
     return w
 
 
-def test_sibling_hops_without_a_chain_edge_are_joined_by_a_hop_chain_step(tmp_path):
+def chained_world():
+    """The same two hops with a real chain edge h1 -> h2 in path_edges."""
+    w = sibling_world()
+    w.edges = [fx.edge("p0010", "h1", "h2", link="host_time", delta="1000")]
+    return w
+
+
+def test_decision_069_item_1_sibling_boundary_without_a_chain_edge_is_scored_against_the_templates(tmp_path):
+    """ATK-SC-17 (amends 067 item 4): no chain edge -> the boundary step is not hop_chain; execution -> initial-access has
+    no template path, so it is `absent` (ScoreE = 0.5 * 0 + 0.5 * 0.01)."""
     res = run(tmp_path, sibling_world())
     steps = [s for s in rows(res, "path_steps.csv") if s["path_id"] == "p0010"]
-    assert [s["basis"] for s in steps] == ["direct", "direct", "hop_chain", "indirect"]   # h1: 2 direct; boundary; h2: 1
+    assert [s["basis"] for s in steps] == ["direct", "direct", "absent", "indirect"]
     boundary = steps[2]
     assert (boundary["from_technique"], boundary["to_technique"]) == ("T1569.002", "T1078")
-    assert float(boundary["score_e"]) == pytest.approx(1.0) and float(boundary["tactic_score"]) == pytest.approx(1.0)
-    assert full(res)["p0010"]["technique_sequence"] == "T1021.002>T1570>T1569.002>T1078>T1021.006"
+    assert float(boundary["score_e"]) == pytest.approx(0.005) and float(boundary["tactic_score"]) == pytest.approx(0.0)
+    assert boundary["time_delta_ms"] != ""                                              # the time gap is still reported
+    r = full(res)["p0010"]
+    assert r["technique_sequence"] == "T1021.002>T1570>T1569.002>T1078>T1021.006"
+    assert float(r["edge_score"]) == pytest.approx((1 + 1 + 0.005 + 0.5) / 4)
+
+
+def test_a_boundary_across_a_real_chain_edge_stays_hop_chain(tmp_path):
+    res = run(tmp_path, chained_world())
+    steps = [s for s in rows(res, "path_steps.csv") if s["path_id"] == "p0010"]
+    assert [s["basis"] for s in steps] == ["direct", "direct", "hop_chain", "indirect"]
+    assert float(steps[2]["score_e"]) == pytest.approx(1.0)
+    assert float(full(res)["p0010"]["edge_score"]) == pytest.approx(0.875)
+
+
+def test_a_chain_edge_raises_the_path_score_over_siblings_with_the_same_hops(tmp_path):
+    sib = full(run(tmp_path, sibling_world(), "s"))["p0010"]
+    chn = full(run(tmp_path, chained_world(), "c"))["p0010"]
+    assert float(chn["length_score"]) > float(sib["length_score"]) and float(chn["score"]) > float(sib["score"])
+    assert chn["technique_sequence"] == sib["technique_sequence"]
 
 
 def test_sibling_hop_order_comes_from_time_then_hop_id_and_never_from_the_list(tmp_path):
@@ -153,17 +179,35 @@ def test_two_account_hop_value_is_the_max_over_accounts_and_the_unflagged_expose
     assert float(r["identity_coherence"]) == 1.0 and float(r["identity_high"]) == 1.0
 
 
-@pytest.mark.xfail(strict=True, reason="ATK-SC-19: a flagged rejecting read of account B must not lower identity_low of a "
-                                       "hop that account A (unflagged, value 1) already makes coherent")
 def test_atk_sc19_identity_low_is_one_when_an_unflagged_account_already_gives_the_hop_value_one(tmp_path):
+    """Decision 069 item 2: low / high are decided per account (robust = value 1 and unflagged)."""
     r = full(run(tmp_path, two_account_world()))["p0020"]
-    assert float(r["identity_low"]) == 1.0
+    assert float(r["identity_low"]) == 1.0 and float(r["identity_coherence"]) == 1.0 and float(r["identity_high"]) == 1.0
     assert float(r["identity_low"]) <= float(r["identity_coherence"]) <= float(r["identity_high"])
+    assert r["n_crossings_flagged"] == "1"
 
 
-@pytest.mark.xfail(strict=True, reason="ATK-SC-20: a hops.csv member account without a hop_identity.csv row must be refused "
-                                       "(it would silently leave the crossing and the denominator)")
+def test_atk_sc19_a_hop_whose_only_exposed_account_is_flagged_has_low_zero_and_high_one(tmp_path):
+    w = two_account_world()
+    w.identity = [fx.ident("h1", "acctA", dump_event_uid="dA", open_session_uids="sA", order_within_uncertainty="1",
+                           clock_unreliable="1"),
+                  fx.ident("h1", "acctB", dump_event_uid="dB", open_session_uids="")]       # B: no open session, value 0
+    r = full(run(tmp_path, w))["p0020"]
+    assert (float(r["identity_low"]), float(r["identity_coherence"]), float(r["identity_high"])) == (0.0, 1.0, 1.0)
+
+
+def test_atk_sc19_two_flagged_rejecting_accounts_give_low_zero_coherence_zero_high_one(tmp_path):
+    w = two_account_world()
+    w.identity = [fx.ident("h1", a, dump_event_uid="d" + a, order_ok="0", order_margin_ms="-6000", gap_ms="-6000",
+                           order_within_uncertainty="1", open_session_uids="s" + a, clock_unreliable="1")
+                  for a in ("acctA", "acctB")]
+    r = full(run(tmp_path, w))["p0020"]
+    assert (float(r["identity_low"]), float(r["identity_coherence"]), float(r["identity_high"])) == (0.0, 0.0, 1.0)
+
+
 def test_atk_sc20_score_refuses_a_member_account_with_no_identity_row(tmp_path, capsys):
+    """Decision 069 item 3: a hops.csv member account without a hop_identity.csv row (it would silently leave the crossing
+    and the denominator) is refused, exit 2, nothing written."""
     w = fx.base_world()
     w.paths = [fx.path("p0021", "h1")]
     w.edges = []
@@ -184,3 +228,24 @@ def test_a_world_whose_member_accounts_all_have_identity_rows_is_accepted(tmp_pa
         for acct in h["member_accounts"].split(";"):
             assert (h["hop_id"], acct) in ident, (h["hop_id"], acct)
     assert len(full(run(tmp_path, w))) == 6
+
+
+def ghost_world(member_accounts, with_other_hop_ghost=False):
+    w = fx.base_world()
+    w.paths = [fx.path("p0021", "h1")]
+    w.edges = []
+    w.nodes = [dict(n, path_id="p0021") for n in w.nodes if n["path_id"] == "p0001"]
+    w.hops = [dict(h, member_accounts=member_accounts) if h["hop_id"] == "h1" else h for h in w.hops]
+    if with_other_hop_ghost:
+        w.hops = [dict(h, member_accounts="svc2;ghost") if h["hop_id"] == "h5" else h for h in w.hops]     # not on a path
+    return w
+
+
+def test_atk_sc20_member_account_spelled_in_another_case_is_the_same_account(tmp_path):
+    """The stitcher groups identity rows by the lower-cased member account, so SVC and svc are one account."""
+    assert len(full(run(tmp_path, ghost_world("SVC"))))  == 1
+
+
+def test_atk_sc20_only_hops_on_a_path_are_checked_and_an_empty_member_item_is_a_null_account(tmp_path):
+    assert len(full(run(tmp_path, ghost_world("svc", with_other_hop_ghost=True), "a"))) == 1     # h5 is on no path here
+    assert len(full(run(tmp_path, ghost_world("svc;"), "b"))) == 1                                # empty item: NULL account

@@ -225,7 +225,7 @@ def test_existing_out_evaluate_rank_files_equal_a_fresh_run_if_present(dev):
     assert len(present) == len(names), f"partial rank output: missing {sorted(set(names) - set(present))}"
 
 
-# ================================================================================================ ATK-SC-18 (open attacker case)
+# ================================================================================================ ATK-SC-18 (decision 069 item 6)
 def _one(tmp_path, trial="s04_t00"):
     return mini_repo(tmp_path / "m", [trial])
 
@@ -234,8 +234,8 @@ def _rank_one(root, tmp_path, trial="s04_t00"):
     return em.main(["--rank", "--trial", trial, "--repo", str(root), "--out", str(tmp_path / "o")])
 
 
-@pytest.mark.xfail(strict=True, reason="ATK-SC-18: --rank does not check the label input hashes recorded in the score run_info")
 def test_atk_sc18_rank_refuses_when_a_label_file_changed_after_the_score_run(tmp_path, capsys):
+    """Real score run_info: inputs.label hashes vs the current out/label files (copy)."""
     root = _one(tmp_path)
     p = root / "out" / "label" / "s04_t00" / "node_labels.csv"
     p.write_bytes(p.read_bytes() + b"\n")
@@ -243,7 +243,6 @@ def test_atk_sc18_rank_refuses_when_a_label_file_changed_after_the_score_run(tmp
     assert capsys.readouterr().err.startswith("refused:") and not (tmp_path / "o").exists()
 
 
-@pytest.mark.xfail(strict=True, reason="ATK-SC-18: --rank does not check run_info order_table_sha256 against the frozen table")
 def test_atk_sc18_rank_refuses_when_the_score_run_used_another_order_table(tmp_path, capsys):
     root = _one(tmp_path)
     p = root / "out" / "score" / "s04_t00" / "run_info.json"
@@ -254,7 +253,6 @@ def test_atk_sc18_rank_refuses_when_the_score_run_used_another_order_table(tmp_p
     assert capsys.readouterr().err.startswith("refused:") and not (tmp_path / "o").exists()
 
 
-@pytest.mark.xfail(strict=True, reason="ATK-SC-18: --rank does not check run_info parameters against the frozen parameters (decision 066)")
 def test_atk_sc18_rank_refuses_when_the_score_run_used_other_than_the_frozen_parameters(tmp_path, capsys):
     root = _one(tmp_path)
     p = root / "out" / "score" / "s04_t00" / "run_info.json"
@@ -263,3 +261,61 @@ def test_atk_sc18_rank_refuses_when_the_score_run_used_other_than_the_frozen_par
     p.write_text(json.dumps(info, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     assert _rank_one(root, tmp_path) == 2
     assert capsys.readouterr().err.startswith("refused:") and not (tmp_path / "o").exists()
+
+
+# ================================================================================================ decision 069 item 6, 8, 9 on real data
+def test_the_real_score_run_info_passes_every_pin_unmodified(tmp_path):
+    root = _one(tmp_path)
+    assert _rank_one(root, tmp_path) == 0 and (tmp_path / "o" / "rank.csv").is_file()
+
+
+@pytest.mark.parametrize("trial", ["s02_t00", "s03_t00", "s04_t00", "s05_t00", "s06_t00", "s07_t00"])
+def test_atk_sc25_a_keyed_development_trial_without_its_approved_key_is_refused_on_a_copy(tmp_path, capsys, trial):
+    root = mini_repo(tmp_path / "m", [trial])
+    (root / "ground_truth" / "approved" / f"{trial}.yaml").unlink()
+    assert em.main(["--rank", "--trial", trial, "--repo", str(root), "--out", str(tmp_path / "o")]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("refused:") and trial in err and not (tmp_path / "o").exists()
+
+
+@pytest.mark.parametrize("trial", ["s02_t01", "s03_t01", "s06_t01"])
+def test_the_unkeyed_development_trials_still_run_without_a_key(tmp_path, trial):
+    root = mini_repo(tmp_path / "m", [trial])
+    assert not (root / "ground_truth" / "approved" / f"{trial}.yaml").exists()
+    assert em.main(["--rank", "--trial", trial, "--repo", str(root), "--out", str(tmp_path / "o")]) == 0
+
+
+def test_per_key_mrr_and_e_one_over_rank_are_reported_beside_the_primary_numbers_on_development(dev):
+    """Decision 069 item 9: primary (trial MRR 0.933333) unchanged; per-key MRR counts the s04 / s07 half-ties per key path."""
+    t = totals(dev)
+    for key in (("full", "hop"), ("full", "node"), ("b1", "hop"), ("b2", "node")):
+        r = t[key]
+        assert r["mrr_expected"] == "0.933333"                                           # primary, unchanged
+        assert r["mrr_per_key_expected"] == "0.833333" and r["mrr_per_key_rr_mean"] == "0.875000"
+        assert r["mrr_rr_mean_expected"] == "0.950000"
+        assert float(r["mrr_rr_mean_expected"]) >= float(r["mrr_expected"])               # E[1/rank] >= 1/E[rank]
+        assert float(r["chance_rr_mean"]) >= float(r["chance_mrr"])
+
+
+def test_chance_line_over_candidates_with_score_above_zero_is_reported_and_equals_the_observed_values_on_development(dev):
+    """ATK-SC-21: restricted to candidates with score > 0 the chance line is as high as the observed top-1 / MRR (the
+    zero-score paths are what the ranking separates). This is the reading the report must show beside 0.248 / 0.377."""
+    r = totals(dev)[("full", "hop")]
+    assert float(r["chance_top1"]) == pytest.approx(0.248, abs=5e-4)                      # the primary line is unchanged
+    assert (r["chance_pos_top1"], r["chance_pos_mrr"], r["chance_pos_rr_mean"]) == ("0.900000", "0.933333", "0.950000")
+    assert r["top1_expected"] == r["chance_pos_top1"] and r["mrr_expected"] == r["chance_pos_mrr"]
+
+
+def test_h4_recall_is_reported_on_both_bases_and_full_is_above_b0_on_both_for_every_attack_trial(dev):
+    b0 = next(r for r in read_csv(dev / "out" / "evaluate" / "development" / "rank_totals.csv") if r["row_kind"] == "b0_recall")
+    assert b0["recall_basis"] == "all context-0 nodes (065 reading)" and b0["recall_basis_labelled"] == "labelled nodes only (b0-reachable)"
+    assert float(b0["full_recall_mean"]) == pytest.approx(0.877, abs=1e-3) and float(b0["b0_recall_mean"]) == pytest.approx(0.261, abs=1e-3)
+    assert float(b0["full_recall_labelled_mean"]) == pytest.approx(0.214, abs=1e-3)
+    assert float(b0["b0_recall_labelled_mean"]) == pytest.approx(0.121, abs=1e-3)
+    assert b0["trials_full_above_b0"] == "5" and b0["trials_full_above_b0_labelled"] == "5"
+
+
+def test_the_sweep_is_stated_as_not_informative_on_development_data(dev):
+    md = (dev / "out" / "evaluate" / "development" / "rank.md").read_text(encoding="utf-8")
+    assert "not informative on development data" in md and "ATK-SC-22" in md
+    assert "in 4 of 5 attack trials every rival path scores 0" in md and "s04 ties at every weight" in md

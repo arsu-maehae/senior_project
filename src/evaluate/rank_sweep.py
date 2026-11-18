@@ -24,14 +24,15 @@ from .rank_metrics import Candidate, check_groups, placement
 
 __all__ = ["LAMBDA_GRID", "W_STEPS", "SCORE_TOLERANCE", "PathComponents", "SweepTrial", "SweepPoint",
            "components_of", "length_score", "recompute", "rank_scores", "check_default", "grid_points",
-           "evaluate_point", "run_sweep", "changed_keys", "stable_region"]
+           "evaluate_point", "run_sweep", "changed_keys", "stable_region", "informativeness"]
 
 # Spec 05 section 5.2 step 2 / decision 066: lambda in {0.5, 1, 1/ln 2, 2, 3, 5}; w on the simplex in steps of 0.1.
 LAMBDA_GRID: tuple[tuple[str, float], ...] = (("0.5", 0.5), ("1", 1.0), ("1/ln2", 1.0 / math.log(2.0)), ("2", 2.0),
                                               ("3", 3.0), ("5", 5.0))
 W_STEPS = 10
-# The written columns carry 6 decimals, so each recomputed component is off by at most 0.5e-6 and the written score
-# by another 0.5e-6; with weights summing to 1 the recomputed score lies within 1e-6 of the written one.
+# Since ATK-SC-24 (decision 069 item 4) the written columns carry 12 decimals, so the recomputed score lies within about
+# 1e-12 of the written one; the tolerance stays at the old 6-decimal bound (still a refusal for any real difference,
+# and unchanged so that a score run written before the fix is checked the same way).
 SCORE_TOLERANCE = 1e-6 + 1e-9
 _TIE_DECIMALS = 12               # SC-41, spelled here because evaluate must not import score
 
@@ -231,3 +232,21 @@ def stable_region(points: Sequence[SweepPoint], default: SweepPoint) -> list[dic
         out.append({"lambda": lab, "grid_points": len(grid), "stable_points": len(grid) - len(unstable),
                     "stable_radius": radius, "default_w_stable": bool(dw) and not changed_keys(dw[0], default)})
     return out
+
+
+def informativeness(trials: Sequence[SweepTrial]) -> dict[str, object]:
+    """Why the sweep cannot move a development rank (ATK-SC-22, decision 069 item 9): per attack trial, whether every
+    rival (a path matching no key attack path) has written score 0, and whether some rival has exactly the components
+    (seq_len, edge_score, node_score, identity) of a matching path, so the two tie at every lambda and w. Pure."""
+    attack = [t for t in trials if t.keyed and t.attack]
+    zero: list[str] = []
+    ties: list[str] = []
+    for t in attack:
+        hit = frozenset().union(*(h for _k, h in t.key_matches))
+        rivals = [p for p in t.paths if p.path_id not in hit]
+        facts = {(p.seq_len, p.edge_score, p.node_score, p.identity) for p in t.paths if p.path_id in hit}
+        if all(p.score == 0.0 for p in rivals):
+            zero.append(t.trial_id)
+        if any((p.seq_len, p.edge_score, p.node_score, p.identity) in facts for p in rivals):
+            ties.append(t.trial_id)
+    return {"attack_trials": len(attack), "all_rivals_zero": tuple(zero), "tie_every_weight": tuple(ties)}

@@ -7,6 +7,7 @@ stitcher's parameters). The development list is imported from the clock step, ne
 """
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 from clock_offset.params import DEVELOPMENT_TRIALS
@@ -18,7 +19,8 @@ __all__ = ["TOOL_VERSION", "EVAL_OUT_REL", "STITCH_OUT_REL", "LABEL_OUT_REL", "S
            "SPLIT_TEST", "split_of", "Q9_READS", "Q9_VARIANTS", "DEFAULT_VARIANT", "SYSTEM_ACCOUNTS",
            "BOOT_STARTUP_IDS", "BOOT_SHUTDOWN_IDS", "BOOT_CHANNEL", "KEY_LOCK_HEADER", "TRIAL_ID_PATTERN",
            "METHODS", "METHOD_PORT", "METHOD_4648", "METHOD_CMD", "METHOD_TARGET_ONLY", "PROTOCOL_GROUPS",
-           "PROTOCOL_GROUP_ORDER", "TIER_ORDER", "DEVELOPMENT_TRIALS"]
+           "PROTOCOL_GROUP_ORDER", "TIER_ORDER", "DEVELOPMENT_TRIALS", "KEYED_DEVELOPMENT_TRIALS",
+           "FROZEN_SCORE_PARAMETERS", "FROZEN_ORDER_TABLE_SHA256", "FROZEN_PARAM_TOLERANCE"]
 
 TOOL_VERSION = "evaluate 0.1.0"
 
@@ -84,3 +86,19 @@ BOOT_SHUTDOWN_IDS: frozenset[int] = frozenset({1074, 6006})
 
 # ---------------------------------------------------------------- key lock (decision 051 item 9)
 KEY_LOCK_HEADER: tuple[str, ...] = ("trial_id", "key_path", "sha256")
+
+
+# ---------------------------------------------------------------- ranking check pins (decision 069 items 6, 8)
+# ATK-SC-25: the development trials whose approved key must exist (decision 019 split: t00 of S02-S07; S01 t00 is
+# excluded). WHY a refusal and not "unkeyed": a missing key would silently move a keyed trial out of top-1 / MRR.
+KEYED_DEVELOPMENT_TRIALS: tuple[str, ...] = ("s02_t00", "s03_t00", "s04_t00", "s05_t00", "s06_t00", "s07_t00")
+
+# ATK-SC-18: a copy of the decision 066 freeze, so ``--rank`` can refuse a score run made with other values. WHY a
+# copy and not ``score.params``: evaluate must not import score (decision 051 item 1 spirit, T9.5 brief); a test pins
+# this copy to 066. Floats are compared with ``FROZEN_PARAM_TOLERANCE`` (absolute).
+FROZEN_SCORE_PARAMETERS: dict[str, float] = {
+    "lam": 1.0 / math.log(2.0), "w1": 1.0 / 3.0, "w2": 1.0 / 3.0, "w3": 1.0 / 3.0, "alpha": 0.5, "beta": 0.5,
+    "a": 1.0, "b": 1.0, "eps": 0.01,
+}
+FROZEN_ORDER_TABLE_SHA256 = "6bfae08b869178c618cef9b42b341eb9c78441ef2aeeb4cf9aeaaf2cfa07d61e"
+FROZEN_PARAM_TOLERANCE = 1e-12

@@ -12,7 +12,11 @@ The stitcher writes identity facts per (hop, account, LSASS read) and computes n
   a hop with at least one applicable account is a crossing.
 - SC-53 IdentityCoherence = coherent crossings / crossings, 0 when there are none; every (hop, account) carries
   ``identity_status`` so "no evidence" is never shown as "not exposed" (ATK-SC-06).
-- SC-54 ``identity_low`` / ``identity_high`` = the path value with clock-flagged crossings at 0 / at 1.
+- SC-54 ``identity_low`` / ``identity_high``, per account (ATK-SC-19, decision 069 item 2): an applicable account is
+  *robust* when its value is 1 and it is not clock-flagged, *possible* when its value is 1 or it is flagged; a hop's
+  low value is 1 iff some account is robust, its high value 1 iff some account is possible; the path values are the
+  fractions over the crossings. WHY per account: a flagged, unexposed second account must not pull down a hop that
+  an unflagged exposed account already makes coherent.
 
 "Exposed" means the account had a session open on the source host when LSASS was read there; it is not evidence
 that the credentials were taken or used (SC-55). All functions are pure.
@@ -64,6 +68,8 @@ class HopIdentity:
     crossing: bool                          # at least one applicable account
     value: int                              # max over applicable accounts; 0 when no crossing
     flagged: bool                           # an applicable account has order_within_uncertainty = 1
+    robust: bool                            # ATK-SC-19: an applicable account has value 1 and no flag
+    possible: bool                          # ATK-SC-19: an applicable account has value 1 or a flag
 
 
 @dataclass(frozen=True)
@@ -75,6 +81,7 @@ class PathIdentity:
     n_crossings: int
     n_coherent: int
     n_flagged: int
+    n_unknown: int                          # ATK-SC-06: path hops with no applicable account (not a crossing)
 
 
 def is_excluded_read(image: str, account: str) -> bool:
@@ -139,9 +146,21 @@ def account_identities(rows: Iterable[Row]) -> list[AccountIdentity]:
     return [account_identity(h, a, g) for (h, a), g in sorted(groups.items())]
 
 
+def _robust(a: AccountIdentity) -> bool:
+    """ATK-SC-19: value 1 whatever the true clock order, i.e. exposed and not flagged."""
+    return a.value == 1 and not a.order_within_uncertainty
+
+
+def _possible(a: AccountIdentity) -> bool:
+    """ATK-SC-19: value 1 under some clock order inside the uncertainty: exposed, or flagged (the true order might
+    make a rejecting read deciding)."""
+    return a.value == 1 or bool(a.order_within_uncertainty)
+
+
 def hop_identities(accounts: Iterable[AccountIdentity]) -> dict[str, HopIdentity]:
     """hop_id -> crossing value (SC-52): max over applicable accounts (Q8 (a): the hop is the unit of "fraction of
-    hops", CLAUDE.md); a hop with no applicable account is no crossing."""
+    hops", CLAUDE.md); a hop with no applicable account is no crossing. ``robust`` / ``possible`` are decided per
+    account, then "any account" per hop (ATK-SC-19)."""
     by_hop: dict[str, list[AccountIdentity]] = {}
     for a in accounts:
         by_hop.setdefault(a.hop_id, []).append(a)
@@ -149,19 +168,25 @@ def hop_identities(accounts: Iterable[AccountIdentity]) -> dict[str, HopIdentity
     for hop, accs in sorted(by_hop.items()):
         app = [a for a in accs if a.applicable]
         out[hop] = HopIdentity(hop_id=hop, crossing=bool(app), value=max((a.value or 0 for a in app), default=0),
-                               flagged=any(a.order_within_uncertainty for a in app))
+                               flagged=any(a.order_within_uncertainty for a in app),
+                               robust=any(_robust(a) for a in app), possible=any(_possible(a) for a in app))
     return out
 
 
 def path_identity(hop_ids: Iterable[str], hops: Mapping[str, HopIdentity]) -> PathIdentity:
-    """SC-53 / SC-54 for one path: coherent crossings / crossings (0 when none, handoff §12.4, Q9 (a)); low / high
-    with the flagged crossings counted as 0 / as 1 (044 (c): the flag never changes ``order_ok``)."""
-    cross = [hops[h] for h in sorted(set(hop_ids)) if h in hops and hops[h].crossing]
+    """SC-53 / SC-54 for one path: coherent crossings / crossings (0 when none, handoff §12.4, Q9 (a)); low / high =
+    crossings with a robust / a possible account, over the crossings (ATK-SC-19; 044 (c): the flag never changes
+    ``order_ok``). ``n_unknown`` = the path's hops that are no crossing (ATK-SC-06), so "no evidence" stays visible at
+    path level."""
+    distinct = sorted(set(hop_ids))
+    cross = [hops[h] for h in distinct if h in hops and hops[h].crossing]
     n = len(cross)
+    unknown = len(distinct) - n
     coherent = sum(1 for c in cross if c.value == 1)
     flagged = sum(1 for c in cross if c.flagged)
-    robust = sum(1 for c in cross if c.value == 1 and not c.flagged)
+    robust = sum(1 for c in cross if c.robust)
+    possible = sum(1 for c in cross if c.possible)
     if n == 0:
-        return PathIdentity(0.0, 0.0, 0.0, 0, 0, 0)
-    return PathIdentity(coherence=coherent / n, low=robust / n, high=(robust + flagged) / n, n_crossings=n,
-                        n_coherent=coherent, n_flagged=flagged)
+        return PathIdentity(0.0, 0.0, 0.0, 0, 0, 0, unknown)
+    return PathIdentity(coherence=coherent / n, low=robust / n, high=possible / n, n_crossings=n,
+                        n_coherent=coherent, n_flagged=flagged, n_unknown=unknown)

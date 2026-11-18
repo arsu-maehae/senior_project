@@ -22,7 +22,7 @@ needed readings for several matches in one group, the node set of a key path, th
 4. **Chance line:** `chance_mrr` = 1/E[rank] (consistent with 065's 1/1.5); E[1/rank] reported as `chance_rr_mean`.
 5. **b0 budget:** full's top-k nodes with ties at the cut by inclusion probability; b0 units in rank order, its tie
    group at the cut read at node level (each new node held with probability remaining budget / new nodes).
-6. **Sweep:** the 0.1 weight grid lacks w = 1/3, so the default point is added; "stable" = no key attack path's
+6. **Sweep** (hop-level reading only; review FC-7): the 0.1 weight grid lacks w = 1/3, so the default point is added; "stable" = no key attack path's
    expected rank changes; reported as counts and distance to the nearest unstable point. It never changes a value.
 
 ## Consequences (development numbers, not results)

@@ -183,8 +183,13 @@ def test_a_hop_with_only_not_applicable_accounts_is_no_crossing():
 
 
 # ------------------------------------------------------------------------------------------------ SC-53
-def hv(hid, value, *, crossing=True, flagged=False):
-    return idn.HopIdentity(hop_id=hid, crossing=crossing, value=value, flagged=flagged)
+def hv(hid, value, *, crossing=True, flagged=False, robust=None, possible=None):
+    """A HopIdentity of ONE account (decision 069 item 2): robust = value 1 and not flagged; possible = value 1 or flagged.
+    A test of several accounts passes `robust` / `possible` explicitly or uses the real `hop(...)` helper."""
+    robust = (value == 1 and not flagged) if robust is None else robust
+    possible = (value == 1 or flagged) if possible is None else possible
+    return idn.HopIdentity(hop_id=hid, crossing=crossing, value=value, flagged=flagged,
+                           robust=robust and crossing, possible=possible and crossing)
 
 
 def test_coherence_is_coherent_crossings_over_crossings():
@@ -268,3 +273,71 @@ def test_status_vocabulary():
             ident("h4", "d", open_session_uids="", end_unknown_session_uids="s")]
     for a in idn.account_identities(rows):
         assert a.status in {"exposed", "not_exposed"} or a.status.startswith("unknown:")
+
+
+# ------------------------------------------------------------------------------------------------ ATK-SC-19 per account (069 item 2)
+def flagged_exposed(account):
+    return ident("h1", account, order_within_uncertainty="1")                      # deciding read, flagged: value 1
+
+
+def test_atk_sc19_an_unflagged_exposed_account_makes_the_hop_robust_whatever_a_flagged_account_does():
+    a = acct("h1", "A", [ident("h1", "A")])                                          # value 1, no flag
+    b = acct("h1", "B", [flagged_rejecting_read_for("B")])                           # value 0, flagged rejecting read
+    h = hop(a, b)["h1"]
+    assert (h.value, h.flagged, h.robust, h.possible) == (1, True, True, True)
+    p = idn.path_identity(["h1"], hop(a, b))
+    assert (p.coherence, p.low, p.high, p.n_flagged) == (1.0, 1.0, 1.0, 1)
+    assert idn.path_identity(["h1"], hop(b, a)) == p                                  # account order irrelevant
+
+
+def flagged_rejecting_read_for(account):
+    return ident("h1", account, order_ok="0", order_margin_ms="-6000", gap_ms="-6000", order_within_uncertainty="1")
+
+
+def test_atk_sc19_a_flagged_exposed_account_alone_is_possible_not_robust():
+    a = acct("h1", "A", [flagged_exposed("A")])
+    h = hop(a)["h1"]
+    assert (h.value, h.robust, h.possible) == (1, False, True)
+    p = idn.path_identity(["h1"], hop(a))
+    assert (p.coherence, p.low, p.high) == (1.0, 0.0, 1.0)
+
+
+def test_atk_sc19_flagged_exposed_plus_an_unflagged_exposed_account_is_robust():
+    h = hop(acct("h1", "A", [flagged_exposed("A")]), acct("h1", "B", [ident("h1", "B")]))["h1"]
+    assert (h.value, h.robust, h.possible) == (1, True, True)
+
+
+def test_atk_sc19_two_flagged_rejecting_accounts_are_possible_only_and_an_unflagged_zero_account_adds_nothing():
+    a, b = acct("h1", "A", [flagged_rejecting_read_for("A")]), acct("h1", "B", [flagged_rejecting_read_for("B")])
+    h = hop(a, b)["h1"]
+    assert (h.value, h.robust, h.possible) == (0, False, True)
+    plain = acct("h1", "C", [ident("h1", "C", open_session_uids="")])
+    h2 = hop(a, plain)["h1"]
+    assert (h2.value, h2.robust, h2.possible) == (0, False, True)
+    h3 = hop(plain)["h1"]
+    assert (h3.value, h3.robust, h3.possible) == (0, False, False)
+
+
+def test_atk_sc19_a_not_applicable_account_is_neither_robust_nor_possible():
+    machine = acct("h1", "m$", [ident("h1", "m$", dump_event_uid="", not_applicable="machine_account",
+                                      order_within_uncertainty="1")])
+    h = hop(machine)["h1"]
+    assert (h.crossing, h.robust, h.possible) == (False, False, False)
+
+
+def test_atk_sc19_path_low_and_high_count_hops_with_a_robust_and_a_possible_account():
+    hops = {"a": hv("a", 1, robust=True, possible=True), "b": hv("b", 0, flagged=True, robust=False, possible=True),
+            "c": hv("c", 0)}
+    p = idn.path_identity(["a", "b", "c"], hops)
+    assert (p.coherence, p.low, p.high) == (pytest.approx(1 / 3), pytest.approx(1 / 3), pytest.approx(2 / 3))
+    assert p.low <= p.coherence <= p.high
+
+
+# ------------------------------------------------------------------------------------------------ n_unknown (ATK-SC-06, 069 item 5)
+def test_n_unknown_counts_the_distinct_path_hops_that_are_no_crossing():
+    hops = {"a": hv("a", 1), "u": hv("u", 0, crossing=False), "v": hv("v", 0, crossing=False)}
+    p = idn.path_identity(["a", "u", "v", "u"], hops)
+    assert (p.n_crossings, p.n_unknown) == (1, 2)
+    assert idn.path_identity(["a"], hops).n_unknown == 0
+    none = idn.path_identity(["u", "v"], hops)
+    assert (none.n_crossings, none.n_unknown, none.coherence) == (0, 2, 0.0)

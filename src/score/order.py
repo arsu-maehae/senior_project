@@ -8,7 +8,7 @@ the tree. We replace it with hand-built templates (``order_table.json``, SC-10) 
   before insertion (TPPR p. 5 §3.3.1: "mapping the attack technique of each node into its corresponding attack tactic
   and filtering out consecutively repeated nodes"; fact-checker correction of SC-22a, 2026-11-18);
 - TacticScore (Eq. 2), TechniqueScore (Eq. 3), ScoreE = alpha * TacticScore + beta * TechniqueScore (Eq. 5 with the
-  ScoreNI term removed, 062 item 4).
+  ScoreNI term removed, 062 item 5).
 
 Everything here is pure except ``load_order_table`` (reads the one file and checks its pin).
 """
@@ -260,7 +260,8 @@ def _basis(ref: OrderReference, u: str, v: str, ta_u: str, ta_v: str) -> str:
 
 
 def score_step(ref: OrderReference, u: str, v: str, params: ScoreParams) -> StepScore:
-    """ScoreE of a within-hop transition u -> v (SC-22, SC-22a): alpha * TacticScore + beta * TechniqueScore. A
+    """ScoreE of a within-hop transition u -> v, or of a boundary between two hops with no chain edge between them
+    (siblings of a merged path, ATK-SC-17) (SC-22, SC-22a): alpha * TacticScore + beta * TechniqueScore. A
     technique missing from ``tactic_of`` has tactic "" and so TacticScore 0 (an empty tactic is never "the same
     tactic"); its TechniqueScore is eps and its basis ``absent``."""
     ta_u, ta_v = ref.table.tactic_of.get(u, ""), ref.table.tactic_of.get(v, "")
@@ -271,9 +272,10 @@ def score_step(ref: OrderReference, u: str, v: str, params: ScoreParams) -> Step
 
 
 def hop_chain_step(ref: OrderReference, u: str, v: str, params: ScoreParams) -> StepScore:
-    """A transition across a hop boundary (SC-21b): scored as a direct step, ScoreE = alpha * b + beta * a, because
-    the stitcher's chain edge (ST-72) already fixes that order (ATK-SC-05: scoring execution -> initial-access against
-    the templates would give eps and penalise every multi-hop path)."""
+    """A transition across a real chain edge between two hops (SC-21b): scored as a direct step, ScoreE = alpha * b +
+    beta * a, because the stitcher's chain edge (ST-72) already fixes that order (ATK-SC-05: scoring execution ->
+    initial-access against the templates would give eps and penalise every multi-hop path). Only for a boundary with a
+    ``path_edges`` edge from -> to (ATK-SC-17, decision 069 item 1, amends 067 item 4); the caller decides that."""
     return StepScore(from_tactic=ref.table.tactic_of.get(u, ""), to_tactic=ref.table.tactic_of.get(v, ""),
                      tactic_score=params.b, technique_score=params.a,
                      score_e=params.alpha * params.b + params.beta * params.a, basis=BASIS_HOP_CHAIN)

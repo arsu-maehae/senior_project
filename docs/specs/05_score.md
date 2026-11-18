@@ -41,7 +41,8 @@ database** and **never reads `ground_truth/`**.
 
 ## 3. Output contract
 Location `out/score/<trial_id>/` (or `--out`). Files are byte-identical between runs except `run_info.json`
-`generated_utc`. Scores are written with 6 decimals; ties are decided on the unrounded value rounded to 12 decimals
+`generated_utc`. Scores are written with 12 decimals (review ATK-SC-24: the written value is the value ties are
+decided on; first draft said 6); ties are decided on the value rounded to 12 decimals
 (SC-40).
 
 ### 3.1 `ranked_paths.csv` — one row per (variant, path)
@@ -58,6 +59,7 @@ Location `out/score/<trial_id>/` (or `--out`). Files are byte-identical between 
 | `node_score_ctx1` | float | NodeScore with labelled `context` = 1 nodes included; reported only, never in `score` (SC-30) |
 | `identity_coherence`, `identity_low`, `identity_high` | float | SC-50..55; low/high = clock-flagged hops counted as 0 / 1 |
 | `n_crossings`, `n_crossings_coherent`, `n_crossings_flagged` | int | applicable hops (SC-52) |
+| `n_hops_unknown` | int | path hops with no applicable account (every account `unknown:<reason>`; review ATK-SC-06) |
 | `n_hops`, `hop_ids`, `hosts`, `isolated`, `merged_from`, `multi_chain_parent` | | copied from stitch |
 | `technique_sequence` | str | `T1021.002>T1570>T1569.002` (SC-21) |
 | `best_tier_min` | str | weakest T7 link tier over the path's hops (045: reported, not used in the score) |
@@ -110,7 +112,7 @@ holds the `full`, `b1` and `b2` rows (`variant` column); `stats.json` reports pa
 | SC-10 | **Order reference** = `src/score/order_table.json`: hand-built technique templates (TPPR's technique-PT replaced) and one tactic per technique (tactic-PT = templates mapped to tactics). Built from ATT&CK / CTI pages, never from lab logs; each template cites its source. Pinned by SHA-256 in code and in the decision record. | handoff §11.4 Option B, Correction G.5; PLAN 9.1 |
 | SC-20 | **Technique set of a hop** = the distinct primary `techniques` of its labelled `context` = 0 nodes (secondary tags excluded, 056 Q3). T1003.001 never enters (dump only through identity, 056 item 7). | 056 items 7, Q3 |
 | SC-21 | **Technique sequence of a path** (OPEN Q3, proposal S1): hops in chain order (`path_edges`, then `first_utc_corrected`, then `hop_id`); within a hop, its technique set sorted by the order table's stage (position in the reference), then technique ID; across the path keep the **first appearance** of each technique. Within-hop order does not use event times. | TPPR §3.3.1 (p. 5: techniques ordered "according to their order of appearance in the document"), Correction G.5 |
-| SC-21b | **Hop boundary** (OPEN Q3b, review ATK-SC-05): the transition from the last technique of a hop to the first new technique of the next chained hop is scored as a direct step (`basis` = `hop_chain`), because the stitcher's chain edge (ST-72) already fixes that order; only within-hop transitions are scored against the templates. A path's score must not change when its hop list is given in another order (test). | ST-72; review ATK-SC-05 |
+| SC-21b | **Hop boundary** (OPEN Q3b, review ATK-SC-05): the transition from the last technique of a hop to the first new technique of the next chained hop is scored as a direct step (`basis` = `hop_chain`), because the stitcher's chain edge (ST-72) already fixes that order; only within-hop transitions, and boundaries between sibling hops of a merged path that have no chain edge between them (069), are scored against the templates. A path's score must not change when its hop list is given in another order (test). | ST-72; review ATK-SC-05 |
 | SC-22 | **Edge score** of a transition u → v (TPPR Eq. 5 with the ScoreNI term removed, OPEN Q5): ScoreE = α·TacticScore + β·TechniqueScore, α + β = 1. TacticScore = min(b, Σ_{p∈P(TA_u,TA_v)} (1/len p) / out(TA_u) · b), same tactic = b (Eq. 2); TechniqueScore = a·max(Π_direct, max_p 1/len p, ε) (Eq. 3). `basis` records which term decided. | TPPR Eq. 2, 3, 5 (p. 6) |
 | SC-22a | **Tree reading (062).** Technique-PT = prefix tree of the templates (shared prefixes merge, TPPR §3.3.1, Fig. 5). Tactic-PT = prefix tree of the templates' tactic sequences (each template mapped technique → tactic **with consecutive repeated tactics filtered out**, as TPPR p. 5 does — fact-check 2026-11-18; shared prefixes merge). For u → v: P(·) = downward paths from **any** node labelled u (or TA_u) to a descendant labelled v (or TA_v); len(p) = edges; out(TA_u) = number of children summed over all nodes labelled TA_u. TacticScore = b if TA_u = TA_v, else min(b, b·Σ 1/len(p) / out(TA_u)), 0 if no path or out = 0. TechniqueScore = a·max(Π_direct, max over paths of len ≥ 2 of 1/len(p), ε), Π_direct = 1 iff some u-node has a v child. `basis` = `direct` (Π_direct = 1), else `same_tactic` (TA_u = TA_v), else `indirect` (a path exists), else `absent`; a technique not in any template gives `absent` (TacticScore from its tactic still applies). `hop_chain` steps score ScoreE = α·b + β·a. **Readings, stated:** Eq. 2 itself has no cap; "same tactic = b" and the min(b, …) cap follow TPPR's Fig. 6a text (p. 7, "receives the maximum score b"); "any u-node" and "indirect = len ≥ 2" are our reading of P(·). | TPPR §3.3.1 (p. 5), Eq. 2, 3 (p. 6), Fig. 5, 6a (p. 7) |
 | SC-23 | **LengthScore** = (1 − e^(−len/λ)) · EdgeScore, len = number of transitions (`seq_len`), EdgeScore = mean ScoreE (Eq. 6). A path with fewer than two techniques has len 0, EdgeScore 0, LengthScore 0. **Substitution, stated:** TPPR's Eq. 6/7 run over the candidate path's provenance-graph edges; here the "edges" are transitions of the path's technique sequence (review ATK-SC-11). | TPPR Eq. 6, 7 (p. 7); Correction G.3 |
@@ -128,7 +130,7 @@ holds the `full`, `b1` and `b2` rows (`variant` column); `stats.json` reports pa
 | SC-41 | **Ranking.** Scores are summed with `math.fsum` over components in a fixed order and rounded to 12 decimals (review ATK-SC-13). Sort descending; equal scores share the best rank (competition ranking) and `tie_size`; listing order inside a tie is `path_id` for **display only** — no metric may use it (§7.3, review ATK-SC-01). No θ. | Correction J; 018, 021 |
 | SC-42 | **Frozen parameters.** λ, w1–w3, α, β, a, b, ε and the order-table hash live in `src/score/params.py`, pinned by a test to the freeze record (§5.2). | owner 2026-11-18 |
 | SC-60 | **CLI.** `python -m score --trial <t> | --development [--repo] [--out]`; refusals print `refused:` and exit 2; output folder written via the stitch `.tmp`/`.old` swap and `lab_common.outdir` guard. | 054 |
-| SC-61 | Every row that links events carries `method`, `candidate_count`, `time_delta_ms`, supporting `event_uid`s, and the tier where one exists (`hop_best_tier`, reported only). | CLAUDE.md code rules; 045 |
+| SC-61 | Every row that links events carries `method`, `candidate_count`, `time_delta_ms`, supporting `event_uid`s, and the tier where one exists (`hop_best_tier`, reported only). `path_steps.csv` rows are **scoring steps, not links**: they pair the first events of two techniques already in one path to show the order score, measure nothing across hosts and carry no tier (045 scope, review FC-8). | CLAUDE.md code rules; 045 |
 
 ## 5. Parameters
 | Name | Value | Why | Sensitivity test? |
@@ -157,7 +159,7 @@ Citations per transition: [docs/research/score_order_templates.md](../research/s
 | R5 | T1078 → T1003.001 → T1021.006 | weak: T1021.006 says only "use Valid Accounts"; Storm-0501 shows dump then Evil-WinRM without a stated order |
 
 **T1550.002 (spec 04 Q10):** the first proposal R4 had T1003.001 → T1550.002 → T1021.002; no source joins
-pass-the-hash to the SMB move, so T1550.002 is in **no template** and every transition to or from it scores ε (OPEN
+pass-the-hash to the SMB move, so T1550.002 is in **no template** and every transition to or from it gets TechniqueScore = ε while TacticScore still applies (e.g. T1550.002 → T1021.002, same tactic: ScoreE = 0.5·1 + 0.5·0.01 = 0.505; review FC-2) (OPEN
 Q4). SR-61 matches nothing on development data. **T1078 tactic:** ATT&CK now lists Stealth (Defense Evasion was
 split in v19), Persistence, Privilege Escalation, Initial Access; initial-access is kept for its first position in
 the templates. **Order trap:** ATT&CK's matrix puts Execution before Lateral Movement, but R1/R4 need T1569.002 after
@@ -189,7 +191,7 @@ Attacker review 2026-11-18 (ATK-SC-01..13, [review](../reviews/05_score-spec-202
 | ATK-SC-01 Equal components, attack vs benign (s04 track A benign, B attack: same techniques, levels, both exposed) | s04_t00 p0004/p0005; s07 p0005/p0006; the 38 zero-score paths | tie, both rank 1, `tie_size` 2 (018, 021); metrics use the expected-value tie reading; swapping `path_id`s changes no metric | SCT-41, SCT-42 |
 | ATK-SC-03 Dump kept out of NodeScore | s07 p0005/p0006 (SR-01 level 3 on `context` = 1) | `node_score_ctx1` reported beside `node_score`; score uses `context` = 0 (056) | SCT-34 |
 | ATK-SC-04 Dumper renamed `MsMpEng.exe` outside the Defender folder, or run by a user | hypothetical | read counted (SC-51 b′) | SCT-56 |
-| ATK-SC-05 Multi-hop path: execution → initial-access at the hop boundary would score ε | s05_t00-p0004 (h0010 background, h0030, h0032) | boundary step `hop_chain` (SC-21b); hop-list order does not change the score | SCT-21b |
+| ATK-SC-05 Multi-hop path: execution → initial-access at the hop boundary would score ε | s05_t00-p0004 (h0010 background, h0030, h0032) | boundary step `hop_chain` (SC-21b) only across a real chain edge; sibling hops of a merged path (no chain edge) are scored against the templates (069, review ATK-SC-17); hop-list order does not change the score | SCT-21b |
 | ATK-SC-05 Benign background hop dilutes identity in a merged path | s05_t00-p0004: h0010 value 0 → I = 2/3 | as specified (merge is the stitcher's); stated in the report | SCT-53 |
 | ATK-SC-06 "No evidence" vs "not exposed" | machine-account hops; s07 ep-03 `source_host_no_logs`; RDP (S01, no dev trial) | both 0 in the score; `identity_status` = `unknown:<reason>` | SCT-57 |
 | ATK-SC-07 Move hours after a dump with a session still open | hypothetical (s04 gaps 38 s / 41 s) | value 1 (Correction K sets no upper bound); `time_delta_ms` reported; limitation L-SC6 | SCT-58 |

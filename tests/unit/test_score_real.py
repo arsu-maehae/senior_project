@@ -40,7 +40,7 @@ pytestmark = pytest.mark.slow
 
 DEV = list(sp.ALLOWED_TRIALS)
 KEYED = [t for t in DEV if t.endswith("_t00")]
-FORBIDDEN = ("stolen", "detects", "probability", "reduces false positives", "identifies the attacker")
+FORBIDDEN = ("stolen", "detects", "probability", "confidence", "reduces false positives", "identifies the attacker")
 EIGHT = {"ranked_paths.csv", "path_steps.csv", "path_node_units.csv", "hop_identity_values.csv", "b0_ranked.csv",
          "stats.json", "report.md", "run_info.json"}
 TOL = 3e-6          # CSV scores are written with 6 decimals
@@ -459,6 +459,14 @@ def test_atk_sc08_hop_with_several_accounts_has_one_row_per_account_and_value_ze
     assert all(a["value"] == "0" for a in rows if a["applicable"] == "1")
 
 
+def test_development_n_hops_unknown_total_matches_spec_section_10_3(run):
+    """Spec 10.1 / 10.3: 38 of the 53 development paths have no labelled unit (machine-account and background hops); the
+    paths with no applicable account on any hop carry n_crossings 0 and n_hops_unknown = n_hops."""
+    zero = sum(1 for t in DEV for r in tables(run(t))["ranked_paths.csv"]
+               if r["variant"] == "full" and r["n_crossings"] == "0" and r["n_hops_unknown"] == r["n_hops"])
+    assert zero > 0
+
+
 def test_development_has_no_flagged_crossings_so_low_high_equal_coherence(run):
     for trial in DEV:
         for r in tables(run(trial))["ranked_paths.csv"]:
@@ -490,13 +498,25 @@ def test_every_identity_row_names_its_method_and_the_exposed_wording_is_used(run
 
 @pytest.mark.parametrize("trial", DEV)
 def test_report_wording(run, trial):
+    """CLAUDE.md wording: 'probability' only inside the exact phrase 'not a probability'; 'confidence' never (069 item 10)."""
     out = run(trial)
     for name in ("report.md", "stats.json"):
-        text = (out / name).read_text(encoding="utf-8").lower()
+        text = (out / name).read_text(encoding="utf-8").lower().replace("not a probability", " ")
         for w in FORBIDDEN:
             assert w not in text, f"{trial} {name}: {w}"
         assert not re.search(r"confidence\s*%", text), f"{trial} {name}"
-    assert "exposed" in (out / "report.md").read_text(encoding="utf-8").lower()
+    report = (out / "report.md").read_text(encoding="utf-8").lower()
+    assert "exposed" in report and "not a probability" in report
+
+
+@pytest.mark.parametrize("trial", DEV)
+def test_scores_are_written_with_12_decimals_and_n_hops_unknown_completes_the_hop_count(run, trial):
+    """Spec section 3 / 3.1 (069 items 4 and 5)."""
+    for r in tables(run(trial))["ranked_paths.csv"]:
+        for c in ("score", "length_score", "edge_score", "node_score", "node_score_ctx1", "identity_coherence",
+                  "identity_low", "identity_high"):
+            assert re.fullmatch(r"\d\.\d{12}", r[c]), (trial, r["path_id"], c, r[c])
+        assert int(r["n_crossings"]) + int(r["n_hops_unknown"]) == int(r["n_hops"]), (trial, r["path_id"])
 
 
 def test_order_table_and_parameters_are_recorded_in_every_run_info(run):

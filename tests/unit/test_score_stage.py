@@ -27,11 +27,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import score.__main__ as sm  # noqa: E402
 import score_fixtures as fx  # noqa: E402
 from score import params as sp  # noqa: E402
+from score.report import forbidden_hits  # noqa: E402
 from score.run import run_trial  # noqa: E402
 
 RANKED_COLS = ["trial_id", "variant", "rank", "tie_size", "path_id", "score", "length_score", "edge_score", "seq_len",
                "node_score", "n_node_units", "node_score_ctx1", "identity_coherence", "identity_low", "identity_high",
-               "n_crossings", "n_crossings_coherent", "n_crossings_flagged", "n_hops", "hop_ids", "hosts", "isolated",
+               "n_crossings", "n_crossings_coherent", "n_crossings_flagged", "n_hops_unknown", "n_hops", "hop_ids",
+               "hosts", "isolated",
                "merged_from", "multi_chain_parent", "technique_sequence", "best_tier_min", "clock_unreliable"]
 STEPS_COLS = ["path_id", "step", "from_technique", "to_technique", "from_tactic", "to_tactic", "tactic_score",
               "technique_score", "score_e", "basis", "method", "candidate_count", "time_delta_ms", "from_event_uids",
@@ -44,7 +46,7 @@ B0_COLS = ["trial_id", "variant", "rank", "tie_size", "unit_id", "event_uids", "
            "score"]
 EIGHT = {"ranked_paths.csv", "path_steps.csv", "path_node_units.csv", "hop_identity_values.csv", "b0_ranked.csv",
          "stats.json", "report.md", "run_info.json"}
-FORBIDDEN = ("stolen", "detects", "probability", "reduces false positives", "identifies the attacker")
+FORBIDDEN = ("stolen", "detects", "probability", "confidence", "reduces false positives", "identifies the attacker")
 NOW = "2026-11-18T00:00:00Z"
 
 
@@ -91,6 +93,34 @@ def test_every_path_is_ranked_exactly_once_per_variant_nothing_dropped_or_added(
     assert {r["trial_id"] for r in rows} == {fx.TRIAL}
 
 
+def test_n_hops_unknown_counts_path_hops_with_no_applicable_account(result):
+    """Spec 3.1 (ATK-SC-06, 069 item 5): hops with no applicable account, i.e. no crossing, stay visible per path."""
+    full = by_path(rows_of(result, "ranked_paths.csv"), "full")
+    got = {pid: (r["n_hops"], r["n_crossings"], r["n_hops_unknown"]) for pid, r in full.items()}
+    assert got == {"p0001": ("1", "1", "0"), "p0002": ("1", "1", "0"), "p0003": ("1", "0", "1"),
+                   "p0004": ("2", "0", "2"), "p0005": ("1", "1", "0"), "p0006": ("2", "2", "0")}
+    for r in rows_of(result, "ranked_paths.csv"):
+        assert int(r["n_hops_unknown"]) + int(r["n_crossings"]) == int(r["n_hops"])
+
+
+def test_decision_069_item_4_every_score_and_component_is_written_with_12_decimals_and_ties_print_equal(result):
+    rows = rows_of(result, "ranked_paths.csv")
+    for r in rows:
+        for c in ("score", "length_score", "edge_score", "node_score", "node_score_ctx1", "identity_coherence",
+                  "identity_low", "identity_high"):
+            assert re.fullmatch(r"\d\.\d{12}", r[c]), (r["path_id"], c, r[c])
+    for v in ("full", "b1", "b2"):
+        vr = [r for r in rows if r["variant"] == v]
+        for a in vr:
+            for b in vr:
+                assert (a["score"] == b["score"]) == (a["rank"] == b["rank"]), (v, a["path_id"], b["path_id"])
+    for st in rows_of(result, "path_steps.csv"):
+        for c in ("tactic_score", "technique_score", "score_e"):
+            assert re.fullmatch(r"\d\.\d{12}", st[c]), c
+    for b in rows_of(result, "b0_ranked.csv"):
+        assert re.fullmatch(r"\d\.\d{12}", b["score"])
+
+
 def test_copied_stitch_columns_are_unchanged(result):
     full = by_path(rows_of(result, "ranked_paths.csv"), "full")
     assert full["p0005"]["isolated"] == "1" and full["p0001"]["isolated"] == "0"     # an isolated path is never dropped
@@ -104,7 +134,7 @@ def test_type_of_every_ranked_cell(result):
         int(r["rank"]), int(r["tie_size"]), int(r["seq_len"]), int(r["n_node_units"]), int(r["n_crossings"])
         for c in ("score", "length_score", "edge_score", "node_score", "node_score_ctx1", "identity_coherence",
                   "identity_low", "identity_high"):
-            assert re.fullmatch(r"\d\.\d{6}", r[c]), (c, r[c])
+            assert re.fullmatch(r"\d\.\d{12}", r[c]), (c, r[c])
             assert 0.0 <= float(r[c]) <= 1.0
         assert r["clock_unreliable"] in ("0", "1") and r["multi_chain_parent"] in ("0", "1")
 
@@ -181,7 +211,7 @@ def test_steps_rows_carry_method_candidate_count_and_uids(result):
         assert r["from_event_uids"] and r["to_event_uids"]
     p1 = [r for r in steps if r["path_id"] == "p0001"]
     assert [(r["from_technique"], r["to_technique"], r["score_e"]) for r in p1] == [
-        ("T1021.002", "T1570", "1.000000"), ("T1570", "T1569.002", "1.000000")]
+        ("T1021.002", "T1570", "1.000000000000"), ("T1570", "T1569.002", "1.000000000000")]
     assert p1[0]["from_tactic"] == p1[0]["to_tactic"] == "lateral-movement" and p1[1]["to_tactic"] == "execution"
 
 
@@ -223,9 +253,9 @@ def test_b0_has_one_row_per_labelled_unit_any_host_any_context(result):
     assert sorted(r["unit_id"] for r in b0) == sorted(keys)
     assert {r["variant"] for r in b0} == {"b0"}
     top = b0[0]
-    assert (top["unit_id"], top["rank"], top["score"], top["host"]) == ("k_orphan", "1", "1.000000", "ep-09")
+    assert (top["unit_id"], top["rank"], top["score"], top["host"]) == ("k_orphan", "1", "1.000000000000", "ep-09")
     dump = next(r for r in b0 if r["unit_id"] == "k_dump")
-    assert dump["level_value"] == "3" and dump["score"] == "0.750000"              # context 1 is in b0 (owner Q12)
+    assert dump["level_value"] == "3" and dump["score"] == "0.750000000000"              # context 1 is in b0 (owner Q12)
     ranks = [int(r["rank"]) for r in b0]
     assert ranks == sorted(ranks)
 
@@ -247,11 +277,18 @@ def test_stats_and_run_info(result):
 
 
 def test_report_wording(result):
+    """CLAUDE.md wording: 'probability' only inside the exact phrase 'not a probability'; 'confidence' never."""
     text = result.files["report.md"].lower()
-    for w in FORBIDDEN:
-        assert w not in text, w
+    for name in ("report.md", "stats.json"):
+        low = result.files[name].lower().replace("not a probability", " ")
+        for w in FORBIDDEN:
+            assert w not in low, (name, w)
+        assert "confidence" not in low
+    assert forbidden_hits(result.files["report.md"]) == [] and forbidden_hits(result.files["stats.json"]) == []
+    assert forbidden_hits("the score is a probability") == ["probability"]            # only the exact phrase is exempt
+    assert forbidden_hits("high confidence, not a probability") == ["confidence"]
     assert not re.search(r"confidence\s*%", text)
-    assert "exposed" in text and "not a likelihood" in text
+    assert "exposed" in text and "not a probability" in text and "likelihood" not in text
 
 
 def test_outputs_are_deterministic_except_generated_utc(repo):

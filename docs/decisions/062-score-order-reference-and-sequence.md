@@ -23,7 +23,7 @@ events alternate in time (s03_t01: 6 alternations). The dump may count only thro
 1. **Templates** (`src/score/order_table.json`, pinned by SHA-256): R1 T1078 → T1003.001 → T1021.002 → T1569.002;
    R2 T1078 → T1003.001 → T1021.001 (shortened: no source for T1021.001 → T1569.002); R3 T1003.001 → T1021.002 →
    T1570; R4 T1003.001 → T1021.002 → T1570 → T1569.002; R5 T1078 → T1003.001 → T1021.006. T1550.002 is in no template
-   (no source joins it to the SMB move), so its transitions score ε. R5 and the first step T1078 → T1003.001 shared
+   (no source joins it to the SMB move), so its transitions get TechniqueScore = ε while TacticScore still applies (review FC-2). R5 and the first step T1078 → T1003.001 shared
    by R1, R2 and R5 are **weakly supported** (owner Q4, spec L-SC7).
 2. **Tactics:** T1078 initial-access; T1003.001 credential-access; T1021.001/.002/.006, T1570, T1550.002
    lateral-movement; T1569.002 execution. Stage order for sorting comes from template positions, never from ATT&CK

@@ -2,8 +2,10 @@
 SCA-06; decisions 065, 066). Writes nothing.
 
 Order: stitch files (hashes vs their run_info, ``inputs.load_stitch``) -> score files (hashes vs the score
-run_info, and the score run must have read these stitch files) -> approved key (the existing loader, never a draft;
-its ``db_sha256`` must equal the stitch run's DB hash). No DB is opened: every fact comes from these files. WHY the
+run_info, and the score run must have read these stitch files) -> score run pins (frozen order table and parameters,
+ATK-SC-18) -> label files (each must still have the hash the score run recorded, ATK-SC-18) -> approved key (the
+existing loader, never a draft; a keyed development trial without one is refused, ATK-SC-25; its ``db_sha256`` must
+equal the stitch run's DB hash). No DB is opened: every fact comes from these files. WHY the
 same refusal style as ``run.evaluate_trial``: a refusal must leave the disk untouched, and the CLI alone holds the
 development allowlist, so tests can call ``rank_from_inputs`` directly with synthetic rows.
 """
@@ -15,8 +17,10 @@ from typing import Any, Mapping, Sequence
 
 from . import rank_metrics as rm
 from .inputs import EvalError, KeyData, StitchData, load_key, load_stitch
-from .rank_inputs import (PATH_VARIANTS, ScoreData, check_key_against_stitch, check_score_against_stitch,
-                          default_params, default_score_dir, load_score)
+from .keys import split_list
+from .rank_inputs import (PATH_VARIANTS, ScoreData, check_key_against_stitch, check_key_present,
+                          check_score_against_label, check_score_against_stitch, check_score_pins, default_label_dir,
+                          default_params, default_score_dir, label_file_hashes, load_score, recorded_label_files)
 from .rank_sweep import SweepPoint, SweepTrial, components_of, run_sweep
 from .run import default_stitch_dir
 
@@ -46,6 +50,7 @@ class ReadingResult:
     high: float | None
     high_ids: tuple[str, ...]
     gap: float | None
+    positive: frozenset[str] = frozenset()      # ATK-SC-21: candidates with score > 0 (second chance line)
 
 
 @dataclass(frozen=True)
@@ -100,7 +105,8 @@ def _reading(variant: str, reading: str, cands: Sequence[rm.Candidate], key_path
         results.append(KeyPathResult(kp, hit, pl, _shared(kp, pl, nodes, reading)))
     trial = rm.placement(cands, union)
     low, high, high_ids, gap = rm.score_gap([r.placement.first_score for r in results], cands, union)
-    return ReadingResult(variant, reading, len(cands), tuple(results), trial, low, high, high_ids, gap)
+    return ReadingResult(variant, reading, len(cands), tuple(results), trial, low, high, high_ids, gap,
+                         rm.positive_ids(cands))
 
 
 def _b0(full: Sequence[rm.Candidate], k: int, key_nodes: frozenset[str], nodes: Mapping[str, frozenset[str]],
@@ -121,6 +127,12 @@ def _b0(full: Sequence[rm.Candidate], k: int, key_nodes: frozenset[str], nodes: 
                     full_recall_labelled=frl, b0_recall_labelled=brl)
 
 
+def canonical_b0_rows(rows: Sequence[Mapping[str, str]], alias: Mapping[str, str]) -> list[dict[str, str]]:
+    """``b0_ranked.csv`` rows with ST-05 copies in ``event_uids`` replaced by their representative (ATK-SC-16), so
+    the H4 budget counts one 4624 once on both sides."""
+    return [dict(r, event_uids=";".join(sorted(rm.canonical(split_list(r["event_uids"]), alias)))) for r in rows]
+
+
 def rank_from_inputs(trial: str, split: str, stitch: StitchData, score: ScoreData, key: KeyData | None,
                      inputs: Mapping[str, str] | None = None) -> TrialRank:
     """The TrialRank of already-checked inputs. Pure. A keyed trial without attack paths (S06) gets no reading rows;
@@ -131,14 +143,16 @@ def rank_from_inputs(trial: str, split: str, stitch: StitchData, score: ScoreDat
     if key is None:
         sweep0 = SweepTrial(trial_id=trial, paths=components_of(score.ranked), key_matches=(), keyed=False)
         return TrialRank(trial, split, False, False, (), None, dists, cands, sweep0, params, dict(inputs or {}))
-    nodes = rm.path_node_sets(stitch.path_nodes)
+    alias = rm.copy_alias_map(stitch.hops)                  # ATK-SC-16: ST-05 copies resolved on every side
+    nodes = rm.path_node_sets(stitch.path_nodes, alias)
     key_paths = rm.build_key_paths(key.data, stitch.hops)
     readings = tuple(_reading(v, r, cands[v], key_paths, nodes) for v in PATH_VARIANTS for r in rm.READINGS
                      if key_paths)
     b0 = None
     if key_paths:
         key_nodes = frozenset().union(*(kp.node_uids for kp in key_paths))
-        b0 = _b0(cands["full"], len(key_paths), key_nodes, nodes, rm.unit_node_sets(score.units), score.b0)
+        b0 = _b0(cands["full"], len(key_paths), key_nodes, nodes, rm.unit_node_sets(score.units, alias),
+                 canonical_b0_rows(score.b0, alias))
     hop_full = [r for r in readings if r.variant == "full" and r.reading == rm.READING_HOP]
     sweep = SweepTrial(trial_id=trial, paths=components_of(score.ranked),
                        key_matches=tuple((r.key_path.path_id, frozenset(r.matched))
@@ -157,7 +171,7 @@ def _check_stitch_trial(stitch: StitchData, trial: str) -> None:
 
 
 def rank_trial(repo: Path, trial: str, split: str, stitch_dir: Path | None = None,
-               score_dir: Path | None = None) -> TrialRank:
+               score_dir: Path | None = None, label_dir: Path | None = None) -> TrialRank:
     """Check and read every input of one trial, then assemble; writes nothing. The allowlist is NOT checked here
     (the CLI checks it first, ``inputs.check_trial_allowed``)."""
     repo = Path(repo)
@@ -165,7 +179,12 @@ def rank_trial(repo: Path, trial: str, split: str, stitch_dir: Path | None = Non
     _check_stitch_trial(stitch, trial)
     score = load_score(Path(score_dir) if score_dir else default_score_dir(repo, trial), trial)
     check_score_against_stitch(score, stitch)
+    check_score_pins(score)                                                   # ATK-SC-18
+    recorded = recorded_label_files(score)                                    # ATK-SC-18
+    ldir = Path(label_dir) if label_dir else default_label_dir(repo, trial)
+    check_score_against_label(recorded, label_file_hashes(ldir, sorted(recorded)))
     key = load_key(repo, trial, split)
+    check_key_present(trial, key)                                             # ATK-SC-25
     check_key_against_stitch(key, stitch)
     inputs = {"score_run_info_sha256": score.run_info_sha256,
               "ranked_paths_sha256": score.file_sha256["ranked_paths.csv"],

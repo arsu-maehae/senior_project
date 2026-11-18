@@ -31,6 +31,11 @@ from evaluate.rank_inputs import ScoreData  # noqa: E402
 LAM = 1.0 / math.log(2.0)
 W = (1 / 3, 1 / 3, 1 / 3)
 DB_SHA = "a" * 64
+# Decision 066 freeze (069 item 6: `evaluate --rank` refuses a score run with other values); the spec / decision values,
+# written here from the record, not read from src.
+FROZEN_ORDER_TABLE_SHA256 = "6bfae08b869178c618cef9b42b341eb9c78441ef2aeeb4cf9aeaaf2cfa07d61e"
+FROZEN_PARAMETERS = {"a": 1.0, "alpha": 0.5, "b": 1.0, "beta": 0.5, "eps": 0.01, "lam": 1.0 / math.log(2.0),
+                     "order_tol_s": 5.0, "w1": 1 / 3, "w2": 1 / 3, "w3": 1 / 3}
 RANKED_COLS = ["trial_id", "variant", "rank", "tie_size", "path_id", "score", "length_score", "edge_score", "seq_len",
                "node_score", "n_node_units", "node_score_ctx1", "identity_coherence", "identity_low", "identity_high",
                "n_crossings", "n_crossings_coherent", "n_crossings_flagged", "n_hops", "hop_ids", "hosts", "isolated",
@@ -93,6 +98,8 @@ class RankWorld:
     lam: float = LAM
     w: tuple[float, float, float] = W
     tamper: Any = None                                                           # fn(ranked rows) before writing
+    order_table_sha256: str = FROZEN_ORDER_TABLE_SHA256                         # what the score run_info records
+    extra_params: dict = field(default_factory=dict)                            # overrides of the recorded parameters
 
     # ---------------------------------------------------------------- derived rows
     def hop_ids(self) -> list[str]:
@@ -188,7 +195,7 @@ class RankWorld:
 
     # ---------------------------------------------------------------- texts and objects
     def texts(self) -> dict[str, dict[str, str]]:
-        """{'stitch': {name: text}, 'score': {name: text}} (run_info.json included, hashes consistent)."""
+        """{'stitch', 'score', 'label': {name: text}} (run_info.json included, hashes consistent)."""
         sr = self.stitch_rows()
         stitch = {"hops.csv": ef.csv_text(ef.HOP_COLS, sr["hops.csv"]), "links.csv": ef.csv_text(ef.LINK_COLS, []),
                   "hop_artefacts.csv": ef.csv_text(ef.ART_COLS, []),
@@ -206,12 +213,18 @@ class RankWorld:
                  "path_node_units.csv": ef.csv_text(UNIT_COLS, self.unit_rows())}
         read = {n: ef.sha256_text(stitch[n]) for n in ("hops.csv", "paths.csv", "path_nodes.csv", "hop_identity.csv",
                                                        "path_edges.csv", "run_info.json")}
+        label = {"node_labels.csv": f"path_id,event_uid\n{self.trial},x\n",
+                 "event_labels.csv": f"event_uid,count_key\n{self.trial},k\n",
+                 "run_info.json": json.dumps({"trial_id": self.trial}) + "\n"}
+        params = dict(FROZEN_PARAMETERS)
+        params.update(lam=self.lam, w1=self.w[0], w2=self.w[1], w3=self.w[2])
+        params.update(self.extra_params)
         r_info = {"trial_id": self.trial, "files": {n: {"sha256": ef.sha256_text(t), "rows": None}
                                                     for n, t in score.items()},
-                  "inputs": {"stitch": read, "label": {}}, "order_table_sha256": "0" * 64,
-                  "parameters": {"lam": self.lam, "w1": self.w[0], "w2": self.w[1], "w3": self.w[2]}}
+                  "inputs": {"stitch": read, "label": {n: ef.sha256_text(t) for n, t in label.items()}},
+                  "order_table_sha256": self.order_table_sha256, "parameters": params}
         score["run_info.json"] = json.dumps(r_info, sort_keys=True, indent=1) + "\n"
-        return {"stitch": stitch, "score": score}
+        return {"stitch": stitch, "score": score, "label": label}
 
     def stitch_data(self) -> StitchData:
         t = self.texts()["stitch"]

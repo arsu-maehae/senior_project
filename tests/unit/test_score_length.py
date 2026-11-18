@@ -145,7 +145,7 @@ def test_hop_boundary_is_a_hop_chain_step_scored_direct_with_a_time_delta(ref):
           "w_svc": to_us("2026-09-24T10:10:03Z"), "w_4648": to_us("2026-09-24T10:10:08.250000Z"),
           "w_4648b": to_us("2026-09-24T10:10:09Z"), "w_wsm": to_us("2026-09-24T10:10:10Z")}
     seq = sq.technique_sequence(["h6", "h7"], hop_techs, ref.stage)
-    steps = ln.transitions(seq, ref, P, us)
+    steps = ln.transitions(seq, ref, P, us, {("h6", "h7")})                  # a real chain edge h6 -> h7 (ST-72)
     assert [s.score.basis for s in steps] == ["direct", "direct", "hop_chain", "indirect"]
     assert [s.score.score_e for s in steps] == pytest.approx([1.0, 1.0, 1.0, 0.5])
     assert steps[2].time_delta_ms == 5250                       # first event of the next technique minus the previous
@@ -154,11 +154,43 @@ def test_hop_boundary_is_a_hop_chain_step_scored_direct_with_a_time_delta(ref):
     assert r.seq_len == 4 and r.edge_score == pytest.approx(0.875) and r.length_score == pytest.approx(0.9375 * 0.875)
 
 
-def test_hop_boundary_into_initial_access_would_be_eps_if_scored_against_templates_but_is_not(ref):
+def test_hop_boundary_across_a_chain_edge_into_initial_access_is_hop_chain_not_eps(ref):
     assert od.score_step(ref, "T1569.002", "T1078", P).score_e == pytest.approx(0.005)       # the trap
     hop_techs = {"a": {"T1569.002": ("x",)}, "b": {"T1078": ("y",)}}
-    steps = ln.transitions(sq.technique_sequence(["a", "b"], hop_techs, ref.stage), ref, P, {})
+    seq = sq.technique_sequence(["a", "b"], hop_techs, ref.stage)
+    steps = ln.transitions(seq, ref, P, {}, {("a", "b")})
     assert steps[0].score.score_e == pytest.approx(1.0) and steps[0].score.basis == "hop_chain"
+
+
+def test_decision_069_item_1_sibling_boundary_without_a_chain_edge_is_scored_against_the_templates(ref):
+    """ATK-SC-17 (amends 067 item 4): no chain edge between the two hops -> the boundary step is scored like a within-hop
+    step (here absent: execution -> initial-access has no template path, ScoreE = 0.5 * 0 + 0.5 * eps), never hop_chain;
+    its time delta is still reported."""
+    hop_techs = {"a": {"T1569.002": ("x",)}, "b": {"T1078": ("y",)}}
+    seq = sq.technique_sequence(["a", "b"], hop_techs, ref.stage)
+    us = {"x": to_us("2026-09-24T10:00:00Z"), "y": to_us("2026-09-24T10:00:07Z")}
+    for edges in (None, set(), {("b", "a")}, {("a", "c")}):                                   # no edge a -> b
+        steps = ln.transitions(seq, ref, P, us) if edges is None else ln.transitions(seq, ref, P, us, edges)
+        assert steps[0].score.basis == "absent" and steps[0].score.score_e == pytest.approx(0.005), edges
+        assert steps[0].score == od.score_step(ref, "T1569.002", "T1078", P)
+        assert steps[0].time_delta_ms == 7000
+
+
+def test_chain_edge_applies_only_to_the_boundary_it_joins_in_a_three_hop_sequence(ref):
+    hop_techs = {"a": {"T1021.002": ("a1",), "T1570": ("a2",)}, "b": {"T1569.002": ("b1",)}, "c": {"T1078": ("c1",)}}
+    seq = sq.technique_sequence(["a", "b", "c"], hop_techs, ref.stage)
+    steps = ln.transitions(seq, ref, P, {}, {("a", "b")})                                    # a -> b chained, b -> c siblings
+    assert [s.score.basis for s in steps] == ["direct", "hop_chain", "absent"]
+    both = ln.transitions(seq, ref, P, {}, {("a", "b"), ("b", "c")})
+    assert [s.score.basis for s in both] == ["direct", "hop_chain", "hop_chain"]
+
+
+def test_a_sibling_boundary_lowers_length_score_against_a_chained_one(ref):
+    hop_techs = {"a": {"T1569.002": ("x",)}, "b": {"T1078": ("y",)}}
+    seq = sq.technique_sequence(["a", "b"], hop_techs, ref.stage)
+    chained = ln.length_score(ln.transitions(seq, ref, P, {}, {("a", "b")}), P.lam)
+    sibling = ln.length_score(ln.transitions(seq, ref, P, {}, set()), P.lam)
+    assert chained.length_score == pytest.approx(0.5) and sibling.length_score == pytest.approx(0.5 * 0.005)
 
 
 # ------------------------------------------------------------------------------------------------ Eq. 6 / 7

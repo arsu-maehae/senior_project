@@ -368,15 +368,34 @@ def test_a_key_built_from_another_db_is_refused(tmp_path, capsys):
     refused(root, capsys, "--rank", "--development")
 
 
-def test_a_draft_key_is_never_read(tmp_path, capsys):
+def test_a_draft_key_is_never_read_so_a_keyed_development_trial_without_an_approved_key_is_refused(tmp_path, capsys):
+    """Decision 069 item 8 (ATK-SC-25): the six keyed development trials (t00 of S02-S07) must have an approved key; a
+    draft in ground_truth/drafts does not count and is never read."""
     root = fresh_repo(tmp_path)
     p = root / "ground_truth" / "approved" / "s04_t00.yaml"
     (root / "ground_truth" / "drafts").mkdir(parents=True)
     (root / "ground_truth" / "drafts" / "s04_t00.yaml").write_text(p.read_text(encoding="utf-8"), encoding="utf-8")
-    p.unlink()                                                                # approved key gone: the trial reads as unkeyed
-    assert cli(root, "--rank", "--trial", "s04_t00", "--out", str(tmp_path / "o")) == 0
-    rows = read_csv(tmp_path / "o" / "rank.csv")
-    assert {r["row_kind"] for r in rows} == {"distribution"} and {r["keyed"] for r in rows} == {"0"}
+    p.unlink()
+    err = refused(root, capsys, "--rank", "--trial", "s04_t00", "--out", str(tmp_path / "o"))
+    assert "s04_t00" in err and "keyed" in err and not (tmp_path / "o").exists()
+
+
+@pytest.mark.parametrize("trial", ["s02_t00", "s03_t00", "s04_t00", "s05_t00", "s06_t00", "s07_t00"])
+def test_atk_sc25_every_keyed_development_trial_without_a_key_refuses_development_runs_and_writes_nothing(tmp_path, capsys, trial):
+    root = fresh_repo(tmp_path)
+    (root / "ground_truth" / "approved" / f"{trial}.yaml").unlink()
+    for flag in ("--rank", "--rank-sweep"):
+        err = refused(root, capsys, flag, "--development")
+        assert trial in err
+    assert not (root / "out" / "evaluate").exists()
+
+
+@pytest.mark.parametrize("trial", ["s02_t01", "s03_t01", "s06_t01"])
+def test_the_unkeyed_development_trials_need_no_key(tmp_path, trial):
+    root = fresh_repo(tmp_path)
+    assert not (root / "ground_truth" / "approved" / f"{trial}.yaml").exists()
+    assert cli(root, "--rank", "--trial", trial, "--out", str(tmp_path / "o")) == 0
+    assert {r["row_kind"] for r in read_csv(tmp_path / "o" / "rank.csv")} == {"distribution"}
 
 
 def test_sweep_refuses_when_the_written_full_scores_do_not_follow_from_the_columns(tmp_path, capsys):
@@ -393,13 +412,129 @@ def test_sweep_refuses_when_the_written_full_scores_do_not_follow_from_the_colum
     assert cli(root, "--rank", "--development") == 0                           # the plain check does not recompute
 
 
-def test_score_runs_with_different_parameters_make_the_sweep_refuse(tmp_path, capsys):
+def test_a_score_run_with_other_than_the_frozen_parameters_is_refused_by_rank_and_by_the_sweep(tmp_path, capsys):
+    """Decision 069 item 6 (ATK-SC-18): lambda = 2 and w = (0.5, 0.25, 0.25) are not the decision 066 values."""
     root = fresh_repo(tmp_path)
     w = rf.tie_world("s04_t00")
     w.lam, w.w = 2.0, (0.5, 0.25, 0.25)
     w.write(root)
-    err = refused(root, capsys, "--rank-sweep", "--development")
-    assert "parameters" in err
+    for flag in ("--rank", "--rank-sweep"):
+        err = refused(root, capsys, flag, "--development")
+        assert "frozen" in err and "parameters" in err
+    err = refused(root, capsys, "--rank", "--trial", "s04_t00", "--out", str(tmp_path / "o"))
+    assert "frozen" in err and not (tmp_path / "o").exists()
+
+
+# ================================================================================================ ATK-SC-18 pins (069 item 6)
+def rewrite_score_info(root: Path, trial: str, fn) -> None:
+    p = root / "out" / "score" / trial / "run_info.json"
+    info = json.loads(p.read_text(encoding="utf-8"))
+    fn(info)
+    p.write_text(json.dumps(info, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def test_the_unmodified_fixture_passes_every_pin(tmp_path):
+    root = fresh_repo(tmp_path)
+    assert cli(root, "--rank", "--trial", "s04_t00", "--out", str(tmp_path / "o")) == 0
+
+
+def test_atk_sc18_a_label_file_changed_after_the_score_run_is_refused(tmp_path, capsys):
+    root = fresh_repo(tmp_path)
+    p = root / "out" / "label" / "s04_t00" / "node_labels.csv"
+    p.write_bytes(p.read_bytes() + b"\n")
+    err = refused(root, capsys, "--rank", "--trial", "s04_t00", "--out", str(tmp_path / "o"))
+    assert "node_labels.csv" in err and not (tmp_path / "o").exists()
+    refused(root, capsys, "--rank", "--development")
+
+
+def test_atk_sc18_a_label_file_that_is_missing_is_refused(tmp_path, capsys):
+    root = fresh_repo(tmp_path)
+    (root / "out" / "label" / "s04_t00" / "event_labels.csv").unlink()
+    err = refused(root, capsys, "--rank", "--trial", "s04_t00", "--out", str(tmp_path / "o"))
+    assert "event_labels.csv" in err
+
+
+def test_atk_sc18_a_score_run_that_records_no_label_hashes_or_a_path_is_refused(tmp_path, capsys):
+    root = fresh_repo(tmp_path)
+    rewrite_score_info(root, "s04_t00", lambda i: i["inputs"].update(label={}))
+    refused(root, capsys, "--rank", "--trial", "s04_t00", "--out", str(tmp_path / "o"))
+    root2 = fresh_repo(tmp_path, "r2")
+    rewrite_score_info(root2, "s04_t00", lambda i: i["inputs"].update(label={"../../x.csv": "0" * 64}))
+    refused(root2, capsys, "--rank", "--trial", "s04_t00", "--out", str(tmp_path / "o2"))
+
+
+def test_atk_sc18_another_order_table_hash_is_refused(tmp_path, capsys):
+    root = fresh_repo(tmp_path)
+    rewrite_score_info(root, "s04_t00", lambda i: i.update(order_table_sha256="0" * 64))
+    err = refused(root, capsys, "--rank", "--trial", "s04_t00", "--out", str(tmp_path / "o"))
+    assert "order_table_sha256" in err and not (tmp_path / "o").exists()
+    root2 = fresh_repo(tmp_path, "r2")
+    rewrite_score_info(root2, "s04_t00", lambda i: i.pop("order_table_sha256"))
+    refused(root2, capsys, "--rank", "--trial", "s04_t00", "--out", str(tmp_path / "o2"))
+
+
+@pytest.mark.parametrize("name,value", [("w1", 0.5), ("w2", 0.25), ("lam", 1.5), ("alpha", 0.6), ("beta", 0.4), ("a", 2.0),
+                                        ("b", 0.5), ("eps", 0.02), ("lam", 1.0 / 0.6931471805599453 + 1e-9)])
+def test_atk_sc18_every_frozen_parameter_is_pinned(tmp_path, capsys, name, value):
+    root = fresh_repo(tmp_path)
+    rewrite_score_info(root, "s04_t00", lambda i: i["parameters"].update({name: value}))
+    err = refused(root, capsys, "--rank", "--trial", "s04_t00", "--out", str(tmp_path / "o"))
+    assert f"parameters.{name}" in err
+
+
+def test_atk_sc18_a_missing_or_non_numeric_parameter_is_refused_and_a_1e_13_wobble_is_not(tmp_path, capsys):
+    root = fresh_repo(tmp_path)
+    rewrite_score_info(root, "s04_t00", lambda i: i["parameters"].pop("eps"))
+    refused(root, capsys, "--rank", "--trial", "s04_t00", "--out", str(tmp_path / "o"))
+    root2 = fresh_repo(tmp_path, "r2")
+    rewrite_score_info(root2, "s04_t00", lambda i: i["parameters"].update(w3="x"))
+    refused(root2, capsys, "--rank", "--trial", "s04_t00", "--out", str(tmp_path / "o2"))
+    root3 = fresh_repo(tmp_path, "r3")
+    rewrite_score_info(root3, "s04_t00", lambda i: i["parameters"].update(lam=i["parameters"]["lam"] + 1e-13))
+    assert cli(root3, "--rank", "--trial", "s04_t00", "--out", str(tmp_path / "o3")) == 0
+
+
+# ================================================================================================ decision 069 item 9 in the files
+def test_rank_csv_has_the_beside_columns_by_hand_and_the_primary_columns_unchanged(swept):
+    rows = read_csv(swept / "out" / "evaluate" / "s04_t00" / "rank.csv")
+    (hop,) = [r for r in rows if r["row_kind"] == "trial" and r["variant"] == "full" and r["match_reading"] == "hop"]
+    assert hop["rank_expected"] == "1.500000" and hop["chance_rr"] == "0.333333" and hop["chance_top1"] == "0.200000"
+    assert hop["rr_mean_expected"] == "0.750000"                                   # E[1/rank] inside the 2-way tie
+    assert (hop["n_candidates_positive"], hop["chance_pos_top1"], hop["chance_pos_rank_expected"]) == ("4", "0.250000", "2.500000")
+    assert (hop["chance_pos_rr"], hop["chance_pos_rr_mean"]) == ("0.400000", "0.520833")
+    (node,) = [r for r in rows if r["row_kind"] == "trial" and r["variant"] == "full" and r["match_reading"] == "node"]
+    assert (node["chance_pos_top1"], node["chance_pos_rr"], node["chance_pos_rr_mean"]) == ("0.500000", "0.600000", "0.722222")
+
+
+def test_rank_totals_and_rank_md_report_per_key_mrr_e_one_over_rank_and_the_positive_chance_line(swept):
+    t = next(r for r in read_csv(summary(swept) / "rank_totals.csv") if r["variant"] == "full" and r["match_reading"] == "hop")
+    assert (t["mrr_expected"], t["mrr_rr_mean_expected"], t["mrr_per_key_expected"]) == ("0.666667", "0.750000", "0.666667")
+    assert (t["chance_pos_top1"], t["chance_pos_mrr"], t["chance_pos_rr_mean"]) == ("0.250000", "0.400000", "0.520833")
+    md = (summary(swept) / "rank.md").read_text(encoding="utf-8")
+    for needle in ("mrr_per_key_expected", "chance_pos_mrr", "E[1/rank]", "chance_E[1/rank]", "n_pos", "Reported beside",
+                   "ATK-SC-15", "ATK-SC-21", rr_basis_all(), rr_basis_labelled()):
+        assert needle in md, needle
+
+
+def rr_basis_all() -> str:
+    return "all context-0 nodes (065 reading)"
+
+
+def rr_basis_labelled() -> str:
+    return "labelled nodes only (b0-reachable)"
+
+
+def test_rank_md_h4_section_shows_both_recall_bases_labelled_and_the_sweep_is_called_not_informative(swept):
+    md = (summary(swept) / "rank.md").read_text(encoding="utf-8")
+    assert md.count("both recall bases side by side") >= 2
+    assert "not informative on development data" in md and "it never moves a value" in md
+
+
+def test_totals_recall_bases_are_named_in_the_totals_file(swept):
+    b0 = next(r for r in read_csv(summary(swept) / "rank_totals.csv") if r["row_kind"] == "b0_recall")
+    assert b0["recall_basis"] == rr_basis_all() and b0["recall_basis_labelled"] == rr_basis_labelled()
+    assert (b0["full_recall_mean"], b0["b0_recall_mean"]) == ("0.500000", "0.666667")
+    assert (b0["full_recall_labelled_mean"], b0["b0_recall_labelled_mean"]) == ("0.333333", "0.500000")
 
 
 # ================================================================================================ independence and no side effects

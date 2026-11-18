@@ -75,7 +75,7 @@ EXCLUDED_READ_IMAGE_PATTERNS: tuple[str, ...] = (
     r"^c:\\programdata\\microsoft\\windows defender\\platform\\[^\\]+\\msmpeng\.exe$",
 )
 
-SCORE_DECIMALS = 6     # spec 3: scores written with 6 decimals
+SCORE_DECIMALS = 12    # ATK-SC-24 (decision 069 item 4): scores written with the 12 decimals ties are decided on
 TIE_DECIMALS = 12      # SC-41: ties decided on the value rounded to 12 decimals
 LEVEL_MAX = 4          # SC-33: critical = 4, NodeScore = mean level / 4
 

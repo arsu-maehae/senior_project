@@ -221,8 +221,10 @@ def test_jaccard_basics():
     assert rm.MATCH_THRESHOLD == 0.5
 
 
-def kp_of(mapped, nodes):
-    return rm.KeyPath("K", "attack", ("k",), frozenset(mapped), (), frozenset(nodes), ())
+def kp_of(mapped, nodes, targets=()):
+    """A KeyPath; `targets` = its target logon uids (decision 069 item 7 anchor of the node reading)."""
+    return rm.KeyPath("K", "attack", ("k",), frozenset(mapped), (), frozenset(nodes), (),
+                      target_logon_uids=frozenset(targets))
 
 
 def test_hop_reading_exactly_half_and_just_below():
@@ -239,8 +241,59 @@ def test_node_reading_exactly_half_matches_and_below_does_not():
              "R": frozenset({"n1", "n2"}),                     # inter 2, union 4 -> 0.5: yes (>=)
              "S": frozenset()}
     c = cands([(p, i + 1, 1, 0.5) for i, p in enumerate("PQRS")])
-    got = rm.matches(kp_of(set(), key), c, nodes, rm.READING_NODE)
+    got = rm.matches(kp_of(set(), key, {"n1"}), c, nodes, rm.READING_NODE)         # n1 = the key's target logon uid
     assert sorted(got) == ["Q", "R"] and got["R"] == 0.5 and got["Q"] == pytest.approx(0.6)
+
+
+def test_decision_069_item_7_node_match_also_needs_one_of_the_key_target_logon_uids():
+    """ATK-SC-16: a candidate of artefacts / source events only (Jaccard high, no target 4624) must not match."""
+    key = {"t1", "a1", "a2", "a3"}
+    nodes = {"anchorless": frozenset({"a1", "a2", "a3"}),            # Jaccard 3/4, holds no target logon
+             "anchored": frozenset({"t1", "a1", "a2"}),              # Jaccard 3/4, holds t1
+             "other_target": frozenset({"t9", "a1", "a2", "a3"})}    # Jaccard 3/5, t9 is not the key's target
+    c = cands([("anchorless", 1, 1, 0.5), ("anchored", 2, 1, 0.5), ("other_target", 3, 1, 0.5)])
+    got = rm.matches(kp_of(set(), key, {"t1"}), c, nodes, rm.READING_NODE)
+    assert sorted(got) == ["anchored"] and got["anchored"] == 0.75
+    assert rm.matches(kp_of(set(), key, set()), c, nodes, rm.READING_NODE) == {}         # no target uid: matches nothing
+    two = rm.matches(kp_of(set(), key, {"t1", "t9"}), c, nodes, rm.READING_NODE)           # any one of several targets
+    assert sorted(two) == ["anchored", "other_target"]
+
+
+def test_the_anchor_does_not_touch_the_hop_reading():
+    c = cands([("P", 1, 1, 0.5, {"H1"})])
+    assert "P" in rm.matches(kp_of({"H1"}, {"n"}, set()), c, {}, rm.READING_HOP)
+
+
+def test_build_key_paths_target_logon_uids_are_the_key_target_events_that_are_stitch_member_logons():
+    w = rf.RankWorld()
+    w.paths = [rf.P("P1", ["H1"]), rf.P("P2", ["H2"])]
+    w.key_hops = [rf.KH("K1", "T_H1", 0x100, {"target_event_uids": ["art1", "svc1"], "agent_event_uids": ["a1"]}),
+                  rf.KH("K2", "T_H2", 0x101)]
+    w.key_paths = [rf.KP("KA", "attack", ["K1"]), rf.KP("KB", "attack", ["K1", "K2"])]
+    ka, kb = rm.build_key_paths(w.key_json(), w.stitch_data().hops)
+    assert ka.target_logon_uids == frozenset({"T_H1"})                     # artefact uids and the agent are not target logons
+    assert kb.target_logon_uids == frozenset({"T_H1", "T_H2"})
+    assert {"art1", "svc1", "a1", "T_H1"} <= ka.node_uids                  # but they stay in the node set
+
+
+def test_st05_copies_are_replaced_by_their_representative_on_both_sides():
+    """Decision 069 item 7 / 055: a member_logon_uids item `rep|copy` is one 4624; the key may name the copy."""
+    w = rf.RankWorld()
+    w.paths = [rf.P("P1", ["H1"], nodes=["T1copy", "a1"]), rf.P("P2", ["H2"], nodes=["T1", "a1"])]
+    w.members = {"H1": [("T1|T1copy", 0x100)], "H2": [("T9", 0x102)]}
+    w.key_hops = [rf.KH("K1", "T1copy", 0x100, {"agent_event_uids": ["a1"]})]
+    w.key_paths = [rf.KP("KA", "attack", ["K1"])]
+    hops = w.stitch_data().hops
+    alias = rm.copy_alias_map(hops)
+    assert alias["T1copy"] == "T1" and alias["T1"] == "T1" and alias.get("T9", "T9") == "T9"
+    assert rm.canonical(["T1copy", "x"], alias) == frozenset({"T1", "x"})
+    (kp,) = rm.build_key_paths(w.key_json(), hops)
+    assert kp.target_logon_uids == frozenset({"T1"}) and kp.node_uids == frozenset({"T1", "a1"})
+    nodes = rm.path_node_sets(w.stitch_data().path_nodes, alias)
+    assert nodes["P1"] == frozenset({"T1", "a1"}) and nodes["P2"] == frozenset({"T1", "a1"})
+    cs = rm.candidates_of(w.score_data().ranked, "full")
+    got = rm.matches(kp, cs, nodes, rm.READING_NODE)
+    assert sorted(got) == ["P1", "P2"] and got["P1"] == 1.0                             # the copy no longer breaks the match
 
 
 def test_node_reading_of_a_candidate_without_nodes_matches_nothing_and_unknown_reading_raises():
@@ -480,3 +533,62 @@ def test_totals_rows_use_the_per_trial_means_and_chance_means():
     assert full_hop["s06_held"] == "1" and full_hop["trials_gap_positive"] == "0" and float(full_hop["score_gap_min"]) == pytest.approx(0.0, abs=1e-6)
     b0 = next(r for r in rows if r["row_kind"] == "b0_recall")
     assert b0["attack_trials"] == "2" and float(b0["full_recall_mean"]) == pytest.approx(0.5)
+
+
+# ================================================================================================ decision 069 item 9: reported beside
+def test_first_rr_mean_is_the_expected_reciprocal_position_inside_the_tie_group():
+    for r, t, m in ((1, 2, 1), (1, 3, 2), (1, 4, 2), (3, 3, 1), (2, 1, 1)):
+        firsts = [next(i for i, x in enumerate(p, 1) if x < m) for p in itertools.permutations(range(t))]
+        want = sum(1 / (r - 1 + f) for f in firsts) / len(firsts)
+        assert rm.first_rr_mean(r, t, m) == pytest.approx(want), (r, t, m)
+    assert rm.first_rr_mean(1, 2, 0) == 0.0 and rm.first_rr_mean(1, 2, 3) == 0.0
+
+
+def test_placement_rr_mean_beside_the_inverse_of_the_expected_rank():
+    pl = rm.placement(group_cands(1, 2), {"G0"})
+    assert pl.rr("expected") == pytest.approx(2 / 3) and pl.rr_mean() == pytest.approx(0.75)      # E[1/X] > 1/E[X]
+    assert rm.placement(group_cands(1, 2), set()).rr_mean() == 0.0
+    assert rm.placement(group_cands(1, 1), {"G0"}).rr_mean() == 1.0
+
+
+def test_positive_ids_are_the_candidates_with_score_above_zero():
+    c = cands([("A", 1, 1, 0.9), ("B", 2, 2, 0.0), ("C", 2, 2, 0.0), ("D", 4, 1, 0.1)])
+    assert rm.positive_ids(c) == frozenset({"A", "D"})
+
+
+def test_totals_report_per_key_mrr_e_one_over_rank_and_the_chance_line_over_positive_candidates():
+    """tie_world x5 attack trials: 5 candidates, 4 with score > 0 (P4 = 0), key path K1 -> P1 in a 2-way tie at the top."""
+    results = [assemble(rf.tie_world(t)) for t in ("s02_t00", "s03_t00", "s04_t00", "s05_t00", "s07_t00")]
+    rows = {(r["variant"], r["match_reading"]): r for r in rr.total_rows(results, "development") if r["row_kind"] == "ranking"}
+    hop = rows[("full", "hop")]
+    assert float(hop["mrr_expected"]) == pytest.approx(2 / 3, abs=1e-6)
+    assert float(hop["mrr_rr_mean_expected"]) == pytest.approx(0.75, abs=1e-6)                 # E[1/rank] inside the tie
+    assert float(hop["mrr_per_key_expected"]) == pytest.approx(2 / 3, abs=1e-6)               # 5 key paths, each 1/1.5
+    assert float(hop["mrr_per_key_rr_mean"]) == pytest.approx(0.75, abs=1e-6)
+    # chance over the 4 candidates with score > 0, 1 match: top-1 1/4, rank 2.5, 1/rank 0.4, E[1/rank] = (1+1/2+1/3+1/4)/4
+    assert float(hop["chance_pos_top1"]) == pytest.approx(0.25) and float(hop["chance_pos_mrr"]) == pytest.approx(0.4)
+    assert float(hop["chance_pos_rr_mean"]) == pytest.approx((1 + 1 / 2 + 1 / 3 + 1 / 4) / 4, abs=1e-6)
+    assert float(hop["chance_mrr"]) == pytest.approx(1 / 3, abs=1e-6)                         # the primary line is unchanged
+    node = rows[("full", "node")]                                                                # 2 matches (P1, P5), both > 0
+    assert float(node["chance_pos_top1"]) == pytest.approx(0.5) and float(node["chance_pos_mrr"]) == pytest.approx(0.6)
+    assert float(node["chance_pos_rr_mean"]) == pytest.approx(0.5 + 2 / 6 / 2 + 1 / 6 / 3, abs=1e-6)
+
+
+def test_per_key_mrr_differs_from_trial_mrr_when_two_key_paths_share_a_tie_group():
+    w = rf.RankWorld(trial="s07_t00")
+    w.paths = [rf.P("X", ["H1"], seq_len=2, node=0.25, ident=1.0), rf.P("Y", ["H2"], seq_len=2, node=0.25, ident=1.0),
+               rf.P("Z", ["H3"], seq_len=0, edge=0.0)]
+    w.key_hops = [rf.KH("K1", "T_H1", 0x100), rf.KH("K2", "T_H2", 0x101)]
+    w.key_paths = [rf.KP("KX", "attack", ["K1"]), rf.KP("KY", "attack", ["K2"])]
+    row = next(r for r in rr.total_rows([assemble(w)], "development") if r["variant"] == "full" and r["match_reading"] == "hop")
+    assert float(row["mrr_expected"]) == 1.0 and float(row["mrr_per_key_expected"]) == pytest.approx(2 / 3, abs=1e-6)
+    assert row["key_paths"] == "2" and row["attack_trials"] == "1"
+    assert float(row["chance_pos_top1"]) == pytest.approx(2 / 2)             # 2 positive candidates, both matches
+
+
+def test_total_rows_label_the_two_h4_recall_bases():
+    results = [assemble(rf.tie_world())]
+    b0 = next(r for r in rr.total_rows(results, "development") if r["row_kind"] == "b0_recall")
+    assert b0["recall_basis"] == rr.RECALL_BASIS_ALL and b0["recall_basis_labelled"] == rr.RECALL_BASIS_LABELLED
+    assert b0["recall_basis"] != b0["recall_basis_labelled"]
+    assert float(b0["full_recall_mean"]) == pytest.approx(0.5) and float(b0["full_recall_labelled_mean"]) == pytest.approx(1 / 3, abs=1e-6)

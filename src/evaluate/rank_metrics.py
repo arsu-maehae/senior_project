@@ -15,13 +15,21 @@ Readings (stated in rank.md and in the T9.5 report):
   the hop as evidence of the move (``KEY_NODE_FIELDS``). The key's ``steps`` are not read: on every development key
   the ``move`` / ``service_exec`` step uids are already inside these fields, and the ``lsass_dump`` steps are source
   session context (``context`` = 1, decision 056 item 7) that no candidate's ``context`` = 0 set can hold.
+  **Anchor (ATK-SC-16, decision 069 item 7):** a node match also needs the candidate to hold at least one of the key
+  path's target logon uids = the key hops' ``target_event_uids`` that are target 4624 members of a stitch hop
+  (``hops.csv`` ``member_logon_uids``). WHY: without it a candidate made of artefacts and source events alone could
+  match a key path whose move it does not contain. **ST-05 copies:** a ``member_logon_uids`` item ``rep|copy|...``
+  holds one 4624 and its near-duplicate copies (decision 055); every uid on both sides is replaced by the item's
+  first uid (``copy_alias_map``) before any comparison, as the hop reading matches a member on any of its copies.
 - **Ties** (065): the first match lies in the tie group (competition rank r, size t) holding the best-ranked match;
   with m matches in that group, a uniformly random order inside the group gives expected rank r - 1 + (t+1)/(m+1)
   (= r + (t-1)/2 when m = 1, the 065 formula), optimistic r, pessimistic r + t - m; top-1 credit m/t when r = 1.
   Reciprocal rank = 1 / rank of the reading (065: a 2-way tie at the top = rank 1.5, RR 1/1.5). ``path_id`` order
   is never used.
 - **Chance line** (065): the same expectation with all n candidates in one tie group (top-1 m/n, rank (n+1)/(m+1),
-  RR its inverse); ``chance_rr_mean`` = E[1 / rank] of a random order, given beside it.
+  RR its inverse); ``chance_rr_mean`` = E[1 / rank] of a random order, given beside it. Reported beside, primary
+  unchanged (ATK-SC-21): the same chance line over the candidates with score > 0 only, and the observed E[1 / rank]
+  inside the first match's tie group (``Placement.rr_mean``) beside 1 / E[rank].
 - **Score gap** (handoff 14.2): lowest score of the key attack paths' first matches - highest score of the
   candidates that match no key attack path (> 0 = clean separation).
 - **Node recall at an equal node budget** (H4, 065): ``full``'s top-k paths (k = number of key attack paths), a tie
@@ -38,10 +46,11 @@ from fractions import Fraction
 from typing import Any, Iterable, Mapping, Sequence
 
 from .inputs import EvalError
-from .keys import MatchResult, match_key_hop, split_list
+from .keys import MatchResult, match_key_hop, member_uid_set, split_list
 
 __all__ = ["ATTACK_ROLES", "MATCH_THRESHOLD", "READING_HOP", "READING_NODE", "READINGS", "KEY_NODE_FIELDS",
-           "Candidate", "KeyPath", "Placement", "jaccard", "key_attack_paths", "key_hop_node_uids", "build_key_paths",
+           "Candidate", "KeyPath", "Placement", "jaccard", "copy_alias_map", "canonical", "member_logon_uid_set",
+           "key_attack_paths", "key_hop_node_uids", "build_key_paths", "positive_ids", "first_rr_mean",
            "check_groups", "candidates_of", "path_node_sets", "unit_node_sets", "matches", "placement", "chance_line",
            "score_gap", "inclusion_probabilities", "expected_coverage", "b0_recall", "distribution"]
 
@@ -81,6 +90,7 @@ class KeyPath:
     anchor_uids: tuple[str, ...]
     node_uids: frozenset[str]
     unmatched_key_hops: tuple[str, ...]
+    target_logon_uids: frozenset[str] = frozenset()     # ATK-SC-16 node-reading anchor (canonical uids)
 
 
 @dataclass(frozen=True)
@@ -105,6 +115,13 @@ class Placement:
                  "pessimistic": self.rank_pessimistic}[reading]
         return 0.0 if value is None else 1.0 / value
 
+    def rr_mean(self) -> float:
+        """E[1 / rank of the first match] under a random order inside its tie group (ATK-SC-21, reported beside
+        1 / E[rank]); 0 when nothing matches."""
+        if self.first_rank is None or self.tie_size is None:
+            return 0.0
+        return first_rr_mean(self.first_rank, self.tie_size, len(self.first_group))
+
 
 # ---------------------------------------------------------------- key side
 
@@ -113,6 +130,40 @@ def jaccard(a: Iterable[str], b: Iterable[str]) -> float:
     sa, sb = set(a), set(b)
     union = sa | sb
     return len(sa & sb) / len(union) if union else 0.0
+
+
+def first_rr_mean(rank: int, tie: int, m: int) -> float:
+    """E[1 / position of the first of m matches] when they lie in a tie group of size ``tie`` starting at competition
+    rank ``rank`` and the order inside the group is uniformly random: P(first at rank - 1 + i) = C(tie - i, m - 1) /
+    C(tie, m) (exact with fractions)."""
+    if m <= 0 or tie <= 0 or m > tie:
+        return 0.0
+    total = math.comb(tie, m)
+    return float(sum(Fraction(math.comb(tie - i, m - 1), total) / (rank - 1 + i) for i in range(1, tie - m + 2)))
+
+
+def copy_alias_map(stitch_hops: Sequence[Mapping[str, str]]) -> dict[str, str]:
+    """uid -> canonical uid for every uid in a ``member_logon_uids`` item: the item's first uid (the representative)
+    for itself and each of its ST-05 copies (``keys.member_uid_set``, decision 055). A uid in no item is not listed
+    and stays itself (``canonical``)."""
+    out: dict[str, str] = {}
+    for hop in stitch_hops:
+        for item in split_list(hop.get("member_logon_uids")):
+            parts = [u for u in item.split("|") if u != ""]
+            for u in sorted(member_uid_set(item)):
+                out.setdefault(u, parts[0])
+    return dict(sorted(out.items()))
+
+
+def canonical(uids: Iterable[str], alias: Mapping[str, str]) -> frozenset[str]:
+    """The uids with every ST-05 copy replaced by its representative (``copy_alias_map``)."""
+    return frozenset(alias.get(u, u) for u in uids)
+
+
+def member_logon_uid_set(stitch_hops: Sequence[Mapping[str, str]], alias: Mapping[str, str]) -> frozenset[str]:
+    """Canonical uids of every target 4624 member of any stitch hop: the uids that are target logons."""
+    return canonical((u for h in stitch_hops for item in split_list(h.get("member_logon_uids"))
+                      for u in member_uid_set(item)), alias)
 
 
 def key_attack_paths(key_data: Mapping[str, Any]) -> list[Mapping[str, Any]]:
@@ -132,15 +183,19 @@ def key_hop_node_uids(key_hop: Mapping[str, Any]) -> frozenset[str]:
 
 
 def build_key_paths(key_data: Mapping[str, Any], stitch_hops: Sequence[Mapping[str, str]]) -> list[KeyPath]:
-    """Every key attack path with its mapped stitch hops (ST-25 per key hop) and node set. A key path naming a hop id
-    the key does not define is refused: the key would be internally inconsistent."""
+    """Every key attack path with its mapped stitch hops (ST-25 per key hop), its node set and its target logon uids,
+    both with ST-05 copies replaced by their representative (ATK-SC-16). A key path naming a hop id the key does not
+    define is refused: the key would be internally inconsistent."""
     by_id = {str(h.get("hop_id")): h for h in key_data.get("hops") or [] if isinstance(h, Mapping)}
+    alias = copy_alias_map(stitch_hops)
+    logons = member_logon_uid_set(stitch_hops, alias)
     out: list[KeyPath] = []
     for kp in key_attack_paths(key_data):
         hop_ids = tuple(str(h) for h in kp.get("hop_ids") or [])
         mapped: set[str] = set()
         anchors: list[str] = []
         nodes: set[str] = set()
+        targets: set[str] = set()
         unmatched: list[str] = []
         for hid in hop_ids:
             if hid not in by_id:
@@ -151,9 +206,11 @@ def build_key_paths(key_data: Mapping[str, Any], stitch_hops: Sequence[Mapping[s
             if not m.hop_ids:
                 unmatched.append(hid)
             nodes |= key_hop_node_uids(by_id[hid])
+            targets |= canonical(by_id[hid].get("target_event_uids") or [], alias) & logons
         out.append(KeyPath(path_id=str(kp.get("path_id", "")), role=str(kp.get("role")), key_hop_ids=hop_ids,
                            mapped_hop_ids=frozenset(mapped), anchor_uids=tuple(sorted(set(anchors))),
-                           node_uids=frozenset(nodes), unmatched_key_hops=tuple(unmatched)))
+                           node_uids=canonical(nodes, alias), unmatched_key_hops=tuple(unmatched),
+                           target_logon_uids=frozenset(targets)))
     return out
 
 
@@ -198,35 +255,49 @@ def candidates_of(ranked: Sequence[Mapping[str, str]], variant: str) -> list[Can
     return sorted(out, key=lambda c: (c.rank, c.path_id))
 
 
-def path_node_sets(path_nodes: Sequence[Mapping[str, str]]) -> dict[str, frozenset[str]]:
-    """path_id -> its ``context`` = 0 event uids (stitch ``path_nodes.csv``). WHY ``context`` = 0: those are the
-    path's own nodes; ``context`` = 1 rows are session context (ST-71, decision 056 item 7)."""
+def path_node_sets(path_nodes: Sequence[Mapping[str, str]],
+                   alias: Mapping[str, str] | None = None) -> dict[str, frozenset[str]]:
+    """path_id -> its ``context`` = 0 event uids (stitch ``path_nodes.csv``), ST-05 copies replaced by their
+    representative when ``alias`` is given (ATK-SC-16). WHY ``context`` = 0: those are the path's own nodes;
+    ``context`` = 1 rows are session context (ST-71, decision 056 item 7)."""
     out: dict[str, set[str]] = {}
     for r in path_nodes:
         if r.get("context") == "0" and r.get("event_uid"):
             out.setdefault(r["path_id"], set()).add(r["event_uid"])
-    return {k: frozenset(v) for k, v in sorted(out.items())}
+    return {k: canonical(v, alias or {}) for k, v in sorted(out.items())}
 
 
-def unit_node_sets(units: Sequence[Mapping[str, str]]) -> dict[str, frozenset[str]]:
-    """path_id -> the event uids of its labelled ``context`` = 0 NodeScore units (score ``path_node_units.csv``)."""
+def unit_node_sets(units: Sequence[Mapping[str, str]],
+                   alias: Mapping[str, str] | None = None) -> dict[str, frozenset[str]]:
+    """path_id -> the event uids of its labelled ``context`` = 0 NodeScore units (score ``path_node_units.csv``),
+    ST-05 copies replaced when ``alias`` is given."""
     out: dict[str, set[str]] = {}
     for r in units:
         out.setdefault(r["path_id"], set()).update(split_list(r["event_uids"]))
-    return {k: frozenset(v) for k, v in sorted(out.items())}
+    return {k: canonical(v, alias or {}) for k, v in sorted(out.items())}
+
+
+def positive_ids(candidates: Sequence[Candidate]) -> frozenset[str]:
+    """Ids of the candidates with score > 0 (the ATK-SC-21 second chance line)."""
+    return frozenset(c.path_id for c in candidates if c.score > 0)
 
 
 # ---------------------------------------------------------------- matching and placement
 
 def matches(key_path: KeyPath, candidates: Sequence[Candidate], nodes: Mapping[str, frozenset[str]],
             reading: str) -> dict[str, float]:
-    """path_id -> Jaccard for every candidate at or above ``MATCH_THRESHOLD`` under one reading."""
+    """path_id -> Jaccard for every candidate at or above ``MATCH_THRESHOLD`` under one reading. The node reading
+    also requires the candidate to hold one of the key path's target logon uids (ATK-SC-16); ``nodes`` and the key
+    sets must already be canonical (``copy_alias_map``)."""
     out: dict[str, float] = {}
     for c in candidates:
         if reading == READING_HOP:
             j = jaccard(c.hop_ids, key_path.mapped_hop_ids)
         elif reading == READING_NODE:
-            j = jaccard(nodes.get(c.path_id, frozenset()), key_path.node_uids)
+            held = nodes.get(c.path_id, frozenset())
+            if not held & key_path.target_logon_uids:              # ATK-SC-16: no key target logon, no match
+                continue
+            j = jaccard(held, key_path.node_uids)
         else:
             raise ValueError(f"unknown match reading {reading!r}")
         if j >= MATCH_THRESHOLD:

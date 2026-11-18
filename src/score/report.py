@@ -2,8 +2,9 @@
 
 Wording rules (CLAUDE.md, SC-55): scores **rank**; an account is **exposed**, never described as taken; no sentence
 claims fewer false positives, finding the attacker, or a likelihood. ``FORBIDDEN_WORDS`` lists the words the report
-must never contain, so a test can check the text. Both texts carry no timestamp, so they are byte-identical between
-runs. Pure.
+must never contain, so a test can check the text; the one exception is the locked phrase ``ALLOWED_PHRASE``
+("not a probability", CLAUDE.md), which ``forbidden_hits`` removes before it searches (fact-check FC-6, decision 069
+item 10). Both texts carry no timestamp, so they are byte-identical between runs. Pure.
 """
 from __future__ import annotations
 
@@ -15,10 +16,23 @@ from .identity import STATUS_EXPOSED
 from .outputs import fmt_score, technique_sequence_text
 from .params import PATH_VARIANTS, TIE_DECIMALS, TOOL_VERSION, VARIANT_B0
 
-__all__ = ["FORBIDDEN_WORDS", "LIMITATIONS", "stats_dict", "report_md"]
+__all__ = ["FORBIDDEN_WORDS", "ALLOWED_PHRASE", "PROBABILITY_SENTENCE", "LIMITATIONS", "forbidden_hits", "stats_dict",
+           "report_md"]
 
-FORBIDDEN_WORDS: tuple[str, ...] = ("stolen", "detects", "probability", "reduces false positives",
+# FC-6 (decision 069 item 10): 'confidence' added (the T7 link tier is a tier, never a confidence); 'probability' stays
+# banned except inside the exact locked phrase "not a probability" (CLAUDE.md: the path score is not a probability).
+FORBIDDEN_WORDS: tuple[str, ...] = ("stolen", "detects", "probability", "confidence", "reduces false positives",
                                     "identifies the attacker")
+ALLOWED_PHRASE = "not a probability"
+PROBABILITY_SENTENCE = "The path score is for ordering; it is not a probability."
+
+
+def forbidden_hits(text: str) -> list[str]:
+    """The ``FORBIDDEN_WORDS`` found in ``text`` (case-insensitive) after every occurrence of ``ALLOWED_PHRASE`` is
+    removed. WHY remove the phrase first: it is the one sentence where the word is required, and any other use of
+    'probability' must still be caught."""
+    low = text.lower().replace(ALLOWED_PHRASE, " ")
+    return [w for w in FORBIDDEN_WORDS if w in low]
 
 # Spec 9.1, stated in every report.
 LIMITATIONS: tuple[tuple[str, str], ...] = (
@@ -36,9 +50,10 @@ LIMITATIONS: tuple[tuple[str, str], ...] = (
               "not the definition."),
     ("L-SC6", "Correction K sets no upper bound on the dump-to-move gap: a session that stays open makes any later "
               "move by that account count as exposed."),
-    ("L-SC7", "Weakly supported templates: R5 (T1078 > T1003.001 > T1021.006) and R1's first step "
-              "(T1078 > T1003.001) are supported only at campaign level. R4 and R5 were written after the "
-              "development sequences were seen."),
+    # FC-3..8 (decision 069 item 10): the first step T1078 -> T1003.001 is shared by R1, R2 and R5, not R1's alone.
+    ("L-SC7", "R5 and the first step T1078 → T1003.001 shared by R1, R2 and R5 are weakly supported: their sources "
+              "describe them only at campaign level (R5 = T1078 > T1003.001 > T1021.006). R4 and R5 were written "
+              "after the development sequences were seen."),
 )
 
 
@@ -135,9 +150,9 @@ def report_md(ts: TrialScores, stats: Mapping[str, Any]) -> str:
     exposed = sum(1 for a in ts.accounts if a.hop_id in _in_path_hops(ts) and a.status == STATUS_EXPOSED)
     lines = [f"# Score report: {ts.trial_id}", "",
              f"Tool `{TOOL_VERSION}`. Every candidate path of the stitcher is ranked, highest score first; nothing is "
-             "dropped and no threshold is applied (Correction J). The path score w1*LengthScore + w2*NodeScore + "
-             "w3*IdentityCoherence is a score for ordering paths for an analyst, not a likelihood. Ties share the "
-             "best rank; the order inside a tie is the path id, for display only.", "",
+             "dropped and no threshold is applied (Correction J). The path score is w1*LengthScore + w2*NodeScore + "
+             f"w3*IdentityCoherence. {PROBABILITY_SENTENCE} Ties share the best rank (decided on the score rounded "
+             "to 12 decimals, the value written); the order inside a tie is the path id, for display only.", "",
              f"Paths: {len(ts.paths)}; paths with no labelled unit: {stats['paths_without_labelled_unit']}; "
              f"paths with no crossing: {stats['paths_without_crossing']}; b0 units: {len(ts.b0)}.", ""]
     for v in PATH_VARIANTS:
@@ -162,9 +177,12 @@ def report_md(ts: TrialScores, stats: Mapping[str, Any]) -> str:
               "provenance-graph edges (SC-23); the ScoreNI term of Eq. 5 is dropped, alpha + beta = 1 (decision 062).",
               "- The order reference is five hand-built templates (order_table.json, pinned by SHA-256); the tactic "
               "tree is the templates mapped to tactics with consecutive repeats removed (TPPR p. 5).",
-              "- A step across a hop boundary scores as direct (`hop_chain`, SC-21b).",
+              "- A step across a real chain edge between two hops (`path_edges`) scores as direct (`hop_chain`, "
+              "SC-21b); a boundary between hops with no chain edge between them (siblings of a merged path) is "
+              "scored against the templates like a within-hop step (ATK-SC-17, decision 069).",
               "- NodeScore counts labelled context-0 nodes, one unit per count_key; the LSASS dump counts only "
-              "through identity. NodeScore with context-1 nodes included is shown beside it (decision 063).",
+              "through identity. This is also a restriction: the dump never raises NodeScore. NodeScore with "
+              "context-1 nodes included is shown beside it (decision 063).",
               "- Counted LSASS reads exclude wmiprvse, csrss, wininit and MsMpEng at their system folder under a "
               "system account (decision 064).", "",
               "## Limitations", ""]
