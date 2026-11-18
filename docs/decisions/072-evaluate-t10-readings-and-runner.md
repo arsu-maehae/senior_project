@@ -1,12 +1,16 @@
 # 072 — T10 development-part readings (spec 06 Q1–Q5) and the per-trial runner's scope
 
-**Date:** 2026-11-18 · **Status:** accepted (owner, 2026-11-18: spec 06 approved as proposed) · **Task:** T10.A ·
+**Date:** 2026-11-18 · **Status:** accepted (owner, 2026-11-18: spec 06 approved as proposed). This is a **freeze record**. Item 1 narrows
+070 item 4 ("every metric") in two places: b0's contested reading covers H4 only, and H5 has no contested reading. 070's
+kill criteria allow such a change before T5.7 only through a freeze record. Each narrowing leaves out a more lenient
+reading, never a stricter one. · **Task:** T10.A ·
 **Relates to:** spec [06_evaluate](../specs/06_evaluate.md) §8 Q1–Q5, EV-03/04/06, RT-01..11, RS-02;
 [070](070-score-freeze-amendment-readings.md) item 4; [071](071-h4-labelled-recall-denominator.md); review ATK-EV-01..14
 
 ## Context
-070 adds a "contested" secondary reading for `full`, `b0`, `b1` and `b2`, and a chance line in every table. It does
-not say how b0 (which has no paths) or H5 (one check per S06 trial) take that reading. The data-checker counted the
+070 adds a "contested" secondary reading for `full`, `b0`, `b1` and `b2`, and a chance line in every table. It says
+"every metric" for all four variants. For b0, which has no paths, 065 does not define top-1 or MRR. For H5, which is
+one check per S06 trial, taking a subset of attack trials can only raise the lowest key score. The data-checker counted the
 contested trials on development data:
 - s04_t00 and s07_t00 for `full`/`b1`/`b2`
 - all 5 attack trials for `b0`, where every unit scores above 0
@@ -18,7 +22,7 @@ hash.
 ## Options considered
 | Q | Option | Pros | Cons |
 |---|---|---|---|
-| Q1 b0 contested | H4 only, paired on full's contested set (**chosen**) | b0 ranks single labelled units; a unit cannot reach node Jaccard ≥ 0.5 with a multi-node key path, so top-1/MRR are undefined | "every metric" in 070 read as "every metric that is defined" |
+| Q1 b0 contested | H4 only, paired on full's contested set (**chosen**) | b0 ranks labelled event units, not paths. 065 defines top-1/MRR over candidate paths matched by node Jaccard, and a unit is not such a path. On development data no unit reaches Jaccard ≥ 0.5 with a key path of 12–40 nodes. | "every metric" in 070 read as "every metric that is defined" |
 | | define a b0 top-1 by "unit inside the key path" | a b0 MRR to show | a new metric invented after the freeze |
 | Q2 H5 contested | none (**chosen**) | restricting the attack side to a subset can only raise the lowest key score, which is more lenient (ATK-EV Q2) | one fewer table |
 | Q3 results input | recompute in memory with all rank checks, refuse if committed rank files differ (**chosen**) | every freshness check of 068/069 applies; no new file format | the ranking is computed twice |
@@ -58,8 +62,8 @@ hash.
 - If the hop and node readings disagree on any test trial, both are shown, and the verdict keeps the node reading.
 
 ## Committee answer
-**EN:** We report a second, harder reading over the trials where more than one path scores above zero, because a
-ranking can only be wrong there. We kept it secondary, gave it no pass or fail, and left out cases where it would
+**EN:** We report a second, harder reading over the trials where more than one path scores above zero, because in those trials
+more than one path competes for the top. We kept it secondary, gave it no pass or fail, and left out cases where it would
 only make a check easier to pass. One command rebuilds a trial, but it refuses any test trial before touching it.
-**TH:** เรารายงานการอ่านผลชุดที่สองที่ยากกว่า เฉพาะการทดลองที่มีเส้นทางคะแนนมากกว่าศูนย์เกินหนึ่งเส้น เพราะการจัดอันดับผิดได้เฉพาะกรณีนั้น
+**TH:** เรารายงานการอ่านผลชุดที่สองที่ยากกว่า เฉพาะการทดลองที่มีเส้นทางคะแนนมากกว่าศูนย์เกินหนึ่งเส้น เพราะในกรณีนั้นมีเส้นทางมากกว่าหนึ่งเส้นแข่งกันขึ้นอันดับแรก
 เราให้เป็นผลรอง ไม่ตัดสินผ่านหรือไม่ผ่าน และไม่ใช้ในกรณีที่จะทำให้ผ่านง่ายขึ้น คำสั่งเดียวสร้างผลของการทดลองใหม่ได้ แต่ปฏิเสธการทดลองชุดทดสอบก่อนแตะข้อมูลใด ๆ

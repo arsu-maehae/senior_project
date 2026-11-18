@@ -1,7 +1,8 @@
 # 071 — Freeze correction: H4 labelled-node recall divides by the labelled (b0-reachable) key nodes
 
 **Date:** 2026-11-18 · **Status:** accepted (owner, 2026-11-18, spec 06 Q6 option a). **Corrects** the H4 numbers
-written in [070](070-score-freeze-amendment-readings.md); 070's reading text and every threshold are unchanged.
+written in [070](070-score-freeze-amendment-readings.md); 070's reading text and every threshold are unchanged. There is one **addition**: a trial with no labelled key node
+is undefined and left out of the mean. 070 had no such case.
 **Task:** T10.A, before T5.7 (no test trial scored, no test key opened). **Relates to:** spec
 [06_evaluate](../specs/06_evaluate.md) EV-02, Q6; review ATK-EV-01
 ([docs/reviews/06_evaluate-spec-2026-11-18.md](../reviews/06_evaluate-spec-2026-11-18.md)).

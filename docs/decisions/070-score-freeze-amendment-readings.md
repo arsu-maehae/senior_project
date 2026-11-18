@@ -46,6 +46,10 @@ reading, ties by expected rank; DEVELOPMENT numbers, not results):
 Everything else in 065 and 066 stands (parameters and order-table hash frozen at `6338884`; tie rule; H1, H3, H5
 numbers).
 
+**Later records:**
+- [071](071-h4-labelled-recall-denominator.md) corrects the H4 numbers (the denominator).
+- [072](072-evaluate-t10-readings-and-runner.md) narrows item 4: b0 gets H4 only, and H5 gets no contested reading.
+
 ## Consequences
 - `evaluate --rank` (development) still labels the 065 readings as primary; T10 implements 070's primary readings, the
   contested reading and the chance-line columns before the test run (PLAN T10).
