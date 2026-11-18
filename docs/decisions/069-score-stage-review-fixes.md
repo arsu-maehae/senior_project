@@ -40,7 +40,7 @@ cases where a score or a development metric could move for a reason the spec doe
   boundary); ATK-SC-20 refused nothing; `n_hops_unknown` > 0 on 30 of 53 paths (machine-account hops).
 - Reported beside (hop reading, `full`, development): per-key MRR 0.833; E[1/rank] 0.950; **the chance line over
   candidates with score > 0 is 0.900 / 0.933, equal to the observed top-1 / MRR**: in 4 of 5 attack trials the key
-  attack path is the only path with a nonzero score, so on development data the ranking among scored paths adds
+  attack paths are the only paths with a nonzero score (s07: x and y), so on development data the ranking among scored paths adds
   nothing over chance; the separation comes from which paths get any score at all (labels and exposure).
 - Readings: the node-match anchor = the key's `target_event_uids` that are 4624 members of a stitch hop; an account
   with only `end_unknown` sessions is applicable (its hop is not "unknown"); `order_tol_s` is a stitch fact, not a

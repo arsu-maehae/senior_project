@@ -1,7 +1,7 @@
 # 066 — Score parameters: a-priori values, stability check on development data, freeze before the test keys unlock
 
-**Date:** 2026-11-18 · **Status:** accepted (owner, 2026-11-18) — **values proposed; freeze section completed at
-T9.5** · **Task:** T9.5 · **Relates to:** spec [05_score](../specs/05_score.md) §5, §5.2, SC-42, Q11;
+**Date:** 2026-11-18 · **Status:** accepted (owner, 2026-11-18) — **frozen at commit `6338884`** (freeze section
+below) · **Task:** T9.5 · **Relates to:** spec [05_score](../specs/05_score.md) §5, §5.2, SC-42, Q11;
 [065](065-score-baselines-and-success-criteria.md); handoff §12.4 (l. 977), Correction G.7; [019](019-dev-test-split.md);
 review ATK-SC-12
 
@@ -25,12 +25,17 @@ value; only the owner may change one, by its own record, before the freeze. If S
 it is run and reported first.
 
 ## Freeze (completed at T9.5)
+**Frozen 2026-11-18 (T9 close), after the stage review fixes (069).**
 | Item | Value |
 |---|---|
-| Parameters in `src/score/params.py` | *to fill* |
-| `order_table.json` SHA-256 | *to fill* |
-| H1–H5 numbers and readings | as in 065 |
-| Freeze commit | *to fill* |
+| Parameters in `src/score/params.py` (`ScoreParams` defaults) | λ = 1/ln 2 (`1.0 / math.log(2.0)`), w1 = w2 = w3 = 1/3, α = 0.5, β = 0.5, a = 1.0, b = 1.0, ε = 0.01 (`order_tol_s` = 5.0 is the stitch's decision-014 fact, read, not a score parameter) |
+| `order_table.json` SHA-256 (LF-normalised, 067 item 1) | `6bfae08b869178c618cef9b42b341eb9c78441ef2aeeb4cf9aeaaf2cfa07d61e` |
+| Frozen copy for `evaluate --rank` (069 item 6) | `src/evaluate/params.py`, pinned equal by `tests/unit/test_rank_pins.py` |
+| Freeze commit (parameters + order table) | `6338884b557ab734b2c951a5283654420211fc70` |
+| H1–H5 numbers | as in 065 (owner 2026-11-18): top-1 ≥ 0.80, MRR ≥ 0.85, MRR(`full`) > MRR(`b1`), `full` > `b0` node recall at equal budget, S06 per trial below the lowest attack score |
+| H readings (primary) | as in 065 and 068: H4 node recall over all `context` = 0 nodes; top-1 / MRR per trial with the first matching key attack path; ties by expected rank; chance line 1/E[rank] |
+| Readings reported beside (secondary, frozen too) | 069 item 9: H4 recall on labelled nodes only (ATK-SC-14); per-key MRR (ATK-SC-15); chance line over candidates with score > 0 and E[1/rank] (ATK-SC-21) |
+| Changing a reading | only by a new freeze record **before T5.7** (no test trial scored, no test key opened), named as a change with its date; after T5.7 any change is post-hoc and reported beside the frozen result (065 kill criterion) |
 After this commit no value changes on test data; T10 reports sensitivity around these values only. A test pins
 `src/score/params.py` to this table.
 

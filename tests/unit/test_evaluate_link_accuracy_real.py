@@ -100,6 +100,9 @@ def test_committed_out_evaluate_folder_equals_a_fresh_evaluation(trial):
     # T8.3 (decision 060): the folder is shared with the labelling recall, whose label_recall.csv is not a link
     # accuracy file; it may be present (keyed trials) and is checked by test_label_recall.py, not here.
     committed.pop("label_recall.csv", None)
+    # T9.5 (decision 068): the development ranking check writes rank.csv into the same folder; it is checked by
+    # test_rank_real.py, not here.
+    committed.pop("rank.csv", None)
     assert sorted(committed) == sorted(res.files), f"{trial}: files {sorted(committed)}"
     for name, text in res.files.items():
         if name != "run_info.json":

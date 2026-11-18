@@ -57,7 +57,7 @@ decided on; first draft said 6); ties are decided on the value rounded to 12 dec
 | `length_score`, `edge_score`, `seq_len` | float, float, int | SC-20..23 |
 | `node_score`, `n_node_units` | float, int | SC-30..33 |
 | `node_score_ctx1` | float | NodeScore with labelled `context` = 1 nodes included; reported only, never in `score` (SC-30) |
-| `identity_coherence`, `identity_low`, `identity_high` | float | SC-50..55; low/high = clock-flagged hops counted as 0 / 1 |
+| `identity_coherence`, `identity_low`, `identity_high` | float | SC-50..55; low/high decided per account (069 item 2): a hop is 1 in low if some account is exposed and not clock-flagged, 1 in high if some account is exposed or flagged |
 | `n_crossings`, `n_crossings_coherent`, `n_crossings_flagged` | int | applicable hops (SC-52) |
 | `n_hops_unknown` | int | path hops with no applicable account (every account `unknown:<reason>`; review ATK-SC-06) |
 | `n_hops`, `hop_ids`, `hosts`, `isolated`, `merged_from`, `multi_chain_parent` | | copied from stitch |
@@ -106,7 +106,7 @@ holds the `full`, `b1` and `b2` rows (`variant` column); `stats.json` reports pa
 | ID | Rule | Source |
 |---|---|---|
 | SC-01 | **Allowlist.** `--trial` must be in `DEVELOPMENT_TRIALS` (one shared list); anything else is refused before a file is opened. T10 widens it by its own record after the key lock. | 019, 046 |
-| SC-02 | **Fresh inputs.** Refuse when `out/label/<t>/run_info.json` `stitch_files_sha256` differs from the current stitch files, or a required file or column is missing. | 054 pattern; label run_info |
+| SC-02 | **Fresh inputs.** Refuse when `out/label/<t>/run_info.json` `stitch_files_sha256` differs from the current stitch files, or a required file or column is missing, or a path hop's `member_accounts` lacks a `hop_identity.csv` row (069 item 3; further checks 067 item 7). | 054 pattern; label run_info; 067, 069 |
 | SC-03 | **No ground truth, no DB.** `src/score` never opens `ground_truth/` or `data/`. | 019; spec 07 |
 | SC-04 | **Every path ranked.** Each `paths.csv` row appears exactly once per variant; nothing is dropped, merged or split here (merging is the stitcher's, ST-73). | Correction J, G.4 |
 | SC-10 | **Order reference** = `src/score/order_table.json`: hand-built technique templates (TPPR's technique-PT replaced) and one tactic per technique (tactic-PT = templates mapped to tactics). Built from ATT&CK / CTI pages, never from lab logs; each template cites its source. Pinned by SHA-256 in code and in the decision record. | handoff §11.4 Option B, Correction G.5; PLAN 9.1 |
@@ -124,7 +124,7 @@ holds the `full`, `b1` and `b2` rows (`variant` column); `stats.json` reports pa
 | SC-51 | **Counted reads** (OPEN Q7): proposal (b′): the `R1_lsass` rows minus reads whose source image is one of `wmiprvse.exe`, `MsMpEng.exe`, `csrss.exe`, `wininit.exe` **at its stated system folder** (case-insensitive: `C:\Windows\System32\wbem\wmiprvse.exe`, `C:\Windows\System32\csrss.exe`, `C:\Windows\System32\wininit.exe`, `C:\ProgramData\Microsoft\Windows Defender\Platform\<version>\MsMpEng.exe`, `C:\Program Files\Windows Defender\MsMpEng.exe` — all five forms occur on development data) **and** whose `dump_account` is `system`, `network service` or `local service`; a same-named binary elsewhere or under a user account still counts (review ATK-SC-04). `end_unknown` sessions are not counted as open (ST-63). | 056 item 8; spec 03 Q9 |
 | SC-52 | **Applicable crossings.** A (hop, account) with `not_applicable` set (machine account, unknown source host, source host without logs) is not a crossing. A hop's value = max over its applicable accounts (OPEN Q8). The path's crossings = its hops with at least one applicable account. Because unknown hops leave the denominator, a path with one exposed hop and one unknown hop gets I = 1, not 0.5 ("scores 0" holds per hop only). Sessions with system logon IDs 0x3e4/0x3e5/0x3e7 and machine accounts are never open sessions (ST-63). | Correction K item 4 (machine accounts, system logon IDs); ST-60 and 049 (unknown / no-logs source host) |
 | SC-53 | **IdentityCoherence** = coherent crossings / crossings. A path with no crossing → 0 (handoff §12.4 code), shown with `n_crossings` = 0 (OPEN Q9). Each (hop, account) row carries `identity_status` = `exposed` / `not_exposed` / `unknown:<reason>` (machine account, source host unknown, source host without logs, Security log cleared between a session's opening and the dump = `end_unknown`, ST-63; a session with no logoff event is open, handoff §12.4 l. 975) so "no evidence" is never read as "not exposed" in the report, although both score 0 (review ATK-SC-06). | handoff §12.4; review ATK-SC-06 |
-| SC-54 | **Clock flag (044 (c)).** The value uses `order_ok` unchanged; `identity_low` / `identity_high` recompute the path value with flagged crossings (`order_within_uncertainty` = 1 on a deciding or a rejecting read) at 0 and at 1. | 044 (c); ST-62 |
+| SC-54 | **Clock flag (044 (c)).** The value uses `order_ok` unchanged; `identity_low` / `identity_high` recompute the path value with clock-flagged reads (`order_within_uncertainty` = 1 on a deciding or a rejecting read) counted against and for exposure, **per account** (069 item 2: hop low = some account robustly exposed; hop high = some account exposed or flagged). | 044 (c); ST-62 |
 | SC-55 | Correction K wording: "exposed", never "stolen"; the report says so. | CLAUDE.md wording |
 | SC-40 | **Score** = w1·LengthScore + w2·NodeScore + w3·IdentityCoherence, w ≥ 0, Σw = 1, so every score is in [0, 1] and comparable across trials. | CLAUDE.md; handoff §12.3 |
 | SC-41 | **Ranking.** Scores are summed with `math.fsum` over components in a fixed order and rounded to 12 decimals (review ATK-SC-13). Sort descending; equal scores share the best rank (competition ranking) and `tie_size`; listing order inside a tie is `path_id` for **display only** — no metric may use it (§7.3, review ATK-SC-01). No θ. | Correction J; 018, 021 |
@@ -135,9 +135,9 @@ holds the `full`, `b1` and `b2` rows (`variant` column); `stats.json` reports pa
 ## 5. Parameters
 | Name | Value | Why | Sensitivity test? |
 |---|---|---|---|
-| λ | proposal 1/ln 2 ≈ 1.443 (one transition → length factor 0.5) | a-priori, not tuned (OPEN Q11) | yes, T10 around the frozen value |
-| w1, w2, w3 | proposal 1/3 each | a-priori equal weights (handoff §12.4 l.977: sweep for stability, not an optimum) | yes, simplex sweep |
-| α, β | proposal 0.5, 0.5 (ScoreNI weight 0) | OPEN Q5 | reported |
+| λ | **frozen (066)** 1/ln 2 ≈ 1.443 (one transition → length factor 0.5) | a-priori, not tuned (OPEN Q11) | yes, T10 around the frozen value |
+| w1, w2, w3 | **frozen (066)** 1/3 each | a-priori equal weights (handoff §12.4 l.977: sweep for stability, not an optimum) | yes, simplex sweep |
+| α, β | **frozen (066)** 0.5, 0.5 (ScoreNI weight 0) | OPEN Q5 | reported |
 | a, b | 1, 1 | scale only; scores stay in [0, 1] | no |
 | ε | 0.01 | "negligible probability for unobserved transitions" (TPPR p. 6) | reported |
 | ORDER_TOL_S | 5 s (read from stitch facts, not re-applied) | 014 | no |

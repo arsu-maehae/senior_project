@@ -29,7 +29,7 @@ needed readings for several matches in one group, the node set of a key path, th
 - Expected reading: top-1 0.900, MRR 0.933 for `full`, `b1` and `b2` alike (chance 0.248 / 0.377); s04 B at 1.5.
   On development data the identity term changes no within-trial rank, so H3 (strict) would not hold here.
 - S06 check: `full` +0.306 (held); `b1` −0.042, `b2` −0.333 (not held): the identity term separates across trials.
-- b0 vs `full` at equal budget: 0.261 vs 0.877. Sweep: all 402 points stable; S06 holds at 44–48 of 66 weight points
+- b0 vs `full` at equal budget: 0.261 vs 0.877. Sweep: no key attack path's expected rank changes at any of the 402 points, which is **not informative** on development data (069, ATK-SC-22: in 4 of 5 attack trials every rival scores 0, s04 ties at every weight); S06 holds at 44–48 of 66 weight points
   per λ.
 
 ## Kill criteria

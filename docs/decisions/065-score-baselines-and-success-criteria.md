@@ -40,7 +40,8 @@ is the "linked, not ranked" reference that takes its place in the comparison pro
 - T10 reports each hypothesis as held / not held with the chance line; no "reduces false positives" wording.
 
 ## Kill criteria
-- Any change to a number or reading after the freeze commit of 066 → invalid; it needs a new record and is reported
+- Any change to a number or reading after the freeze commit of 066 needs a new freeze record. Before T5.7 (no test
+  trial scored, no test key opened) it is a dated change; after T5.7 it is invalid as a test criterion and is reported
   as a post-hoc change beside the frozen result.
 
 ## Committee answer

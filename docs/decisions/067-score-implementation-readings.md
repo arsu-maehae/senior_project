@@ -1,6 +1,6 @@
 # 067 — Score stage implementation readings (T9.1–9.4)
 
-**Date:** 2026-11-18 · **Status:** accepted (coordinator; owner may overrule item 4 at the T9 report) · **Task:**
+**Date:** 2026-11-18 · **Status:** accepted (coordinator); **item 4 amended by 069 item 1** (hop_chain only across a real chain edge) · **Task:**
 T9.1–9.4 · **Relates to:** spec [05_score](../specs/05_score.md) SC-02, SC-10, SC-21, SC-21b, SC-22a, SC-53, SC-54;
 [062](062-score-order-reference-and-sequence.md), [064](064-score-identity-readings.md), [058](058-label-implementation-readings.md)
 
