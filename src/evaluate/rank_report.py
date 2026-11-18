@@ -1,4 +1,5 @@
-"""Output texts of the development ranking check (PLAN T9.5; spec 05_score SCA-06, section 5.2; decisions 065, 066).
+"""Output texts of the development ranking check (PLAN T9.5, T10.7; spec 05_score SCA-06, section 5.2; spec
+06_evaluate section 4 A; decisions 065, 066, 070, 071).
 Pure: every text is built in memory, with no timestamp, ``\\n`` line ends and fixed number formats (6 decimals), so
 two runs give byte-identical files.
 
@@ -7,6 +8,11 @@ Files: ``out/evaluate/<trial>/rank.csv`` (one per trial), ``out/evaluate/develop
 ``status_note`` and every Markdown table is headed "DEVELOPMENT numbers, not results" (decision 019; spec SCA-06):
 these numbers check the code on development keys; T10 alone reports results. The ``.md`` holds ids, hosts and
 numbers only: no account, image or command text (decision 051 item 8).
+
+Decision 070 readings (spec 06 EV-01..08): rank.md opens with the primary readings (top-1, per-key MRR, labelled
+H4 recall with the 071 denominator, S06 check), every table with a ranking metric carries the chance line over all
+candidates and over score > 0, and the contested reading gets its own totals rows (``ranking_contested``,
+``b0_recall_contested``), so the ``ranking`` / ``b0_recall`` rows keep their number and columns.
 """
 from __future__ import annotations
 
@@ -14,14 +20,18 @@ import math
 from typing import Any, Iterable, Mapping, Sequence
 
 from . import rank_metrics as rm
-from .rank_run import KeyPathResult, ReadingResult, TrialRank
+from .rank_run import B0Result, KeyPathResult, ReadingResult, TrialRank
 from .rank_sweep import LAMBDA_GRID, SweepPoint, changed_keys, informativeness, stable_region
 from .writers import csv_text, md_header
 from .params import SPLIT_DEVELOPMENT
 
 __all__ = ["RANK_FILE", "RANK_MD", "RANK_TOTALS", "RANK_SWEEP", "RANK_SUMMARY_FILES", "DEV_NOTE", "RANK_COLUMNS",
-           "TOTAL_COLUMNS", "SWEEP_COLUMNS", "RECALL_BASIS_ALL", "RECALL_BASIS_LABELLED", "f6", "trial_rows",
-           "trial_csv", "s06_facts", "total_rows", "sweep_rows", "informative_sentence", "rank_md", "summary_files"]
+           "TOTAL_COLUMNS", "SWEEP_COLUMNS", "RECALL_BASIS_ALL", "RECALL_BASIS_LABELLED", "KIND_RANKING", "KIND_B0",
+           "KIND_RANKING_CONTESTED", "KIND_B0_CONTESTED", "SCOPE_ALL", "SCOPE_CONTESTED", "PRIMARY_RANKING",
+           "PRIMARY_B0", "PATH_VARIANT_ORDER", "PAIRED_SET", "B0_SET", "CHANCE_NA_RECALL", "CHANCE_NA_MARGIN", "f6",
+           "trial_rows", "trial_csv", "attack_readings", "contested_ids", "b0_contested_ids", "uncontested_rows",
+           "ranking_values", "b0_values", "b0_of", "contested_plan", "s06_facts", "total_rows", "sweep_rows",
+           "informative_sentence", "rank_md", "summary_files"]
 
 RANK_FILE = "rank.csv"
 RANK_MD = "rank.md"
@@ -30,9 +40,24 @@ RANK_SWEEP = "rank_sweep.csv"
 RANK_SUMMARY_FILES: tuple[str, ...] = (RANK_MD, RANK_TOTALS, RANK_SWEEP)
 DEV_NOTE = "DEVELOPMENT numbers, not results"
 TEST_NOTE = "TEST"
-# ATK-SC-14 (decision 069 item 9): the two H4 recall bases, reported side by side; the first is 065's primary reading.
-RECALL_BASIS_ALL = "all context-0 nodes (065 reading)"
-RECALL_BASIS_LABELLED = "labelled nodes only (b0-reachable)"
+# The two H4 recall bases, reported side by side (ATK-SC-14). Decision 070 item 1 makes the labelled basis primary;
+# decision 071 fixes its denominator (labelled key nodes = key nodes inside a b0 unit). The all-node basis is beside.
+RECALL_BASIS_ALL = "all context-0 nodes (reported beside, 070)"
+RECALL_BASIS_LABELLED = "labelled nodes only (b0-reachable, primary, 070/071)"
+# Totals row kinds (EV-08: the contested readings get their own kinds, so `ranking` / `b0_recall` rows stay as they
+# were) and the reading scopes (spec 06 section 3.1).
+KIND_RANKING, KIND_B0 = "ranking", "b0_recall"
+KIND_RANKING_CONTESTED, KIND_B0_CONTESTED = "ranking_contested", "b0_recall_contested"
+SCOPE_ALL, SCOPE_CONTESTED = "all", "contested"
+# The 070 primary column of each row kind (spec 06 section 3.1 `primary_metric`).
+PRIMARY_RANKING = "mrr_per_key_expected"
+PRIMARY_B0 = "full_recall_labelled_mean;b0_recall_labelled_mean"
+PATH_VARIANT_ORDER: tuple[str, ...] = ("full", "b1", "b2")
+# H3 and H4 compare against full; under the contested reading both sides use full's contested set (EV-04).
+PAIRED_SET = "full"
+B0_SET = "b0"
+CHANCE_NA_RECALL = "n/a: node recall at an equal node budget, no ranking order to draw at random"
+CHANCE_NA_MARGIN = "n/a: score margin across trials, no ranking order to draw at random"
 
 RANK_COLUMNS: tuple[str, ...] = (
     "status_note", "trial_id", "split", "keyed", "row_kind", "variant", "match_reading", "key_path_id", "key_role",
@@ -45,7 +70,9 @@ RANK_COLUMNS: tuple[str, ...] = (
     "other_max_path_ids",
     "score_gap", "key_node_count", "supporting_event_uids", "time_delta_ms", "k", "budget_nodes", "full_recall",
     "b0_recall", "budget_nodes_labelled", "full_recall_labelled", "b0_recall_labelled", "score_max", "score_min",
-    "score_mean", "n_zero_score", "n_distinct_scores", "top_tie_size")
+    "score_mean", "n_zero_score", "n_distinct_scores", "top_tie_size",
+    # spec 06 section 3.1 (EV-02, EV-03): appended so every earlier column keeps its place
+    "contested", "n_positive_units", "key_nodes_labelled")
 TOTAL_COLUMNS: tuple[str, ...] = (
     "status_note", "split", "row_kind", "variant", "match_reading", "attack_trials", "key_paths", "key_paths_matched",
     "top1_expected", "top1_optimistic", "top1_pessimistic", "mrr_expected", "mrr_optimistic", "mrr_pessimistic",
@@ -55,7 +82,10 @@ TOTAL_COLUMNS: tuple[str, ...] = (
     "s06_max_score", "key_attack_score_min", "s06_margin", "s06_held", "share_attack_trials_above_s06",
     "recall_basis", "full_recall_mean", "b0_recall_mean", "recall_basis_labelled", "full_recall_labelled_mean",
     "b0_recall_labelled_mean",
-    "trials_full_above_b0", "trials_full_above_b0_labelled")
+    "trials_full_above_b0", "trials_full_above_b0_labelled",
+    # spec 06 section 3.1 (EV-02..05, EV-08): appended so every earlier column keeps its place
+    "reading_scope", "contested_set", "primary_metric", "scope_trial_ids", "chance_per_key_mrr",
+    "chance_pos_per_key_mrr", "labelled_recall_trials")
 SWEEP_COLUMNS: tuple[str, ...] = (
     "status_note", "point_kind", "lambda_label", "lambda", "w1", "w2", "w3", "top1_expected", "mrr_expected",
     "s06_max_score", "key_attack_score_min", "s06_margin", "s06_held", "same_ranks_as_default",
@@ -142,7 +172,8 @@ def _trial_row(t: TrialRank, rr: ReadingResult) -> dict[str, str]:
     row.update(variant=rr.variant, match_reading=rr.reading, key_path_id=_ids(k.key_path.path_id for k in rr.key_paths),
                method=_METHOD[rr.reading] + "_any_key_attack_path", threshold=f6(rm.MATCH_THRESHOLD),
                n_candidates=str(rr.n), key_attack_score_min=f6(rr.low), other_score_max=f6(rr.high),
-               other_max_path_ids=_ids(rr.high_ids), score_gap=f6(rr.gap), k=str(len(rr.key_paths)))
+               other_max_path_ids=_ids(rr.high_ids), score_gap=f6(rr.gap), k=str(len(rr.key_paths)),
+               contested="1" if rr.contested else "0")
     _placement_cells(row, rr.trial, rr.n, rr.positive)
     return row
 
@@ -155,7 +186,9 @@ def _b0_row(t: TrialRank) -> dict[str, str]:
     row.update(variant="full_vs_b0", method="equal_node_budget", n_candidates=str(len(t.candidates["full"])),
                k=str(b.k), key_node_count=str(b.key_nodes), budget_nodes=f6(b.budget), full_recall=f6(b.full_recall),
                b0_recall=f6(b.b0_recall), budget_nodes_labelled=f6(b.budget_labelled),
-               full_recall_labelled=f6(b.full_recall_labelled), b0_recall_labelled=f6(b.b0_recall_labelled))
+               full_recall_labelled=f6(b.full_recall_labelled), b0_recall_labelled=f6(b.b0_recall_labelled),
+               contested="1" if b.contested else "0", n_positive_units=str(b.n_positive_units),
+               key_nodes_labelled=str(b.key_nodes_labelled))
     return row
 
 
@@ -202,6 +235,96 @@ def _readings(results: Sequence[TrialRank], variant: str, reading: str) -> list[
     return [rr for t in results if t.attack for rr in t.readings if rr.variant == variant and rr.reading == reading]
 
 
+def attack_readings(results: Sequence[TrialRank], variant: str, reading: str,
+                    trial_ids: Iterable[str] | None = None) -> list[tuple[str, ReadingResult]]:
+    """(trial id, result) of every attack trial for one (variant, reading), in trial order; restricted to
+    ``trial_ids`` when given (the contested reading)."""
+    keep = None if trial_ids is None else set(trial_ids)
+    return [(t.trial_id, rr) for t in results if t.attack and (keep is None or t.trial_id in keep)
+            for rr in t.readings if rr.variant == variant and rr.reading == reading]
+
+
+def contested_ids(results: Sequence[TrialRank], variant: str) -> tuple[str, ...]:
+    """EV-03: the attack trials where ``variant`` has more than one candidate with score > 0, in trial order. The
+    positive set does not depend on the match reading, so the node reading (EV-06) is read."""
+    return tuple(tid for tid, rr in attack_readings(results, variant, rm.READING_NODE) if rr.contested)
+
+
+def b0_contested_ids(results: Sequence[TrialRank]) -> tuple[str, ...]:
+    """EV-03 for b0: attack trials with more than one distinct canonical b0 unit with score > 0."""
+    return tuple(t.trial_id for t in results if t.attack and t.b0 is not None and t.b0.contested)
+
+
+def uncontested_rows(results: Sequence[TrialRank]) -> list[dict[str, str]]:
+    """Every (variant, reading, trial) left out of the contested reading with its reason (EV-03, ATK-EV-05), then
+    b0's; the reason names "uncontested — key path not scored" when the only scored candidate is a rival."""
+    out: list[dict[str, str]] = []
+    for variant in PATH_VARIANT_ORDER:
+        for reading in rm.READINGS:
+            for tid, rr in attack_readings(results, variant, reading):
+                if not rr.contested:
+                    out.append({"variant": variant, "match_reading": reading, "trial": tid,
+                                "n_positive": str(len(rr.positive)), "reason": rr.uncontested_reason()})
+    for t in results:
+        if t.attack and t.b0 is not None and not t.b0.contested:
+            reason = ("uncontested — no labelled unit scored" if t.b0.n_positive_units == 0
+                      else "uncontested — one labelled unit scored")
+            out.append({"variant": B0_SET, "match_reading": "", "trial": t.trial_id,
+                        "n_positive": str(t.b0.n_positive_units), "reason": reason})
+    return out
+
+
+def ranking_values(rrs: Sequence[ReadingResult]) -> dict[str, float | int | None]:
+    """Every ranking metric over ``rrs`` as exact floats (fsum means; None over no trial). WHY one function: the
+    totals CSV (6 decimals) and the results verdicts (12 decimals, RS-09) must come from the same numbers.
+    The per-key chance line (EV-05, ATK-EV-03) uses chance_line(n, m_k) with m_k = candidates matching key path k,
+    averaged over key paths, not the per-trial union of matches."""
+    kps = [(rr, kr) for rr in rrs for kr in rr.key_paths]
+    chances = [rm.chance_line(rr.n, len(rr.trial.matched)) for rr in rrs]
+    chances_pos = [_chance_pos(rr.trial, rr.positive) for rr in rrs]                    # ATK-SC-21
+    gaps = [rr.gap for rr in rrs if rr.gap is not None]
+    return {
+        "attack_trials": len(rrs), "key_paths": len(kps),
+        "key_paths_matched": sum(1 for _rr, kr in kps if kr.placement.first_rank is not None),
+        "top1_expected": _mean([rr.trial.top1_expected for rr in rrs]),
+        "top1_optimistic": _mean([rr.trial.top1_optimistic for rr in rrs]),
+        "top1_pessimistic": _mean([rr.trial.top1_pessimistic for rr in rrs]),
+        "mrr_expected": _mean([rr.trial.rr("expected") for rr in rrs]),
+        "mrr_optimistic": _mean([rr.trial.rr("optimistic") for rr in rrs]),
+        "mrr_pessimistic": _mean([rr.trial.rr("pessimistic") for rr in rrs]),
+        "mrr_rr_mean_expected": _mean([rr.trial.rr_mean() for rr in rrs]),
+        "mrr_per_key_expected": _mean([kr.placement.rr("expected") for _rr, kr in kps]),     # EV-01 primary
+        "mrr_per_key_rr_mean": _mean([kr.placement.rr_mean() for _rr, kr in kps]),
+        "chance_top1": _mean([c["top1"] for c in chances]),
+        "chance_mrr": _mean([c["rr"] for c in chances]),
+        "chance_rr_mean": _mean([c["rr_mean"] for c in chances]),
+        "chance_pos_top1": _mean([c["top1"] for c in chances_pos]),
+        "chance_pos_mrr": _mean([c["rr"] for c in chances_pos]),
+        "chance_pos_rr_mean": _mean([c["rr_mean"] for c in chances_pos]),
+        "chance_per_key_mrr": _mean([rm.chance_line(rr.n, len(kr.placement.matched))["rr"] for rr, kr in kps]),
+        "chance_pos_per_key_mrr": _mean([_chance_pos(kr.placement, rr.positive)["rr"] for rr, kr in kps]),
+        "score_gap_min": min(gaps) if gaps else None,
+        "trials_gap_positive": sum(1 for g in gaps if g > 0),
+    }
+
+
+def b0_values(b0s: Sequence[B0Result]) -> dict[str, float | int | None]:
+    """H4 totals as exact floats. The labelled means run over the trials whose labelled recall is defined (decision
+    071: a trial without labelled key nodes is left out; ``labelled_recall_trials`` says how many entered)."""
+    lab = [b for b in b0s if b.full_recall_labelled is not None and b.b0_recall_labelled is not None]
+    return {
+        "attack_trials": len(b0s), "labelled_recall_trials": len(lab),
+        "full_recall_mean": _mean([b.full_recall for b in b0s]),
+        "b0_recall_mean": _mean([b.b0_recall for b in b0s]),
+        "full_recall_labelled_mean": _mean([float(b.full_recall_labelled or 0.0) for b in lab]),
+        "b0_recall_labelled_mean": _mean([float(b.b0_recall_labelled or 0.0) for b in lab]),
+        "trials_full_above_b0": sum(1 for b in b0s if b.full_recall > b.b0_recall),
+        "trials_full_above_b0_labelled": sum(1 for b in lab
+                                             if float(b.full_recall_labelled or 0.0)
+                                             > float(b.b0_recall_labelled or 0.0)),
+    }
+
+
 def s06_facts(results: Sequence[TrialRank], variant: str, reading: str) -> dict[str, Any]:
     """S06 check (065 H5 reading, development): highest score of every keyed trial without key attack paths vs the
     lowest key attack first-match score over the keyed attack trials; held iff the margin is > 0. Also the share of
@@ -218,54 +341,94 @@ def s06_facts(results: Sequence[TrialRank], variant: str, reading: str) -> dict[
             "held": None if margin is None else margin > 0, "share_above": above}
 
 
-def total_rows(results: Sequence[TrialRank], split: str) -> list[dict[str, str]]:
-    """rank_totals.csv: one row per (variant, reading), then one b0 row."""
-    out: list[dict[str, str]] = []
-    variants = [v for v in ("full", "b1", "b2")]
-    for variant in variants:
-        for reading in rm.READINGS:
-            rrs = _readings(results, variant, reading)
-            kps = [kr for rr in rrs for kr in rr.key_paths]
-            chances = [rm.chance_line(rr.n, len(rr.trial.matched)) for rr in rrs]
-            chances_pos = [_chance_pos(rr.trial, rr.positive) for rr in rrs]          # ATK-SC-21, beside
-            gaps = [rr.gap for rr in rrs if rr.gap is not None]
-            s6 = s06_facts(results, variant, reading)
-            row = {c: "" for c in TOTAL_COLUMNS}
-            row.update(status_note=_note(split), split=split, row_kind="ranking", variant=variant,
-                       match_reading=reading, attack_trials=str(len(rrs)), key_paths=str(len(kps)),
-                       key_paths_matched=str(sum(1 for kr in kps if kr.placement.first_rank is not None)),
-                       top1_expected=f6(_mean([rr.trial.top1_expected for rr in rrs])),
-                       top1_optimistic=f6(_mean([rr.trial.top1_optimistic for rr in rrs])),
-                       top1_pessimistic=f6(_mean([rr.trial.top1_pessimistic for rr in rrs])),
-                       mrr_expected=f6(_mean([rr.trial.rr("expected") for rr in rrs])),
-                       mrr_optimistic=f6(_mean([rr.trial.rr("optimistic") for rr in rrs])),
-                       mrr_pessimistic=f6(_mean([rr.trial.rr("pessimistic") for rr in rrs])),
-                       mrr_rr_mean_expected=f6(_mean([rr.trial.rr_mean() for rr in rrs])),
-                       mrr_per_key_expected=f6(_mean([kr.placement.rr("expected") for kr in kps])),     # ATK-SC-15
-                       mrr_per_key_rr_mean=f6(_mean([kr.placement.rr_mean() for kr in kps])),
-                       chance_top1=f6(_mean([c["top1"] for c in chances])),
-                       chance_mrr=f6(_mean([c["rr"] for c in chances])),
-                       chance_rr_mean=f6(_mean([c["rr_mean"] for c in chances])),
-                       chance_pos_top1=f6(_mean([c["top1"] for c in chances_pos])),
-                       chance_pos_mrr=f6(_mean([c["rr"] for c in chances_pos])),
-                       chance_pos_rr_mean=f6(_mean([c["rr_mean"] for c in chances_pos])),
-                       score_gap_min=f6(min(gaps) if gaps else None),
-                       trials_gap_positive=str(sum(1 for g in gaps if g > 0)), s06_trials=str(s6["s06_trials"]),
-                       s06_max_score=f6(s6["s06_max"]), key_attack_score_min=f6(s6["low"]),
-                       s06_margin=f6(s6["margin"]), s06_held="" if s6["held"] is None else str(int(s6["held"])),
-                       share_attack_trials_above_s06=f6(s6["share_above"]))
-            out.append(row)
-    b0s = [t.b0 for t in results if t.attack and t.b0 is not None]
+def _count(value: float | int | None) -> str:
+    """A count cell; empty for None."""
+    return "" if value is None else str(int(value))
+
+
+_RANKING_FLOATS: tuple[str, ...] = (
+    "top1_expected", "top1_optimistic", "top1_pessimistic", "mrr_expected", "mrr_optimistic", "mrr_pessimistic",
+    "mrr_rr_mean_expected", "mrr_per_key_expected", "mrr_per_key_rr_mean", "chance_top1", "chance_mrr",
+    "chance_rr_mean", "chance_pos_top1", "chance_pos_mrr", "chance_pos_rr_mean", "chance_per_key_mrr",
+    "chance_pos_per_key_mrr", "score_gap_min")
+
+
+def _ranking_row(split: str, kind: str, variant: str, reading: str, scope: str, contested_set: str,
+                 pairs: Sequence[tuple[str, ReadingResult]], s6: Mapping[str, Any] | None) -> dict[str, str]:
+    """One totals row of the ranking metrics over ``pairs``; the S06 columns only when ``s6`` is given (H5 has no
+    contested reading, spec 06 Q2). Zero trials gives empty metrics (EV-03)."""
+    v = ranking_values([rr for _t, rr in pairs])
     row = {c: "" for c in TOTAL_COLUMNS}
-    row.update(status_note=_note(split), split=split, row_kind="b0_recall", variant="full_vs_b0",
-               attack_trials=str(len(b0s)), recall_basis=RECALL_BASIS_ALL,
-               full_recall_mean=f6(_mean([b.full_recall for b in b0s])),
-               b0_recall_mean=f6(_mean([b.b0_recall for b in b0s])), recall_basis_labelled=RECALL_BASIS_LABELLED,
-               full_recall_labelled_mean=f6(_mean([b.full_recall_labelled for b in b0s])),
-               b0_recall_labelled_mean=f6(_mean([b.b0_recall_labelled for b in b0s])),
-               trials_full_above_b0=str(sum(1 for b in b0s if b.full_recall > b.b0_recall)),
-               trials_full_above_b0_labelled=str(sum(1 for b in b0s if b.full_recall_labelled > b.b0_recall_labelled)))
-    out.append(row)
+    row.update(status_note=_note(split), split=split, row_kind=kind, variant=variant, match_reading=reading,
+               reading_scope=scope, contested_set=contested_set, primary_metric=PRIMARY_RANKING,
+               scope_trial_ids=";".join(t for t, _rr in pairs))
+    for name in ("attack_trials", "key_paths", "key_paths_matched", "trials_gap_positive"):
+        row[name] = _count(v[name])
+    for name in _RANKING_FLOATS:
+        row[name] = f6(v[name])
+    if s6 is not None:
+        row.update(s06_trials=str(s6["s06_trials"]), s06_max_score=f6(s6["s06_max"]),
+                   key_attack_score_min=f6(s6["low"]), s06_margin=f6(s6["margin"]),
+                   s06_held="" if s6["held"] is None else str(int(s6["held"])),
+                   share_attack_trials_above_s06=f6(s6["share_above"]))
+    return row
+
+
+def _b0_total_row(split: str, kind: str, scope: str, contested_set: str, trial_ids: Sequence[str],
+                  b0s: Sequence[B0Result]) -> dict[str, str]:
+    """One H4 totals row over ``b0s`` (labelled basis primary, all-node basis beside)."""
+    v = b0_values(b0s)
+    row = {c: "" for c in TOTAL_COLUMNS}
+    row.update(status_note=_note(split), split=split, row_kind=kind, variant="full_vs_b0",
+               attack_trials=_count(v["attack_trials"]), recall_basis=RECALL_BASIS_ALL,
+               full_recall_mean=f6(v["full_recall_mean"]), b0_recall_mean=f6(v["b0_recall_mean"]),
+               recall_basis_labelled=RECALL_BASIS_LABELLED,
+               full_recall_labelled_mean=f6(v["full_recall_labelled_mean"]),
+               b0_recall_labelled_mean=f6(v["b0_recall_labelled_mean"]),
+               trials_full_above_b0=_count(v["trials_full_above_b0"]),
+               trials_full_above_b0_labelled=_count(v["trials_full_above_b0_labelled"]),
+               reading_scope=scope, contested_set=contested_set, primary_metric=PRIMARY_B0,
+               scope_trial_ids=";".join(trial_ids), labelled_recall_trials=_count(v["labelled_recall_trials"]))
+    return row
+
+
+def b0_of(results: Sequence[TrialRank], trial_ids: Iterable[str] | None = None) -> tuple[list[str], list[B0Result]]:
+    """(trial ids, B0Result) of the attack trials, restricted to ``trial_ids`` when given."""
+    keep = None if trial_ids is None else set(trial_ids)
+    ids: list[str] = []
+    b0s: list[B0Result] = []
+    for t in results:
+        if t.attack and t.b0 is not None and (keep is None or t.trial_id in keep):
+            ids.append(t.trial_id)
+            b0s.append(t.b0)
+    return ids, b0s
+
+
+def contested_plan() -> list[tuple[str, str]]:
+    """(variant, contested set) of every ``ranking_contested`` row: each variant over its own set, then b1 over
+    full's set (the paired H3 reading, EV-04)."""
+    return [(v, v) for v in PATH_VARIANT_ORDER] + [("b1", PAIRED_SET)]
+
+
+def total_rows(results: Sequence[TrialRank], split: str) -> list[dict[str, str]]:
+    """rank_totals.csv: the ``ranking`` rows per (variant, reading) and the ``b0_recall`` row (reading_scope all,
+    unchanged in number, EV-08), then the contested rows: each variant over its own contested set, b1 over full's
+    contested set (paired H3, EV-04), and H4 over full's contested set (paired) and over b0's own set (beside)."""
+    out: list[dict[str, str]] = []
+    for variant in PATH_VARIANT_ORDER:
+        for reading in rm.READINGS:
+            out.append(_ranking_row(split, KIND_RANKING, variant, reading, SCOPE_ALL, "",
+                                    attack_readings(results, variant, reading), s06_facts(results, variant, reading)))
+    ids, b0s = b0_of(results)
+    out.append(_b0_total_row(split, KIND_B0, SCOPE_ALL, "", ids, b0s))
+    sets = {v: contested_ids(results, v) for v in PATH_VARIANT_ORDER}
+    for variant, set_name in contested_plan():
+        for reading in rm.READINGS:
+            out.append(_ranking_row(split, KIND_RANKING_CONTESTED, variant, reading, SCOPE_CONTESTED, set_name,
+                                    attack_readings(results, variant, reading, sets[set_name]), None))
+    for set_name, set_ids in ((PAIRED_SET, sets[PAIRED_SET]), (B0_SET, b0_contested_ids(results))):
+        ids, b0s = b0_of(results, set_ids)
+        out.append(_b0_total_row(split, KIND_B0_CONTESTED, SCOPE_CONTESTED, set_name, ids, b0s))
     return out
 
 
@@ -321,22 +484,36 @@ def _readings_text() -> list[str]:
         "`target_event_uids` that are target 4624 members of a stitch hop; ATK-SC-16), and ST-05 copies "
         "(`rep|copy` items of `member_logon_uids`) are replaced by their representative on every side first.",
         f"- {_TIE_NOTE}",
-        "- Top-1 and MRR are per attack trial: the first candidate matching any key attack path (handoff 14.2). "
-        "Keyed trials without key attack paths (S06) enter only the S06 check.",
-        "- Chance line: all n candidates in one tie group (top-1 m/n, rank (n+1)/(m+1), chance_mrr = its inverse); "
-        "chance_rr_mean = E[1/rank] of a random order.",
-        "- Reported beside, primary readings of decisions 065 / 068 unchanged (decision 069 item 9): per-key MRR = "
-        "each key attack path's own expected RR, averaged over key paths (ATK-SC-15); a second chance line over the "
-        "candidates with score > 0 only (`chance_pos_*`), and E[1/rank] beside 1/E[rank] for both the observed first "
-        "match (`rr_mean_expected`, `mrr_rr_mean_expected`) and chance (ATK-SC-21); H4 recall on both bases, "
-        f"\"{RECALL_BASIS_ALL}\" and \"{RECALL_BASIS_LABELLED}\" (ATK-SC-14).",
+        "- Primary readings (decision 070; spec 06 EV-01, EV-02, EV-06): H1 = top-1 (expected ties) per attack trial; "
+        "H2 / H3 = **per-key MRR** (each key attack path's own expected RR, averaged over key attack paths; "
+        "ATK-SC-15); H4 = "
+        f"recall on \"{RECALL_BASIS_LABELLED}\": the denominator is the labelled key nodes = key nodes inside at least "
+        "one `b0_ranked.csv` unit (decision 071); a trial with none is undefined and left out of the mean, the number "
+        "of trials that entered is `labelled_recall_trials`; H5 = the S06 check. The verdict reading is the node "
+        "reading; the hop reading is shown beside it.",
+        "- Reported beside: per-trial MRR (first candidate matching any key attack path, handoff 14.2), E[1/rank] "
+        "beside 1/E[rank] (`*_rr_mean`), optimistic / pessimistic ties, the score gap, and recall on "
+        f"\"{RECALL_BASIS_ALL}\". Keyed trials without key attack paths (S06) enter only the S06 check.",
+        "- Chance line (EV-05): all n candidates in one tie group (top-1 m/n, rank (n+1)/(m+1), chance_mrr = its "
+        "inverse; chance_rr_mean = E[1/rank]); `chance_pos_*` = the same over the candidates with score > 0 only "
+        "(ATK-SC-21). "
+        "Beside per-key MRR the chance line is per key path (`chance_per_key_mrr`: m_k = candidates matching that key "
+        "path, averaged over key paths; ATK-EV-03). Every table that shows a ranking metric shows both chance lines; "
+        "the S06 and H4 tables show score margins and node recall, where no random order applies.",
+        "- Contested reading (decision 070 item 4; spec 06 EV-03, EV-04; secondary, never a verdict): a variant's "
+        "contested attack trials are those where more than one of its candidates has score > 0 (b0: more than one "
+        "distinct labelled unit with score > 0, ST-05 copies merged). Every ranking metric is recomputed over each "
+        "variant's own contested set; the paired comparisons (H3 full vs b1, H4 full vs b0) use full's contested set "
+        "for both sides, and each variant's own set is reported beside. b0 has no paths, so its contested reading is "
+        "the H4 recall only. H5 has no contested reading (a subset of attack trials can only raise the lowest key "
+        "score). A trial whose only scored candidate is a rival is named \"uncontested — key path not scored\".",
         "- Scores are read as written, with 12 decimals: the value ties are decided on (ATK-SC-24).",
         "- Score gap = lowest first-match score of the key attack paths - highest score of the candidates matching no "
         "key attack path. S06 check: highest S06 score vs the lowest key attack score of the attack trials.",
         "- b0 (H4): budget = expected distinct `context` = 0 nodes of full's top-k paths (k = key attack paths; tie at "
         "the cut by inclusion probability); b0 takes units in rank order up to the budget, the tie group at the cut read "
         "by expectation at node level. `_labelled` = the same with only the labelled `context` = 0 nodes (NodeScore "
-        "units) of the top k as budget.",
+        "units) of the top k as budget, and recall over the labelled key nodes (071).",
         "- The path score orders paths; it is not a probability. These checks rank; they do not claim to detect "
         "anything. Hypotheses H1-H5 are expected, to be measured on test trials at T10.",
     ]
@@ -350,23 +527,27 @@ def _inputs_section(results: Sequence[TrialRank]) -> list[str]:
 
 
 def _key_md_rows(results: Sequence[TrialRank]) -> list[dict[str, str]]:
-    """Per key attack path, variant and reading."""
+    """Per key attack path, variant and reading, with the per-key chance line (m_k = candidates matching this key
+    path; EV-05) over all candidates and over score > 0."""
     out = []
     for t in results:
         for rr in t.readings:
             for kr in rr.key_paths:
                 pl = kr.placement
+                ch = rm.chance_line(rr.n, len(pl.matched))
+                cp = _chance_pos(pl, rr.positive)
                 out.append({"trial": t.trial_id, "key_path": kr.key_path.path_id, "variant": rr.variant,
                             "reading": rr.reading, "first_match": _ids(pl.first_group), "r": _i(pl.first_rank),
                             "t": _i(pl.tie_size), "m": _i(len(pl.first_group)) if pl.first_group else "",
                             "rank_exp": f6(pl.rank_expected), "rank_opt": _i(pl.rank_optimistic),
                             "rank_pess": _i(pl.rank_pessimistic), "rr_exp": f6(pl.rr("expected")),
-                            "score": f6(pl.first_score), "n": str(rr.n)})
+                            "chance_rr": f6(ch["rr"]), "chance_pos_rr": f6(cp["rr"]),
+                            "score": f6(pl.first_score), "n": str(rr.n), "n_pos": str(len(rr.positive))})
     return out
 
 
 def _trial_md_rows(results: Sequence[TrialRank]) -> list[dict[str, str]]:
-    """Per attack trial, variant and reading: top-1, RR, chance and score gap."""
+    """Per attack trial, variant and reading: top-1, RR, chance, score gap and the contested flag."""
     out = []
     for t in results:
         for rr in t.readings:
@@ -378,6 +559,7 @@ def _trial_md_rows(results: Sequence[TrialRank]) -> list[dict[str, str]]:
                         "E[1/rank]": f6(rr.trial.rr_mean()), "chance_top1": f6(ch["top1"]), "chance_rr": f6(ch["rr"]),
                         "chance_E[1/rank]": f6(ch["rr_mean"]), "n_pos": str(len(rr.positive)),
                         "chance_pos_top1": f6(cp["top1"]), "chance_pos_rr": f6(cp["rr"]),
+                        "contested": "1" if rr.contested else "0",
                         "attack_min": f6(rr.low), "other_max": f6(rr.high), "gap": f6(rr.gap)})
     return out
 
@@ -392,11 +574,32 @@ def informative_sentence(facts: Mapping[str, Any]) -> str:
             f"and {tie_text}; the sweep reports, it never moves a value")
 
 
+def _sweep_chance(totals: Sequence[Mapping[str, str]]) -> dict[str, str]:
+    """The chance cells beside the sweep's metrics (EV-05): full, hop reading, all attack trials. Over all
+    candidates they do not depend on w (n and the hop matches are fixed); over score > 0 they are given at the
+    default w, since a weight can move a score to 0."""
+    row = next((r for r in totals if r["row_kind"] == KIND_RANKING and r["variant"] == "full"
+                and r["match_reading"] == rm.READING_HOP), None)
+    names = ("chance_top1", "chance_mrr", "chance_pos_top1", "chance_pos_mrr")
+    return {n: (row[n] if row else "") for n in names}
+
+
+_SWEEP_CHANCE_COLS: tuple[str, ...] = ("chance_top1 (any w)", "chance_mrr (any w)", "chance_pos_top1 (default w)",
+                                       "chance_pos_mrr (default w)")
+
+
+def _with_chance(row: dict[str, str], chance: Mapping[str, str]) -> dict[str, str]:
+    """``row`` plus the four sweep chance cells."""
+    row.update(zip(_SWEEP_CHANCE_COLS, (chance["chance_top1"], chance["chance_mrr"], chance["chance_pos_top1"],
+                                        chance["chance_pos_mrr"])))
+    return row
+
+
 def _sweep_section(default: SweepPoint, points: Sequence[SweepPoint], check: Mapping[str, Any],
-                   facts: Mapping[str, Any]) -> list[str]:
+                   facts: Mapping[str, Any], chance: Mapping[str, str]) -> list[str]:
     """Default check, the ATK-SC-22 statement, the rank-unchanged grid points per lambda, and the metric range over
-    the grid. WHY no "stable" claim: with zero-score rivals and full ties no weight can change a rank, so an
-    unchanged rank says nothing about robustness (ATK-SC-22)."""
+    the grid (with the chance line, EV-05). WHY no "stable" claim: with zero-score rivals and full ties no weight can
+    change a rank, so an unchanged rank says nothing about robustness (ATK-SC-22)."""
     lines = ["", "## Stability sweep (spec 05 section 5.2 step 2; decision 066)", "",
              "Scores recomputed from `ranked_paths.csv` columns only (L = (1 - e^(-seq_len/lambda)) * edge_score; "
              "score = w1 L + w2 node_score + w3 identity_coherence). The sweep never changes a parameter; it reports.",
@@ -404,7 +607,9 @@ def _sweep_section(default: SweepPoint, points: Sequence[SweepPoint], check: Map
              f"- Default check: {check['paths']} paths, max |recomputed - written full score| = "
              f"{check['max_abs_diff']:.3g} (tolerance 1e-6); rank mismatches {check['rank_mismatch']}.",
              f"- Default point: lambda {default.lam:.6f}, w = ({default.w[0]:.6f}, {default.w[1]:.6f}, "
-             f"{default.w[2]:.6f}); top-1 (expected) {f6(default.top1)}, MRR (expected) {f6(default.mrr)}; hop reading."]
+             f"{default.w[2]:.6f}); top-1 (expected) {f6(default.top1)}, MRR (expected, per trial) {f6(default.mrr)}; "
+             f"hop reading; chance top-1 {chance['chance_top1'] or '-'}, MRR {chance['chance_mrr'] or '-'} (all "
+             f"candidates), {chance['chance_pos_top1'] or '-'} / {chance['chance_pos_mrr'] or '-'} (score > 0)."]
     region = stable_region(points, default)
     rows = [{"lambda": r["lambda"], "grid_points": str(r["grid_points"]), "unchanged_points": str(r["stable_points"]),
              "unchanged_radius": "none changed" if r["stable_radius"] is None else f6(r["stable_radius"]),
@@ -420,69 +625,134 @@ def _sweep_section(default: SweepPoint, points: Sequence[SweepPoint], check: Map
         t1 = [p.top1 for p in ps if p.top1 is not None]
         mr = [p.mrr for p in ps if p.mrr is not None]
         held = [p for p in ps if p.attack_min is not None and p.s06_max is not None and p.attack_min > p.s06_max]
-        by_lam.append({"lambda": lab, "top1_min": f6(min(t1) if t1 else None), "top1_max": f6(max(t1) if t1 else None),
-                       "mrr_min": f6(min(mr) if mr else None), "mrr_max": f6(max(mr) if mr else None),
-                       "s06_held_points": f"{len(held)}/{len(ps)}"})
-    lines += _section("Metric range over the w grid per lambda (hop reading, expected ties)",
-                      ("lambda", "top1_min", "top1_max", "mrr_min", "mrr_max", "s06_held_points"), by_lam)
-    dw = [{"lambda": p.lam_label, "top1_exp": f6(p.top1), "mrr_exp": f6(p.mrr), "s06_max": f6(p.s06_max),
-           "attack_min": f6(p.attack_min), "changed": ";".join(changed_keys(p, default)) or "none"}
+        by_lam.append(_with_chance({"lambda": lab, "top1_min": f6(min(t1) if t1 else None),
+                                    "top1_max": f6(max(t1) if t1 else None), "mrr_min": f6(min(mr) if mr else None),
+                                    "mrr_max": f6(max(mr) if mr else None),
+                                    "s06_held_points": f"{len(held)}/{len(ps)}"}, chance))
+    lines += _section("Metric range over the w grid per lambda (hop reading, expected ties, per-trial MRR)",
+                      ("lambda", "top1_min", "top1_max", "mrr_min", "mrr_max") + _SWEEP_CHANCE_COLS
+                      + ("s06_held_points",), by_lam)
+    dw = [_with_chance({"lambda": p.lam_label, "top1_exp": f6(p.top1), "mrr_exp": f6(p.mrr),
+                        "s06_max": f6(p.s06_max), "attack_min": f6(p.attack_min),
+                        "changed": ";".join(changed_keys(p, default)) or "none"}, chance)
           for p in points if p.kind == "default_w"]
-    lines += _section("Default w at every grid lambda", ("lambda", "top1_exp", "mrr_exp", "s06_max", "attack_min",
-                                                          "changed"), dw)
+    lines += _section("Default w at every grid lambda", ("lambda", "top1_exp", "mrr_exp") + _SWEEP_CHANCE_COLS
+                      + ("s06_max", "attack_min", "changed"), dw)
     return lines
 
 
+def _h4_trial_rows(results: Sequence[TrialRank], cols: Sequence[str]) -> list[dict[str, str]]:
+    """Per attack trial H4 cells in ``cols`` order: labelled basis first (primary), all-node basis beside."""
+    rows = []
+    for t in results:
+        b = t.b0
+        if not t.attack or b is None:
+            continue
+        rows.append(dict(zip(cols, (t.trial_id, str(b.k), str(b.key_nodes_labelled), f6(b.budget_labelled),
+                                    f6(b.full_recall_labelled), f6(b.b0_recall_labelled), str(b.key_nodes),
+                                    f6(b.budget), f6(b.full_recall), f6(b.b0_recall), str(b.n_positive_units),
+                                    "1" if b.contested else "0"))))
+    return rows
+
+
 def _h4_section(results: Sequence[TrialRank], totals: Sequence[Mapping[str, str]]) -> list[str]:
-    """H4 (b0 vs full at an equal node budget) with both recall bases side by side, each labelled (ATK-SC-14): the
-    065 reading counts all ``context`` = 0 nodes, which b0 (labelled events only) cannot all reach."""
+    """H4 (b0 vs full at an equal node budget), labelled basis first (primary, 070 / 071), all-node basis beside
+    (ATK-SC-14: b0, labelled events only, cannot reach every ``context`` = 0 node)."""
     a, lab = RECALL_BASIS_ALL, RECALL_BASIS_LABELLED
-    cols = ("trial", "k", "key_nodes", f"budget: {a}", f"full_recall: {a}", f"b0_recall: {a}", f"budget: {lab}",
-            f"full_recall: {lab}", f"b0_recall: {lab}")
-    rows = [dict(zip(cols, (t.trial_id, str(t.b0.k), str(t.b0.key_nodes), f6(t.b0.budget), f6(t.b0.full_recall),
-                            f6(t.b0.b0_recall), f6(t.b0.budget_labelled), f6(t.b0.full_recall_labelled),
-                            f6(t.b0.b0_recall_labelled))))
-            for t in results if t.attack and t.b0 is not None]
-    out = _section("b0 vs full at an equal node budget (H4), both recall bases side by side", cols, rows)
-    tcols = ("attack_trials", f"full_recall_mean: {a}", f"b0_recall_mean: {a}", f"trials_full_above_b0: {a}",
-             f"full_recall_mean: {lab}", f"b0_recall_mean: {lab}", f"trials_full_above_b0: {lab}")
-    trows = [dict(zip(tcols, (r["attack_trials"], r["full_recall_mean"], r["b0_recall_mean"],
-                              r["trials_full_above_b0"], r["full_recall_labelled_mean"], r["b0_recall_labelled_mean"],
-                              r["trials_full_above_b0_labelled"])))
-             for r in totals if r["row_kind"] == "b0_recall"]
-    return out + _section("H4 totals, both recall bases side by side", tcols, trows)
+    cols = ("trial", "k", f"key_nodes: {lab}", f"budget: {lab}", f"full_recall: {lab}", f"b0_recall: {lab}",
+            f"key_nodes: {a}", f"budget: {a}", f"full_recall: {a}", f"b0_recall: {a}", "b0_positive_units",
+            "b0_contested")
+    out = _section(f"b0 vs full at an equal node budget (H4), labelled basis first; chance line {CHANCE_NA_RECALL}",
+                   cols, _h4_trial_rows(results, cols))
+    tcols = ("attack_trials", "labelled_recall_trials", f"full_recall_mean: {lab}", f"b0_recall_mean: {lab}",
+             f"trials_full_above_b0: {lab}", f"full_recall_mean: {a}", f"b0_recall_mean: {a}",
+             f"trials_full_above_b0: {a}")
+    trows = [dict(zip(tcols, (r["attack_trials"], r["labelled_recall_trials"], r["full_recall_labelled_mean"],
+                              r["b0_recall_labelled_mean"], r["trials_full_above_b0_labelled"],
+                              r["full_recall_mean"], r["b0_recall_mean"], r["trials_full_above_b0"])))
+             for r in totals if r["row_kind"] == KIND_B0]
+    return out + _section("H4 totals, labelled basis first (primary), all-node basis beside", tcols, trows)
+
+
+_PRIMARY_COLS: tuple[str, ...] = (
+    "variant", "match_reading", "attack_trials", "key_paths", "key_paths_matched", "top1_expected", "chance_top1",
+    "chance_pos_top1", "mrr_per_key_expected", "chance_per_key_mrr", "chance_pos_per_key_mrr")
+_BESIDE_COLS: tuple[str, ...] = (
+    "variant", "match_reading", "top1_optimistic", "top1_pessimistic", "mrr_expected", "mrr_optimistic",
+    "mrr_pessimistic", "chance_mrr", "chance_pos_mrr", "mrr_rr_mean_expected", "chance_rr_mean",
+    "chance_pos_rr_mean", "mrr_per_key_rr_mean", "score_gap_min", "trials_gap_positive")
+_S06_COLS: tuple[str, ...] = ("variant", "match_reading", "s06_trials", "s06_max_score", "key_attack_score_min",
+                              "s06_margin", "s06_held", "share_attack_trials_above_s06")
+_CONTESTED_COLS: tuple[str, ...] = (
+    "variant", "match_reading", "contested_set", "attack_trials", "scope_trial_ids", "key_paths", "top1_expected",
+    "chance_top1", "chance_pos_top1", "mrr_per_key_expected", "chance_per_key_mrr", "chance_pos_per_key_mrr",
+    "mrr_expected", "chance_mrr", "chance_pos_mrr")
+_B0_CONTESTED_COLS: tuple[str, ...] = (
+    "contested_set", "attack_trials", "scope_trial_ids", "labelled_recall_trials", "full_recall_labelled_mean",
+    "b0_recall_labelled_mean", "trials_full_above_b0_labelled", "full_recall_mean", "b0_recall_mean",
+    "trials_full_above_b0")
+
+
+def _primary_section(totals: Sequence[Mapping[str, str]]) -> list[str]:
+    """Decision 070 primary readings first (spec 06 section 3.1): top-1, per-key MRR and both chance lines in one
+    table; the H4 labelled-basis totals; the S06 check (H5)."""
+    ranking = [r for r in totals if r["row_kind"] == KIND_RANKING]
+    lines = ["", "## Primary readings (decision 070)", "",
+             "H1 top-1 (expected ties), H2 / H3 per-key MRR, H4 labelled-node recall (denominator: labelled key "
+             "nodes, decision 071), H5 S06 check. The verdict reading is the node reading (EV-06); the hop reading is "
+             "beside it. No verdict is written here: these are DEVELOPMENT numbers (results tables: "
+             "`python -m evaluate --development --results`)."]
+    lines += _section("Ranking, all attack trials: top-1 and per-key MRR with the chance line over all candidates "
+                      "and over score > 0 (per-key chance uses m_k per key path)", _PRIMARY_COLS, ranking)
+    b0 = [r for r in totals if r["row_kind"] == KIND_B0]
+    lines += _section(f"H4 labelled basis ({RECALL_BASIS_LABELLED}); chance line {CHANCE_NA_RECALL}",
+                      ("attack_trials", "labelled_recall_trials", "full_recall_labelled_mean",
+                       "b0_recall_labelled_mean", "trials_full_above_b0_labelled"), b0)
+    lines += _section(f"S06 check, H5 (highest S06 score vs lowest key attack score); chance line {CHANCE_NA_MARGIN}",
+                      _S06_COLS, ranking)
+    return lines
+
+
+def _contested_section(results: Sequence[TrialRank], totals: Sequence[Mapping[str, str]]) -> list[str]:
+    """The contested reading (EV-03, EV-04): each variant's own set, b1 on full's set (paired H3), H4 on full's set
+    (paired) and on b0's own set, and every trial left out with its reason (ATK-EV-05). Never a verdict."""
+    lines = ["", "## Contested reading (decision 070 item 4; spec 06 EV-03, EV-04; secondary, never a verdict)"]
+    lines += _section("Ranking over contested attack trials (contested_set = whose contested trials; b1 on full's "
+                      "set = the paired H3 reading)", _CONTESTED_COLS,
+                      [r for r in totals if r["row_kind"] == KIND_RANKING_CONTESTED])
+    lines += _section(f"H4 over contested attack trials (full's set = paired reading; b0's own set beside); chance "
+                      f"line {CHANCE_NA_RECALL}", _B0_CONTESTED_COLS,
+                      [r for r in totals if r["row_kind"] == KIND_B0_CONTESTED])
+    lines += _section("Attack trials left out of the contested reading, with the reason",
+                      ("variant", "match_reading", "trial", "n_positive", "reason"), uncontested_rows(results))
+    return lines
 
 
 def rank_md(results: Sequence[TrialRank], split: str, totals: Sequence[Mapping[str, str]],
             sweep: tuple[SweepPoint, Sequence[SweepPoint], Mapping[str, Any]] | None) -> str:
-    """The rank.md text."""
+    """The rank.md text: primary readings (070) first, then readings, inputs, the readings reported beside, H4,
+    the contested reading, per key path / per trial tables, trials without key attack paths and the sweep."""
     keyed = [t for t in results if t.keyed]
+    ranking = [r for r in totals if r["row_kind"] == KIND_RANKING]
     lines = [md_header(split, None), "", f"Development ranking check over {len(results)} trials, split {split} "
-             "(spec 05_score SCA-06; decisions 065, 066). Variants full, b1, b2 rank the stitch paths; b0 ranks label "
-             "units (spec 05 section 3.6).", ""] + _readings_text() + _inputs_section(results)
-    lines += ["", "## Totals"]
-    lines += _section("Per variant and reading (attack trials)",
-                      ("variant", "match_reading", "attack_trials", "key_paths_matched", "top1_expected",
-                       "top1_optimistic", "top1_pessimistic", "mrr_expected", "mrr_optimistic", "mrr_pessimistic",
-                       "chance_top1", "chance_mrr", "score_gap_min", "trials_gap_positive"),
-                      [r for r in totals if r["row_kind"] == "ranking"])
-    lines += _section("Reported beside (decision 069 item 9; primary readings above unchanged): per-key MRR "
-                      "(ATK-SC-15), E[1/rank] and the chance line over candidates with score > 0 (ATK-SC-21)",
-                      ("variant", "match_reading", "mrr_expected", "mrr_rr_mean_expected", "mrr_per_key_expected",
-                       "mrr_per_key_rr_mean", "chance_mrr", "chance_rr_mean", "chance_pos_top1", "chance_pos_mrr",
-                       "chance_pos_rr_mean"), [r for r in totals if r["row_kind"] == "ranking"])
-    lines += _section("S06 check (highest S06 score vs lowest key attack score)",
-                      ("variant", "match_reading", "s06_trials", "s06_max_score", "key_attack_score_min", "s06_margin",
-                       "s06_held", "share_attack_trials_above_s06"), [r for r in totals if r["row_kind"] == "ranking"])
+             "(spec 05_score SCA-06; spec 06_evaluate section 4 A; decisions 065, 066, 070, 071). Variants full, b1, "
+             "b2 rank the stitch paths; b0 ranks label units (spec 05 section 3.6)."]
+    lines += _primary_section(totals)
+    lines += [""] + _readings_text() + _inputs_section(results)
+    lines += ["", "## Reported beside (decision 070)"]
+    lines += _section("Per-trial MRR (first match, handoff 14.2), E[1/rank], optimistic / pessimistic ties and the "
+                      "score gap, with the chance line over all candidates and over score > 0", _BESIDE_COLS, ranking)
     lines += _h4_section(results, totals)
+    lines += _contested_section(results, totals)
     lines += ["", "## Key attack paths"]
-    lines += _section("First match per key attack path", ("trial", "key_path", "variant", "reading", "first_match", "r",
-                                                         "t", "m", "rank_exp", "rank_opt", "rank_pess", "rr_exp",
-                                                         "score", "n"), _key_md_rows(keyed))
+    lines += _section("First match per key attack path (chance per key path: m_k = candidates matching it)",
+                      ("trial", "key_path", "variant", "reading", "first_match", "r", "t", "m", "rank_exp",
+                       "rank_opt", "rank_pess", "rr_exp", "chance_rr", "chance_pos_rr", "score", "n", "n_pos"),
+                      _key_md_rows(keyed))
     lines += _section("Per attack trial (first match of any key attack path)",
                       ("trial", "variant", "reading", "n", "top1_exp", "rr_exp", "rr_opt", "rr_pess", "E[1/rank]",
                        "chance_top1", "chance_rr", "chance_E[1/rank]", "n_pos", "chance_pos_top1", "chance_pos_rr",
-                       "attack_min", "other_max", "gap"), _trial_md_rows([t for t in keyed if t.attack]))
+                       "contested", "attack_min", "other_max", "gap"), _trial_md_rows([t for t in keyed if t.attack]))
     dist = [{"trial": t.trial_id, "keyed": "yes" if t.keyed else "no", "variant": v, "n": str(d["n"]),
              "max": f6(d["max"]), "min": f6(d["min"]), "mean": f6(d["mean"]), "zero": str(d["n_zero"]),
              "distinct": str(d["n_distinct"]), "top_tie": str(d["top_tie"])}
@@ -492,7 +762,7 @@ def rank_md(results: Sequence[TrialRank], split: str, totals: Sequence[Mapping[s
                                                    "distinct", "top_tie"), dist)
     if sweep is not None:
         trials = [t.sweep_trial for t in results if t.sweep_trial is not None]
-        lines += _sweep_section(*sweep, informativeness(trials))
+        lines += _sweep_section(*sweep, informativeness(trials), _sweep_chance(totals))
     return "\n".join(lines) + "\n"
 
 

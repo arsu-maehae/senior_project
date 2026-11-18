@@ -69,8 +69,11 @@ def dev(tmp_path_factory):
 
 
 def totals(root: Path) -> dict[tuple[str, str], dict[str, str]]:
+    """The `ranking` rows by (variant, reading). The contested rows have their own row kinds (spec 06 EV-08), so they are
+    not mixed into this view."""
     return {(r["variant"], r["match_reading"]): r
-            for r in read_csv(root / "out" / "evaluate" / "development" / "rank_totals.csv")}
+            for r in read_csv(root / "out" / "evaluate" / "development" / "rank_totals.csv")
+            if r["row_kind"] == "ranking"}
 
 
 # ================================================================================================ headline numbers (068)
@@ -306,12 +309,14 @@ def test_chance_line_over_candidates_with_score_above_zero_is_reported_and_equal
     assert r["top1_expected"] == r["chance_pos_top1"] and r["mrr_expected"] == r["chance_pos_mrr"]
 
 
-def test_h4_recall_is_reported_on_both_bases_and_full_is_above_b0_on_both_for_every_attack_trial(dev):
+def test_h4_recall_is_reported_on_both_bases_labelled_primary_and_full_is_above_b0_on_both_for_every_attack_trial(dev):
+    """Decision 071 (denominator = labelled key nodes) and 070 item 1: primary = labelled basis (full 0.830000 vs b0
+    0.422857), the all-node basis beside (0.877451 vs 0.260609); full above b0 in 5 of 5 trials on both."""
     b0 = next(r for r in read_csv(dev / "out" / "evaluate" / "development" / "rank_totals.csv") if r["row_kind"] == "b0_recall")
-    assert b0["recall_basis"] == "all context-0 nodes (065 reading)" and b0["recall_basis_labelled"] == "labelled nodes only (b0-reachable)"
+    assert b0["recall_basis"] == "all context-0 nodes (reported beside, 070)"
+    assert b0["recall_basis_labelled"] == "labelled nodes only (b0-reachable, primary, 070/071)"
+    assert b0["full_recall_labelled_mean"] == "0.830000" and b0["b0_recall_labelled_mean"] == "0.422857"
     assert float(b0["full_recall_mean"]) == pytest.approx(0.877, abs=1e-3) and float(b0["b0_recall_mean"]) == pytest.approx(0.261, abs=1e-3)
-    assert float(b0["full_recall_labelled_mean"]) == pytest.approx(0.214, abs=1e-3)
-    assert float(b0["b0_recall_labelled_mean"]) == pytest.approx(0.121, abs=1e-3)
     assert b0["trials_full_above_b0"] == "5" and b0["trials_full_above_b0_labelled"] == "5"
 
 

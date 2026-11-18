@@ -20,7 +20,8 @@ __all__ = ["TOOL_VERSION", "EVAL_OUT_REL", "STITCH_OUT_REL", "LABEL_OUT_REL", "S
            "BOOT_STARTUP_IDS", "BOOT_SHUTDOWN_IDS", "BOOT_CHANNEL", "KEY_LOCK_HEADER", "TRIAL_ID_PATTERN",
            "METHODS", "METHOD_PORT", "METHOD_4648", "METHOD_CMD", "METHOD_TARGET_ONLY", "PROTOCOL_GROUPS",
            "PROTOCOL_GROUP_ORDER", "TIER_ORDER", "DEVELOPMENT_TRIALS", "KEYED_DEVELOPMENT_TRIALS",
-           "FROZEN_SCORE_PARAMETERS", "FROZEN_ORDER_TABLE_SHA256", "FROZEN_PARAM_TOLERANCE"]
+           "FROZEN_SCORE_PARAMETERS", "FROZEN_ORDER_TABLE_SHA256", "FROZEN_PARAM_TOLERANCE", "H1_TOP1_MIN",
+           "H2_MRR_PER_KEY_MIN", "H3_MIN_DIFFERENCE", "H4_MIN_DIFFERENCE", "H5_MIN_MARGIN", "VERDICT_DECIMALS"]
 
 TOOL_VERSION = "evaluate 0.1.0"
 
@@ -102,3 +103,13 @@ FROZEN_SCORE_PARAMETERS: dict[str, float] = {
 }
 FROZEN_ORDER_TABLE_SHA256 = "6bfae08b869178c618cef9b42b341eb9c78441ef2aeeb4cf9aeaaf2cfa07d61e"
 FROZEN_PARAM_TOLERANCE = 1e-12
+
+# ---------------------------------------------------------------- T10 hypothesis thresholds (spec 06 section 5, RS-03..05)
+# Frozen before any test trial is scored; read here by the results tables and pinned by a test. Never moved after
+# seeing development numbers (070 item 3).
+H1_TOP1_MIN = 0.80              # 065 H1: top-1 rate (expected ties), full, >= ; unchanged by 070 item 3
+H2_MRR_PER_KEY_MIN = 0.85       # 065 H2 threshold; reading = per-key MRR (070 item 2); unchanged (070 item 3)
+H3_MIN_DIFFERENCE = 0.0         # 065 H3 strict: per-key MRR(full) - per-key MRR(b1) > 0 (070 item 2); equal = not held
+H4_MIN_DIFFERENCE = 0.0         # 065 H4 / 070 item 1 / 071: mean labelled recall full - b0 > 0, strict
+H5_MIN_MARGIN = 0.0             # 065 H5: lowest key attack score - highest S06 score > 0 in every keyed S06 trial
+VERDICT_DECIMALS = 12           # RS-09 (ATK-EV-02): verdicts compare fsum values rounded to 12 decimals, as SC-41

@@ -24,7 +24,8 @@ from .rank_inputs import (PATH_VARIANTS, ScoreData, check_key_against_stitch, ch
 from .rank_sweep import SweepPoint, SweepTrial, components_of, run_sweep
 from .run import default_stitch_dir
 
-__all__ = ["KeyPathResult", "ReadingResult", "B0Result", "TrialRank", "rank_from_inputs", "rank_trial", "sweep_of"]
+__all__ = ["KeyPathResult", "ReadingResult", "B0Result", "TrialRank", "b0_unit_uids", "labelled_key_nodes",
+           "positive_b0_units", "canonical_b0_rows", "rank_from_inputs", "rank_trial", "sweep_of"]
 
 
 @dataclass(frozen=True)
@@ -52,19 +53,48 @@ class ReadingResult:
     gap: float | None
     positive: frozenset[str] = frozenset()      # ATK-SC-21: candidates with score > 0 (second chance line)
 
+    @property
+    def contested(self) -> bool:
+        """EV-03 (decision 070 item 4): more than one candidate of this variant has a written score > 0, so the
+        ranking among scored paths can be wrong. Independent of the match reading."""
+        return len(self.positive) > 1
+
+    def uncontested_reason(self) -> str:
+        """Why a trial is left out of the contested reading ('' when contested). ATK-EV-05: a trial whose only
+        positive candidate matches no key attack path is named so the failure stays visible."""
+        if self.contested:
+            return ""
+        if not self.positive:
+            return "uncontested — no candidate scored"
+        if self.positive & set(self.trial.matched):
+            return "uncontested — key path the only scored path"
+        return "uncontested — key path not scored"
+
 
 @dataclass(frozen=True)
 class B0Result:
     """H4 inputs of one keyed attack trial: full's top-k expected nodes and recall, and b0's recall at that budget;
-    the same with the labelled ``context`` = 0 nodes (NodeScore units) of the top k as budget."""
+    the same with the labelled ``context`` = 0 nodes (NodeScore units) of the top k as budget.
+
+    The labelled recall divides by the **labelled key nodes** (decision 071, spec 06 EV-02): key nodes inside at
+    least one canonical ``b0_ranked.csv`` unit. A trial with none has an undefined labelled recall (None), so it is
+    left out of the mean instead of counting as 0. ``n_positive_units`` = distinct canonical b0 units with score > 0
+    (the b0 contested reading, EV-03 / ATK-EV-14)."""
     k: int
     key_nodes: int
     budget: float
     full_recall: float
     b0_recall: float
     budget_labelled: float
-    full_recall_labelled: float
-    b0_recall_labelled: float
+    full_recall_labelled: float | None
+    b0_recall_labelled: float | None
+    key_nodes_labelled: int = 0
+    n_positive_units: int = 0
+
+    @property
+    def contested(self) -> bool:
+        """EV-03 for b0: more than one distinct labelled unit with score > 0 (ST-05 copies merged first)."""
+        return self.n_positive_units > 1
 
 
 @dataclass(frozen=True)
@@ -109,22 +139,47 @@ def _reading(variant: str, reading: str, cands: Sequence[rm.Candidate], key_path
                          rm.positive_ids(cands))
 
 
+def b0_unit_uids(b0_rows: Sequence[Mapping[str, str]]) -> frozenset[str]:
+    """Every event uid held by any (canonical) ``b0_ranked.csv`` unit: the nodes b0 can reach at all (071)."""
+    return frozenset(u for r in b0_rows for u in split_list(r["event_uids"]))
+
+
+def labelled_key_nodes(key_nodes: frozenset[str], b0_rows: Sequence[Mapping[str, str]]) -> frozenset[str]:
+    """The H4 labelled denominator (decision 071): canonical key nodes inside at least one canonical b0 unit. WHY:
+    070 item 1 measures recall on the b0-reachable set, so neither side loses for nodes no labelled unit holds."""
+    return key_nodes & b0_unit_uids(b0_rows)
+
+
+def positive_b0_units(b0_rows: Sequence[Mapping[str, str]]) -> int:
+    """Distinct labelled units with score > 0 (EV-03 b0 contested reading). Rows must already be canonical
+    (``canonical_b0_rows``): two rows holding the same canonical uid set are ST-05 copies of one unit and count once
+    (ATK-EV-14)."""
+    return len({frozenset(split_list(r["event_uids"])) for r in b0_rows if rm._num(r["score"], "b0 score") > 0})
+
+
 def _b0(full: Sequence[rm.Candidate], k: int, key_nodes: frozenset[str], nodes: Mapping[str, frozenset[str]],
         labelled: Mapping[str, frozenset[str]], b0_rows: Sequence[Mapping[str, str]]) -> B0Result:
-    """H4 at an equal node budget (rank_metrics module docstring)."""
+    """H4 at an equal node budget (rank_metrics module docstring). All-node basis: recall over every key node. Labelled
+    basis (071): the same numerator restricted to the labelled key nodes, divided by their number; None when the
+    trial has none (undefined, left out of the mean)."""
     sure, cut, slots = rm.inclusion_probabilities(full, k)
+    reach = labelled_key_nodes(key_nodes, b0_rows)
 
-    def side(node_sets: Mapping[str, frozenset[str]]) -> tuple[float, float, float]:
+    def side(node_sets: Mapping[str, frozenset[str]], targets: frozenset[str]) -> tuple[float, float | None,
+                                                                                       float | None]:
         cover = rm.expected_coverage(node_sets, sure, cut, slots)
         budget = sum(cover.values())
-        recall = sum(cover.get(u, 0.0) for u in key_nodes) / len(key_nodes) if key_nodes else 0.0
-        b0r, _held = rm.b0_recall(b0_rows, budget, key_nodes)
+        if not targets:
+            return budget, None, None
+        recall = sum(cover.get(u, 0.0) for u in targets) / len(targets)
+        b0r, _held = rm.b0_recall(b0_rows, budget, targets)
         return budget, recall, b0r
 
-    b, fr, br = side(nodes)
-    bl, frl, brl = side(labelled)
-    return B0Result(k=k, key_nodes=len(key_nodes), budget=b, full_recall=fr, b0_recall=br, budget_labelled=bl,
-                    full_recall_labelled=frl, b0_recall_labelled=brl)
+    b, fr, br = side(nodes, key_nodes)
+    bl, frl, brl = side(labelled, reach)
+    return B0Result(k=k, key_nodes=len(key_nodes), budget=b, full_recall=fr or 0.0, b0_recall=br or 0.0,
+                    budget_labelled=bl, full_recall_labelled=frl, b0_recall_labelled=brl,
+                    key_nodes_labelled=len(reach), n_positive_units=positive_b0_units(b0_rows))
 
 
 def canonical_b0_rows(rows: Sequence[Mapping[str, str]], alias: Mapping[str, str]) -> list[dict[str, str]]:

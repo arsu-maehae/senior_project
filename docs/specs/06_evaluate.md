@@ -45,6 +45,7 @@ The allowlist is `clock_offset.params.DEVELOPMENT_TRIALS` = s02–s07 t00, s02_t
   `reading_scope = all`; new rows with `reading_scope = contested` and `attack_trials` = the number of contested
   trials (EV-03). New column `primary_metric` naming the 070 primary column of the row (`mrr_per_key_expected` for
   `ranking` rows; `full_recall_labelled_mean` / `b0_recall_labelled_mean` for `b0_recall` rows).
+- Further appended columns (073): rank.csv `key_nodes_labelled`; rank_totals.csv `contested_set`, `scope_trial_ids`, `chance_per_key_mrr`, `chance_pos_per_key_mrr`, `labelled_recall_trials`; `primary_metric` of the b0 row names both sides (`full_recall_labelled_mean;b0_recall_labelled_mean`).
 - `rank.md`: section "Primary readings (decision 070)" first: per variant top-1 (expected), **per-key MRR**, chance
   line over all candidates **and** over score > 0 in the same table; "Reported beside" holds per-trial MRR, E[1/rank],
   optimistic/pessimistic, all-node recall. H4 table columns reordered: labelled basis first (primary), all-node basis
@@ -64,7 +65,7 @@ New package `src/run_trial` (added to `pyproject.toml` packages). Writes `<R>/ou
 Writes `out/evaluate/development/results.md` and `results.csv` (added to every development keep list, so link
 accuracy / label recall / rank runs keep them, and vice versa).
 
-`results.csv` — one row per (table, variant, reading_scope, metric): `status_note` (`DEVELOPMENT — not a result`),
+`results.csv` — one row per (table, variant, reading_scope, metric, source) (EV-04 paired and own-set rows share the first four; record [073](../decisions/073-evaluate-t10-implementation-readings.md)), plus a `note` column (H5 reason, contested-set name, "reported beside" labels): `status_note` (`DEVELOPMENT — not a result`),
 `split`, `table` (`H1`…`H5`, `baselines`, `contested`, `recall`), `hypothesis`, `variant`, `reading_scope`
 (`all`|`contested`), `metric`, `is_primary` (1/0), `observed`, `threshold` (frozen, empty where none), `comparator`
 (`>=`, `>`, `<`), `verdict` (`held` / `not held` / empty for rows reported beside), `chance_all`, `chance_pos`,

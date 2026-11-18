@@ -517,16 +517,24 @@ def test_rank_totals_and_rank_md_report_per_key_mrr_e_one_over_rank_and_the_posi
 
 
 def rr_basis_all() -> str:
-    return "all context-0 nodes (065 reading)"
+    return "all context-0 nodes (reported beside, 070)"                      # spec 06 section 3.1 (decision 070)
 
 
 def rr_basis_labelled() -> str:
-    return "labelled nodes only (b0-reachable)"
+    return "labelled nodes only (b0-reachable, primary, 070/071)"
 
 
-def test_rank_md_h4_section_shows_both_recall_bases_labelled_and_the_sweep_is_called_not_informative(swept):
+def test_rank_md_opens_with_the_primary_readings_h4_is_labelled_first_and_the_sweep_is_called_not_informative(swept):
+    """Spec 06 section 3.1 (decision 070 / 071): "Primary readings (decision 070)" is the first section; the H4 tables show
+    the labelled basis (primary) before the all-node basis (beside)."""
     md = (summary(swept) / "rank.md").read_text(encoding="utf-8")
-    assert md.count("both recall bases side by side") >= 2
+    heads = [ln for ln in md.splitlines() if ln.startswith("## ")]
+    assert heads[0] == "## Primary readings (decision 070)", heads
+    assert heads.index("## Reported beside (decision 070)") > 0
+    assert md.count(rr_basis_labelled()) >= 2 and rr_basis_all() in md
+    h4 = [ln for ln in md.splitlines() if ln.startswith("| trial | k |")]
+    assert h4, "per-trial H4 table missing"
+    assert h4[0].index(rr_basis_labelled()) < h4[0].index(rr_basis_all())          # labelled columns first
     assert "not informative on development data" in md and "it never moves a value" in md
 
 
@@ -534,7 +542,12 @@ def test_totals_recall_bases_are_named_in_the_totals_file(swept):
     b0 = next(r for r in read_csv(summary(swept) / "rank_totals.csv") if r["row_kind"] == "b0_recall")
     assert b0["recall_basis"] == rr_basis_all() and b0["recall_basis_labelled"] == rr_basis_labelled()
     assert (b0["full_recall_mean"], b0["b0_recall_mean"]) == ("0.500000", "0.666667")
+    # decision 071: all three key nodes (T_H1 in unit u3, a1 and a2 in u1) are inside a b0 unit, so the labelled
+    # denominator is 3 = all key nodes in this world and the mean is unchanged by hand: full 1/3, b0 1/2.
     assert (b0["full_recall_labelled_mean"], b0["b0_recall_labelled_mean"]) == ("0.333333", "0.500000")
+    rows = read_csv(swept / "out" / "evaluate" / "s04_t00" / "rank.csv")
+    (r,) = [x for x in rows if x["row_kind"] == "b0_recall"]
+    assert r["key_nodes_labelled"] == "3" and r["key_node_count"] == "3"
 
 
 # ================================================================================================ independence and no side effects

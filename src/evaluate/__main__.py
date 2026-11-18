@@ -7,6 +7,7 @@
     python -m evaluate --rank --trial <id> [--repo PATH] [--out PATH]
     python -m evaluate --rank --development [--repo PATH]
     python -m evaluate --rank-sweep --development [--repo PATH]
+    python -m evaluate --results --development [--repo PATH]
 
 ``--trial`` evaluates one development trial into ``out/evaluate/<trial>/``; ``--development`` evaluates every
 trial of ``clock_offset.params.DEVELOPMENT_TRIALS`` in order, then writes ``out/evaluate/development/`` (summary).
@@ -24,6 +25,12 @@ approved key, writes ``rank.csv`` into each trial folder and, with ``--developme
 ``rank_totals.csv`` into the summary folder. ``--rank-sweep`` (development only) does the same and adds the stability
 sweep (``rank_sweep.csv`` and a sweep section in ``rank.md``); a plain ``--rank --development`` drops an older
 ``rank_sweep.csv`` so that ``rank.md`` and the sweep file always come from one run.
+
+``--results`` (spec 06_evaluate section 4 C, RS-01..11; DEVELOPMENT only) writes the T10 results tables
+``results.md`` and ``results.csv`` into the summary folder: the ranking check is recomputed in memory with all its
+refusals and the committed ``rank_totals.csv`` / ``rank.csv`` must equal it byte for byte, otherwise "stale: rerun
+python -m evaluate --development --rank" (RS-02). It runs with ``--development`` only (RS-01) and refuses
+``--rank``, ``--rank-sweep``, ``--label-recall``, ``--stitch-dir`` and ``--out`` (RS-11).
 
 The evaluations share these folders: each swap carries the others' files over unchanged (``replace_folder``
 ``keep``), so running them in any order keeps every output. A carried-over CSV / JSON must belong to the trial
@@ -52,6 +59,8 @@ from .rank_report import RANK_FILE, RANK_SUMMARY_FILES
 from .rank_report import summary_files as rank_summary_files
 from .rank_report import trial_csv as rank_trial_csv
 from .rank_run import rank_trial, sweep_of
+from .results_report import RESULTS_FILES
+from .results_run import development_results
 from .run import (default_out_dir, default_stitch_dir, evaluate_trial, summary_dir, summary_files, utc_now)
 from .writers import (FACTS_FILE, JSON_FILE, KEYED_FILE, LABEL_RECALL_FILE, LABEL_RECALL_MD, MD_FILE, RUN_INFO_FILE,
                       SUMMARY_CSV, SUMMARY_MD, TOTALS_FILE, kept_file_refusal, replace_folder)
@@ -69,9 +78,17 @@ OUT_ALLOWED_FILES: tuple[str, ...] = TRIAL_FILES + (RANK_FILE,)
 LINK_KEEP: tuple[str, ...] = (LABEL_RECALL_FILE, RANK_FILE)
 RECALL_KEEP: tuple[str, ...] = LINK_TRIAL_FILES + (RANK_FILE,)
 RANK_KEEP: tuple[str, ...] = TRIAL_FILES
-LINK_SUMMARY_KEEP: tuple[str, ...] = (LABEL_RECALL_MD,) + RANK_SUMMARY_FILES
-RECALL_SUMMARY_KEEP: tuple[str, ...] = LINK_SUMMARY_FILES + RANK_SUMMARY_FILES
-RANK_SUMMARY_KEEP: tuple[str, ...] = LINK_SUMMARY_FILES + (LABEL_RECALL_MD,)
+# The results tables (spec 06 section 3.3) live in the summary folder only: every other evaluation keeps them, and
+# --results keeps every other evaluation's summary files (rank, link accuracy, label recall).
+LINK_SUMMARY_KEEP: tuple[str, ...] = (LABEL_RECALL_MD,) + RANK_SUMMARY_FILES + RESULTS_FILES
+RECALL_SUMMARY_KEEP: tuple[str, ...] = LINK_SUMMARY_FILES + RANK_SUMMARY_FILES + RESULTS_FILES
+RANK_SUMMARY_KEEP: tuple[str, ...] = LINK_SUMMARY_FILES + (LABEL_RECALL_MD,) + RESULTS_FILES
+RESULTS_SUMMARY_KEEP: tuple[str, ...] = LINK_SUMMARY_FILES + (LABEL_RECALL_MD,) + RANK_SUMMARY_FILES
+# RS-01 / RS-11 refusal texts.
+RESULTS_TEST_REFUSAL = ("refused: results tables on test trials need the T5.7 key lock and an owner-approved test "
+                        "allowlist (PLAN 10.4)")
+RESULTS_COMBINATION_REFUSAL = ("refused: --results does not combine with --rank, --rank-sweep, --label-recall, "
+                               "--stitch-dir or --out")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -88,6 +105,8 @@ def _parser() -> argparse.ArgumentParser:
                     help="development ranking check (PLAN T9.5) instead of link accuracy")
     ap.add_argument("--rank-sweep", action="store_true",
                     help="ranking check plus the parameter stability sweep (PLAN T9.5; --development only)")
+    ap.add_argument("--results", action="store_true",
+                    help="T10 results tables on the development trials (spec 06 section 4 C; --development only)")
     ap.add_argument("--repo", type=Path, default=REPO)
     ap.add_argument("--stitch-dir", type=Path, default=None)
     ap.add_argument("--out", type=Path, default=None)
@@ -219,8 +238,31 @@ def _run_rank(a: argparse.Namespace, repo: Path) -> int:
     return _rank_one(repo, a.trial, a.out)
 
 
+def _results_development(repo: Path) -> int:
+    """Results tables of the development trials: everything computed and checked in memory first (allowlist, rank
+    checks, RS-02 staleness, RS-10 wording), then the summary folder is rebuilt keeping the other evaluations'
+    files."""
+    files = development_results(repo)
+    target = summary_dir(repo)
+    replace_folder(target, files, keep=RESULTS_SUMMARY_KEEP)
+    print(repo_relative(target, repo))
+    return 0
+
+
+def _run_results(a: argparse.Namespace, repo: Path) -> int:
+    """Dispatch of --results: development only (RS-01), no other evaluation or folder option (RS-11). Both checks
+    come before any file is opened."""
+    if not a.development:
+        raise EvalError(RESULTS_TEST_REFUSAL)
+    if a.rank or a.rank_sweep or a.label_recall or a.stitch_dir is not None or a.out is not None:
+        raise EvalError(RESULTS_COMBINATION_REFUSAL)
+    return _results_development(repo)
+
+
 def _run(a: argparse.Namespace, repo: Path) -> int:
     """Dispatch on the parsed arguments; option combinations that do not apply are refused."""
+    if a.results:
+        return _run_results(a, repo)
     if a.rank or a.rank_sweep:
         return _run_rank(a, repo)
     if a.label_recall:
