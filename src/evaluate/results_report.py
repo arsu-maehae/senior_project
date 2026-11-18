@@ -17,16 +17,17 @@ from typing import Any, Iterable, Mapping, Sequence
 from . import rank_metrics as rm
 from .inputs import EvalError
 from .params import (H1_TOP1_MIN, H2_MRR_PER_KEY_MIN, H3_MIN_DIFFERENCE, H4_MIN_DIFFERENCE, H5_MIN_MARGIN,
-                     SPLIT_DEVELOPMENT, VERDICT_DECIMALS)
+                     SPLIT_DEVELOPMENT)
 from .rank_report import (B0_SET, CHANCE_NA_MARGIN, CHANCE_NA_RECALL, KIND_B0, KIND_B0_CONTESTED, KIND_RANKING,
                           KIND_RANKING_CONTESTED, PAIRED_SET, PATH_VARIANT_ORDER, SCOPE_ALL, SCOPE_CONTESTED,
-                          attack_readings, b0_contested_ids, b0_of, b0_values, contested_ids, f6, ranking_values,
-                          s06_facts, total_rows, uncontested_rows)
+                          at_least, attack_readings, b0_contested_ids, b0_of, b0_values, contested_ids, f6, f12,
+                          h5_facts, r12, ranking_values, strictly_greater, total_rows, uncontested_rows)
 from .rank_run import TrialRank
 from .writers import csv_text, md_header
 
 __all__ = ["RESULTS_MD", "RESULTS_CSV", "RESULTS_FILES", "RESULTS_NOTE", "VERDICT_COLUMN", "RESULTS_COLUMNS",
-           "FORBIDDEN_WORDS", "ALLOWED_PHRASE", "LIMITS_H1_H3", "S06_PREFIX", "r12", "f12", "verdict_text",
+           "FORBIDDEN_WORDS", "ALLOWED_PHRASE", "LIMITS_H1_H3", "EQUALS_CHANCE_TEXT", "UNDEFINED", "r12", "f12",
+           "verdict_text", "equals_chance", "dev_check_cell",
            "at_least", "strictly_greater", "paired_difference", "forbidden_hits", "h5_facts", "result_rows", "results_md", "results_files"]
 
 RESULTS_MD = "results.md"
@@ -37,8 +38,14 @@ RESULTS_NOTE = "DEVELOPMENT — not a result"
 VERDICT_COLUMN = "dev_check"
 RESULTS_COLUMNS: tuple[str, ...] = (
     "status_note", "split", "table", "hypothesis", "variant", "reading_scope", "metric", "is_primary", "observed",
-    "observed_12", "threshold", "comparator", VERDICT_COLUMN, "chance_all", "chance_pos", "n_trials", "n_key_paths",
-    "source", "note")
+    "observed_12", "threshold", "comparator", VERDICT_COLUMN, "chance_all", "chance_pos", "equals_chance_pos",
+    "n_trials", "n_key_paths", "source", "note")
+# ATK-EV-19: shown after the verdict in results.md when the observed value is not above the chance line over the
+# candidates with score > 0 (observed <= chance_pos at 12 decimals: the ranking adds nothing over a random order of
+# the scored paths). The results.csv column keeps its name ``equals_chance_pos``.
+EQUALS_CHANCE_TEXT = "not above chance over scored paths"
+# ATK-EV-20: the H4 verdict when no attack trial has a labelled key node (the labelled recall is undefined).
+UNDEFINED = "undefined"
 # RS-10 / RS-08 (ATK-EV-13): a copy of score.report.FORBIDDEN_WORDS / ALLOWED_PHRASE (evaluate must not import score,
 # decision 051 item 1 spirit); a test can pin the copy to the original.
 FORBIDDEN_WORDS: tuple[str, ...] = ("stolen", "detects", "probability", "confidence", "reduces false positives",
@@ -64,7 +71,6 @@ WORDING: tuple[str, ...] = (
     "An account counted by IdentityCoherence is exposed (a logon session open on the source host when LSASS was read "
     "there), which is not proof that its credentials were taken or used (Correction K).",
 )
-S06_PREFIX = "s06_"
 _N_A_DIFF = "n/a: difference of two variants; the chance line of each side is in its own row"
 _HYP = {
     "H1": f"full ranks a key attack path first: top-1 rate (expected ties) >= {H1_TOP1_MIN:.2f}",
@@ -78,74 +84,36 @@ _HYP = {
 _NODE = rm.READING_NODE                        # EV-06: the verdict reading
 
 
-# ---------------------------------------------------------------- exact comparisons (RS-09)
-
-def r12(value: float) -> float:
-    """``value`` rounded to the verdict precision (12 decimals, RS-09 / SC-41)."""
-    return round(value, VERDICT_DECIMALS)
-
-
-def f12(value: float | None) -> str:
-    """The compared value as text (``observed_12``); empty for None."""
-    return "" if value is None else f"{r12(value):.{VERDICT_DECIMALS}f}"
-
-
-def at_least(value: float, threshold: float) -> bool:
-    """value >= threshold, both at 12 decimals (H1, H2: 0.80 exactly is held, 0.849999 is not)."""
-    return r12(value) >= r12(threshold)
-
-
-def strictly_greater(a: float, b: float) -> bool:
-    """a > b, both at 12 decimals (H3, H4, H5: equal at 12 decimals = not held, ATK-EV-02)."""
-    return r12(a) > r12(b)
-
+# ---------------------------------------------------------------- verdict text
 
 def verdict_text(held: bool) -> str:
     """The ``dev_check`` cell."""
     return "held" if held else "not held"
 
 
+def equals_chance(value: float | None, chance_pos: float | None) -> str:
+    """``equals_chance_pos`` (ATK-EV-19): "1" when the observed ranking metric is not above the chance line over the
+    candidates with score > 0, compared at 12 decimals; "0" when above; "" when either is undefined."""
+    if value is None or chance_pos is None:
+        return ""
+    return "1" if r12(value) <= r12(chance_pos) else "0"
+
+
+def dev_check_cell(verdict: str, equals_pos: str, coverage: str = "") -> str:
+    """The results.md verdict cell: the verdict, " — not above chance over scored paths" when ``equals_pos`` is "1"
+    (ATK-EV-19), then the coverage it rests on, e.g. "(5 of 5 attack trials)" (ATK-EV-20)."""
+    if not verdict:
+        return ""
+    text = f"{verdict} — {EQUALS_CHANCE_TEXT}" if equals_pos == "1" else verdict
+    return f"{text} {coverage}" if coverage else text
+
+
 def forbidden_hits(text: str) -> list[str]:
     """``FORBIDDEN_WORDS`` found in ``text`` (case-insensitive) after removing the one allowed phrase (as
-    score.report.forbidden_hits). WHY: results.md must never carry the claims CLAUDE.md forbids (RS-10)."""
+    score.report.forbidden_hits). WHY: results.md and results.csv must never carry the claims CLAUDE.md forbids
+    (RS-10, ATK-EV-23)."""
     low = text.lower().replace(ALLOWED_PHRASE, " ")
     return [w for w in FORBIDDEN_WORDS if w in low]
-
-
-# ---------------------------------------------------------------- facts
-
-def h5_facts(results: Sequence[TrialRank]) -> dict[str, Any]:
-    """H5 inputs (RS-05, ATK-EV-04), full, node reading: the lowest key attack score over the attack trials (None
-    with the unmatched key paths named when any key attack path has no matching candidate: it is then undefined and
-    never computed over the rest), and per S06 trial its highest full score and margin; keyed S06 trials (keyed, no
-    key attack path) decide, unkeyed ``s06_*`` trials are reported beside."""
-    attack = attack_readings(results, "full", _NODE)
-    unmatched = [f"{tid}:{kr.key_path.path_id}" for tid, rr in attack for kr in rr.key_paths
-                 if kr.placement.first_score is None]
-    scores = [kr.placement.first_score for _tid, rr in attack for kr in rr.key_paths]
-    low = None if unmatched or not scores else min(s for s in scores if s is not None)
-
-    def per_trial(t: TrialRank) -> dict[str, Any]:
-        top = max((c.score for c in t.candidates["full"]), default=None)
-        margin = None if low is None or top is None else low - top
-        return {"trial_id": t.trial_id, "max": top, "margin": margin}
-
-    keyed = [per_trial(t) for t in results if t.keyed and not t.attack]
-    unkeyed = [per_trial(t) for t in results if not t.keyed and t.trial_id.startswith(S06_PREFIX)]
-    margins = [k["margin"] for k in keyed]
-    defined = bool(keyed) and all(m is not None for m in margins)
-    held = defined and all(strictly_greater(m, H5_MIN_MARGIN) for m in margins)          # type: ignore[arg-type]
-    if not keyed:
-        reason = "no keyed S06 trial"
-    elif unmatched:
-        reason = "lowest key attack score undefined: key attack path without a matching candidate (" + \
-                 ";".join(unmatched) + ")"
-    elif not defined:
-        reason = "a keyed S06 trial has no candidate path, so its highest score is undefined"
-    else:
-        reason = ""
-    return {"low": low, "unmatched": unmatched, "keyed": keyed, "unkeyed": unkeyed,
-            "min_margin": min(margins) if defined else None, "held": held, "reason": reason}
 
 
 # ---------------------------------------------------------------- rows
@@ -202,7 +170,8 @@ def _check(row: Mapping[str, str], column: str, value: float | int | None, count
 def _row(split: str, table: str, hyp: str, variant: str, scope: str, metric: str, value: float | int | None, *,
          primary: bool = False, count: bool = False, threshold: str = "", comparator: str = "", verdict: str = "",
          chance: tuple[str, str] = ("", ""), n_trials: int | None = None, n_key: int | None = None,
-         source: str = "", note: str = "", compared: float | None = None) -> dict[str, str]:
+         source: str = "", note: str = "", compared: float | None = None,
+         equals_pos: str = "") -> dict[str, str]:
     """One results.csv row. ``compared`` overrides the 12-decimal cell (H3/H4 differences of rounded values)."""
     if count:
         observed, obs12 = ("" if value is None else str(int(value))), ""
@@ -212,7 +181,8 @@ def _row(split: str, table: str, hyp: str, variant: str, scope: str, metric: str
     return {"status_note": RESULTS_NOTE, "split": split, "table": table, "hypothesis": hyp, "variant": variant,
             "reading_scope": scope, "metric": metric, "is_primary": "1" if primary else "0", "observed": observed,
             "observed_12": obs12, "threshold": threshold, "comparator": comparator, VERDICT_COLUMN: verdict,
-            "chance_all": chance[0], "chance_pos": chance[1], "n_trials": "" if n_trials is None else str(n_trials),
+            "chance_all": chance[0], "chance_pos": chance[1], "equals_chance_pos": equals_pos,
+            "n_trials": "" if n_trials is None else str(n_trials),
             "n_key_paths": "" if n_key is None else str(n_key), "source": source, "note": note}
 
 
@@ -236,7 +206,8 @@ def _metric(ctx: _Ctx, table: str, variant: str, cset: str | None, metric: str, 
                 metric, vals[metric], primary=primary, threshold=threshold, comparator=comparator, verdict=verdict,
                 chance=(trow[chance_cols[0]], trow[chance_cols[1]]), n_trials=int(vals["attack_trials"]),
                 n_key=int(vals["key_paths"]), source=f"{src}:{metric}",
-                note=note or ("" if cset is None else _set_note(cset, variant, paired)))
+                note=note or ("" if cset is None else _set_note(cset, variant, paired)),
+                equals_pos=equals_chance(vals[metric], vals[chance_cols[1]]))
 
 
 def _h1(ctx: _Ctx) -> list[dict[str, str]]:
@@ -272,15 +243,16 @@ def paired_difference(a: float | None, b: float | None) -> float | None:
 
 
 def _difference(ctx: _Ctx, table: str, variant: str, scope: str, metric: str, a: float | None, b: float | None,
-                verdict: bool | None, chance: str, n_trials: int, source: str, note: str,
+                verdict: str | None, chance: str, n_trials: int, source: str, note: str,
                 threshold: float = 0.0) -> dict[str, str]:
-    """A paired difference row: observed a - b (6 decimals), compared value ``paired_difference`` (RS-09)."""
+    """A paired difference row: observed a - b (6 decimals), compared value ``paired_difference`` (RS-09).
+    ``verdict`` None = a row reported beside; otherwise the primary row's verdict text."""
     diff = None if a is None or b is None else a - b
     comp = paired_difference(a, b)
     return _row(ctx.split, table, _HYP[table], variant, scope, metric, diff, primary=verdict is not None,
                 threshold=f"{threshold:.2f}" if verdict is not None else "",
                 comparator=">" if verdict is not None else "",
-                verdict="" if verdict is None else verdict_text(verdict), chance=(chance, chance),
+                verdict=verdict or "", chance=(chance, chance),
                 n_trials=n_trials, source=source, note=note, compared=comp)
 
 
@@ -293,7 +265,8 @@ def _h3(ctx: _Ctx) -> list[dict[str, str]]:
     d = paired_difference(a1, b1v)
     held = d is not None and strictly_greater(d, H3_MIN_DIFFERENCE)
     n = int(f["attack_trials"])
-    rows = [_difference(ctx, "H3", "full_vs_b1", SCOPE_ALL, "mrr_per_key_expected_difference", a1, b1v, held,
+    rows = [_difference(ctx, "H3", "full_vs_b1", SCOPE_ALL, "mrr_per_key_expected_difference", a1, b1v,
+                        verdict_text(held),
                         _N_A_DIFF, n, f"{fsrc}:mrr_per_key_expected - {bsrc}:mrr_per_key_expected", "",
                         threshold=H3_MIN_DIFFERENCE)]
     ch = ("chance_per_key_mrr", "chance_pos_per_key_mrr")
@@ -333,7 +306,8 @@ def _h4(ctx: _Ctx) -> list[dict[str, str]]:
     a, b = v["full_recall_labelled_mean"], v["b0_recall_labelled_mean"]
     d = paired_difference(a, b)
     held = d is not None and strictly_greater(d, H4_MIN_DIFFERENCE)
-    rows = [_difference(ctx, "H4", "full_vs_b0", SCOPE_ALL, "recall_labelled_mean_difference", a, b, held,
+    verdict = UNDEFINED if not v["labelled_recall_trials"] else verdict_text(held)          # ATK-EV-20
+    rows = [_difference(ctx, "H4", "full_vs_b0", SCOPE_ALL, "recall_labelled_mean_difference", a, b, verdict,
                         CHANCE_NA_RECALL, int(v["labelled_recall_trials"]),
                         f"{src}:full_recall_labelled_mean - b0_recall_labelled_mean",
                         f"mean over the {v['labelled_recall_trials']} of {v['attack_trials']} attack trials with "
@@ -362,15 +336,20 @@ def _h4(ctx: _Ctx) -> list[dict[str, str]]:
 def _h5(ctx: _Ctx) -> list[dict[str, str]]:
     """H5 (RS-05): margin > 0 in every keyed S06 trial (full, node reading); the per-trial margins, unkeyed S06
     trials and the share of attack trials above the S06 maximum beside. No contested reading (Q2)."""
-    h = h5_facts(ctx.results)
+    h = h5_facts(ctx.results, "full", _NODE)
     trow = ctx.total(KIND_RANKING, "full", _NODE, "")
     src = _source(trow)
     na = (CHANCE_NA_MARGIN, CHANCE_NA_MARGIN)
     nk = len(h["keyed"])
-    if len(h["keyed"]) == 1 and h["min_margin"] is not None:
-        _check(trow, "s06_margin", h["min_margin"])
-    rows = [_row(ctx.split, "H5", _HYP["H5"], "full", SCOPE_ALL, "s06_margin_min", h["min_margin"], primary=True,
-                 threshold=f"{H5_MIN_MARGIN:.2f}", comparator=">", verdict=verdict_text(h["held"]), chance=na,
+    _check(trow, "s06_margin", h["margin"])                  # ATK-EV-16: full cross-check with rank_totals.csv
+    _check(trow, "s06_max_score", h["s06_max"])
+    _check(trow, "key_attack_score_min", h["low"])
+    _check(trow, "s06_trials", nk, count=True)
+    _check(trow, "s06_held", None if h["held"] is None else int(h["held"]), count=True)
+    if trow["s06_reason"] != h["reason"]:
+        raise EvalError(f"refused: internal: H5 reason differs from rank_totals.csv {src} s06_reason")
+    rows = [_row(ctx.split, "H5", _HYP["H5"], "full", SCOPE_ALL, "s06_margin_min", h["margin"], primary=True,
+                 threshold=f"{H5_MIN_MARGIN:.2f}", comparator=">", verdict=verdict_text(bool(h["held"])), chance=na,
                  n_trials=nk, source=f"{src}:s06_margin", note=h["reason"] or "minimum over the keyed S06 trials")]
     rows.append(_row(ctx.split, "H5", _HYP["H5"], "full", SCOPE_ALL, "key_attack_score_min", h["low"], chance=na,
                      source=f"{src}:key_attack_score_min",
@@ -384,10 +363,9 @@ def _h5(ctx: _Ctx) -> list[dict[str, str]]:
                              note=note))
             rows.append(_row(ctx.split, "H5", _HYP["H5"], "full", SCOPE_ALL, "s06_margin", k["margin"], chance=na,
                              n_trials=1, source=f"key_attack_score_min - {k['trial_id']} s06_max_score", note=note))
-    s6 = s06_facts(ctx.results, "full", _NODE)
-    _check(trow, "share_attack_trials_above_s06", s6["share_above"])
+    _check(trow, "share_attack_trials_above_s06", h["share_above"])
     rows.append(_row(ctx.split, "H5", _HYP["H5"], "full", SCOPE_ALL, "share_attack_trials_above_s06",
-                     s6["share_above"], chance=na, n_trials=len(attack_readings(ctx.results, "full", _NODE)),
+                     h["share_above"], chance=na, n_trials=len(attack_readings(ctx.results, "full", _NODE)),
                      source=f"{src}:share_attack_trials_above_s06",
                      note="attack trials whose lowest key attack score lies above the keyed S06 maximum, beside"))
     return rows
@@ -401,7 +379,9 @@ def _baselines(ctx: _Ctx) -> list[dict[str, str]]:
                  _metric(ctx, "baselines", v, None, "mrr_per_key_expected",
                          ("chance_per_key_mrr", "chance_pos_per_key_mrr")),
                  _metric(ctx, "baselines", v, None, "mrr_expected", ("chance_mrr", "chance_pos_mrr"))]
-    rows += [_b0_metric(ctx, "baselines", "b0", None, "b0_recall_labelled_mean"),
+    rows += [_b0_metric(ctx, "baselines", "full", None, "full_recall_labelled_mean"),
+             _b0_metric(ctx, "baselines", "full", None, "full_recall_mean", note="all context-0 nodes"),
+             _b0_metric(ctx, "baselines", "b0", None, "b0_recall_labelled_mean"),
              _b0_metric(ctx, "baselines", "b0", None, "b0_recall_mean", note="all context-0 nodes")]
     return rows
 
@@ -451,8 +431,31 @@ def _block(title: str, columns: Sequence[str], rows: Iterable[Mapping[str, Any]]
     return head + ([text, ""] if text else []) + _table(columns, rows)
 
 
-_H_COLS: tuple[str, ...] = ("variant", "reading_scope", "metric", "is_primary", "observed", "threshold", "comparator",
+_H_COLS: tuple[str, ...] = ("variant", "reading_scope", "metric", "is_primary", "observed", "observed_12",
+                            "threshold", "comparator",
                             VERDICT_COLUMN, "chance_all", "chance_pos", "n_trials", "n_key_paths", "note")
+
+
+def _coverage(rows: Sequence[Mapping[str, str]], table: str) -> str:
+    """The coverage a primary verdict rests on (ATK-EV-20): H4 "(k of n attack trials)" with labelled key nodes,
+    H5 "(n keyed S06 trial(s))"; empty for the other tables."""
+    if table == "H4":
+        r = next(x for x in rows if x["table"] == "H4" and x["metric"] == "labelled_recall_trials"
+                 and x["reading_scope"] == SCOPE_ALL)
+        return f"({r['observed']} of {r['n_trials']} attack trials)"
+    if table == "H5":
+        r = next(x for x in rows if x["table"] == "H5" and x["is_primary"] == "1")
+        n = int(r["n_trials"] or 0)
+        return f"({n} keyed S06 trial{'' if n == 1 else 's'})"
+    return ""
+
+
+def _md_h_rows(rows: Sequence[Mapping[str, str]], table: str) -> list[dict[str, str]]:
+    """The rows of one hypothesis table with the results.md verdict cell (``dev_check_cell``)."""
+    cov = _coverage(rows, table)
+    return [dict(r, **{VERDICT_COLUMN: dev_check_cell(r[VERDICT_COLUMN], r["equals_chance_pos"],
+                                                     cov if r["is_primary"] == "1" else "")})
+            for r in rows if r["table"] == table]
 
 
 def _per_key_rows(results: Sequence[TrialRank]) -> list[dict[str, str]]:
@@ -508,7 +511,8 @@ def _baseline_md(rows: Sequence[Mapping[str, str]]) -> list[dict[str, str]]:
                     f"{t['chance_all']} / {t['chance_pos']}", "per-key MRR": k["observed"],
                     "chance per-key (all / >0)": f"{k['chance_all']} / {k['chance_pos']}",
                     "per-trial MRR": m["observed"], "chance MRR (all / >0)": f"{m['chance_all']} / {m['chance_pos']}",
-                    "labelled recall": "", "all-node recall": ""})
+                    "labelled recall": by[(v, "full_recall_labelled_mean")]["observed"] if v == "full" else "",
+                    "all-node recall": by[(v, "full_recall_mean")]["observed"] if v == "full" else ""})
     lab, alln = by[("b0", "b0_recall_labelled_mean")], by[("b0", "b0_recall_mean")]
     out.append({"variant": "b0", "top1_expected": na, "chance top-1 (all / >0)": na, "per-key MRR": na,
                 "chance per-key (all / >0)": na, "per-trial MRR": na, "chance MRR (all / >0)": na,
@@ -527,9 +531,11 @@ def results_md(results: Sequence[TrialRank], rows: Sequence[Mapping[str, str]], 
              "to 12 decimals (RS-09; `observed_12` in results.csv); match reading = node (EV-06); ties by expected "
              "rank (065). The values come from the ranking check recomputed in memory; the committed rank.csv and "
              "rank_totals.csv were checked equal byte for byte (RS-02). Contested rows (070 item 4) are secondary "
-             "and carry no verdict."]
+             "and carry no verdict. `equals_chance_pos` = 1 (results.csv) and \"not above chance over scored paths\" "
+             "after a verdict mean observed ≤ the chance line over the candidates with score > 0, compared at 12 "
+             "decimals (ATK-EV-19)."]
     for h in ("H1", "H2", "H3", "H4", "H5"):
-        lines += _block(f"{h} — {_HYP[h]}", _H_COLS, [r for r in rows if r["table"] == h])
+        lines += _block(f"{h} — {_HYP[h]}", _H_COLS, _md_h_rows(rows, h))
     base = [r for r in rows if r["table"] == "baselines"]
     lines += _block("Baselines side by side (full, b1, b2, b0; all attack trials, node reading)",
                     ("variant", "top1_expected", "chance top-1 (all / >0)", "per-key MRR", "chance per-key (all / >0)",
@@ -561,15 +567,16 @@ def results_md(results: Sequence[TrialRank], rows: Sequence[Mapping[str, str]], 
 
 
 def results_files(results: Sequence[TrialRank], split: str = SPLIT_DEVELOPMENT) -> dict[str, str]:
-    """results.md and results.csv texts; EvalError when results.md would carry a forbidden phrase (RS-10) or the
+    """results.md and results.csv texts; EvalError when either would carry a forbidden phrase (RS-10) or the
     split is not development (RS-01: test results need the key lock and an owner-approved test allowlist)."""
     if split != SPLIT_DEVELOPMENT:
         raise EvalError("refused: results tables on test trials need the T5.7 key lock and an owner-approved test "
                         "allowlist (PLAN 10.4)")
     rows = result_rows(results, split)
-    md = results_md(results, rows, split)
-    hits = forbidden_hits(md)
-    if hits:
-        raise EvalError(f"refused: results.md would contain forbidden wording: {', '.join(hits)}")
-    return {RESULTS_MD: md, RESULTS_CSV: csv_text(RESULTS_COLUMNS, rows)}
+    files = {RESULTS_MD: results_md(results, rows, split), RESULTS_CSV: csv_text(RESULTS_COLUMNS, rows)}
+    for name, text in files.items():                           # RS-10, ATK-EV-23: both files are scanned
+        hits = forbidden_hits(text)
+        if hits:
+            raise EvalError(f"refused: {name} would contain forbidden wording: {', '.join(hits)}")
+    return files
 

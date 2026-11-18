@@ -21,7 +21,8 @@ __all__ = ["TOOL_VERSION", "EVAL_OUT_REL", "STITCH_OUT_REL", "LABEL_OUT_REL", "S
            "METHODS", "METHOD_PORT", "METHOD_4648", "METHOD_CMD", "METHOD_TARGET_ONLY", "PROTOCOL_GROUPS",
            "PROTOCOL_GROUP_ORDER", "TIER_ORDER", "DEVELOPMENT_TRIALS", "KEYED_DEVELOPMENT_TRIALS",
            "FROZEN_SCORE_PARAMETERS", "FROZEN_ORDER_TABLE_SHA256", "FROZEN_PARAM_TOLERANCE", "H1_TOP1_MIN",
-           "H2_MRR_PER_KEY_MIN", "H3_MIN_DIFFERENCE", "H4_MIN_DIFFERENCE", "H5_MIN_MARGIN", "VERDICT_DECIMALS"]
+           "H2_MRR_PER_KEY_MIN", "H3_MIN_DIFFERENCE", "H4_MIN_DIFFERENCE", "H5_MIN_MARGIN", "VERDICT_DECIMALS",
+           "S06_TRIAL_PREFIX", "is_s06"]
 
 TOOL_VERSION = "evaluate 0.1.0"
 
@@ -113,3 +114,13 @@ H3_MIN_DIFFERENCE = 0.0         # 065 H3 strict: per-key MRR(full) - per-key MRR
 H4_MIN_DIFFERENCE = 0.0         # 065 H4 / 070 item 1 / 071: mean labelled recall full - b0 > 0, strict
 H5_MIN_MARGIN = 0.0             # 065 H5: lowest key attack score - highest S06 score > 0 in every keyed S06 trial
 VERDICT_DECIMALS = 12           # RS-09 (ATK-EV-02): verdicts compare fsum values rounded to 12 decimals, as SC-41
+
+# ATK-EV-15: the benign scenario S06 (decision 024, no attack) is named by its scenario id, never inferred from a key
+# that happens to name no attack path; ``rank_run`` refuses a key that disagrees with its scenario.
+S06_TRIAL_PREFIX = "s06_"
+
+
+def is_s06(trial: str) -> bool:
+    """True for a trial of scenario S06 (trial id prefix ``s06_``). WHY by id: H5 is decided per S06 trial, and a
+    keyed attack trial whose key lost its attack paths must not silently become an S06 trial (ATK-EV-15)."""
+    return trial.startswith(S06_TRIAL_PREFIX)

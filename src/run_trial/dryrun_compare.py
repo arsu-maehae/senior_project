@@ -20,6 +20,7 @@ import csv
 import hashlib
 import io
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -27,7 +28,7 @@ from typing import Any, Callable, Sequence
 __all__ = ["NormRule", "NORMALISED", "PLACEHOLDER", "RUN_INFO", "FileResult", "Replaced", "Reader", "Lister",
            "folder_rel", "rules_for", "normalise_json", "normalise_table", "first_diff", "csv_diff_columns",
            "Comparer", "disk_comparer", "IDENTICAL", "EQUAL_NORMALISED", "EOL_ONLY", "DIFFERS", "MISSING", "NEW",
-           "PASSING", "COMMITTED", "SCRATCH"]
+           "PASSING", "ALLOWED_NEW", "is_match", "ISO_UTC", "is_iso_utc", "COMMITTED", "SCRATCH"]
 
 PLACEHOLDER = "<normalised>"
 RUN_INFO = "run_info.json"
@@ -38,9 +39,19 @@ EOL_ONLY = "differs (line endings only)"
 DIFFERS = "differs"
 MISSING = "differs (missing in scratch)"
 NEW = "new"
-# Statuses that count as a match for the final verdict (NEW is reported, not a mismatch: DR-06).
-PASSING = frozenset({IDENTICAL, EQUAL_NORMALISED, NEW})
-_PAIR_OK = frozenset({IDENTICAL, EQUAL_NORMALISED})
+# Statuses that count as a match for the final verdict. NEW is a mismatch (ATK-EV-17) unless the (folder, name) is
+# in ALLOWED_NEW: a file the committed out/ lacks means the committed copy is incomplete or the chain writes more
+# than it documents. Empty: results.md / results.csv are committed now and compare normally.
+PASSING = frozenset({IDENTICAL, EQUAL_NORMALISED})
+ALLOWED_NEW: frozenset[tuple[str, str]] = frozenset()
+_PAIR_OK = PASSING
+# ATK-EV-24: a timestamp value is normalised only if both runs wrote an ISO-8601 UTC instant there.
+ISO_UTC = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z")
+
+
+def is_iso_utc(value: Any) -> bool:
+    """True iff ``value`` is a string holding exactly one ISO-8601 UTC instant (``...T..:..:..[.fff]Z``). Pure."""
+    return isinstance(value, str) and ISO_UTC.fullmatch(value) is not None
 
 
 @dataclass(frozen=True)
@@ -101,6 +112,11 @@ class FileResult:
 # (side, repo-relative POSIX path) -> bytes or None; (side, folder) -> file names in it.
 Reader = Callable[[str, str], "bytes | None"]
 Lister = Callable[[str, str], "set[str]"]
+
+
+def is_match(r: "FileResult", allowed_new: frozenset[tuple[str, str]] = ALLOWED_NEW) -> bool:
+    """The final verdict for one file: identical or equal after normalising; NEW only if explicitly allowed. Pure."""
+    return r.status in PASSING or (r.status == NEW and (r.folder, r.name) in allowed_new)
 
 
 def folder_rel(kind: str, trial: str) -> str:
@@ -294,8 +310,9 @@ class Comparer:
         if name.endswith(".json"):
             oa, ra = normalise_json(a, rules, trial)
             ob, rb = normalise_json(b, rules, trial)
-            equal = oa == ob
+            # ATK-EV-24: compare the serialised objects, so 1, 1.0 and true stay different (== would equate them).
             ta, tb = json.dumps(oa, indent=1, sort_keys=True), json.dumps(ob, indent=1, sort_keys=True)
+            equal = ta == tb
         else:
             is_csv = name.endswith(".csv")
             ta, ra, pa = normalise_table(a, rules, is_csv)
@@ -308,7 +325,9 @@ class Comparer:
             return res
         for side, reps in ((COMMITTED, ra), (SCRATCH, rb)):
             for x in reps:
-                if x.rule.target:
+                if not x.rule.target and not is_iso_utc(x.value):
+                    problems.append(f"{side} {x.rule.label}={str(x.value)[:40]!r} is not an ISO-8601 UTC instant")
+                elif x.rule.target:
                     problems += self._proof(side, x)
         if problems:
             res.status = DIFFERS

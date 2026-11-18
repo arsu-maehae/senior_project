@@ -83,8 +83,16 @@ def _presence_record(text: str, repo_abs: Path) -> StepRecord:
 
 
 def run_trial(trial: str, repo_abs: Path, repo_display: str, run_fn: RunFn = run_step) -> tuple[dict[str, Any], int]:
-    """RT-02..RT-04 for one trial already accepted by RT-01: presence check, the steps, the log. Returns
-    (run_log object, exit code) and writes ``<R>/out/run_trial/<t>/run_log.json``."""
+    """RT-01..RT-04 for one trial: allowlist, presence check, the steps, the log. Returns (run_log object, exit
+    code) and writes ``<R>/out/run_trial/<t>/run_log.json``.
+
+    WHY the allowlist again here (ATK-EV-25): ``main`` checks it first, but this function is importable; a caller
+    that skips ``main`` must still never reach gate with a test trial. A refused id returns ({}, 2) and creates
+    nothing."""
+    refused = allowlist_refusal(trial)
+    if refused:
+        print(refused, file=sys.stderr)
+        return {}, p.EXIT_REFUSED
     steps = trial_steps(trial, repo_abs)
     refusal = presence_refusal(trial, presence_facts(repo_abs, trial))
     if refusal:

@@ -23,14 +23,15 @@ from . import rank_metrics as rm
 from .rank_run import B0Result, KeyPathResult, ReadingResult, TrialRank
 from .rank_sweep import LAMBDA_GRID, SweepPoint, changed_keys, informativeness, stable_region
 from .writers import csv_text, md_header
-from .params import SPLIT_DEVELOPMENT
+from .params import H5_MIN_MARGIN, SPLIT_DEVELOPMENT, VERDICT_DECIMALS, is_s06
 
 __all__ = ["RANK_FILE", "RANK_MD", "RANK_TOTALS", "RANK_SWEEP", "RANK_SUMMARY_FILES", "DEV_NOTE", "RANK_COLUMNS",
            "TOTAL_COLUMNS", "SWEEP_COLUMNS", "RECALL_BASIS_ALL", "RECALL_BASIS_LABELLED", "KIND_RANKING", "KIND_B0",
            "KIND_RANKING_CONTESTED", "KIND_B0_CONTESTED", "SCOPE_ALL", "SCOPE_CONTESTED", "PRIMARY_RANKING",
            "PRIMARY_B0", "PATH_VARIANT_ORDER", "PAIRED_SET", "B0_SET", "CHANCE_NA_RECALL", "CHANCE_NA_MARGIN", "f6",
            "trial_rows", "trial_csv", "attack_readings", "contested_ids", "b0_contested_ids", "uncontested_rows",
-           "ranking_values", "b0_values", "b0_of", "contested_plan", "s06_facts", "total_rows", "sweep_rows",
+           "ranking_values", "b0_values", "b0_of", "contested_plan", "r12", "f12", "at_least", "strictly_greater",
+           "h5_facts", "s06_facts", "total_rows", "sweep_rows",
            "informative_sentence", "rank_md", "summary_files"]
 
 RANK_FILE = "rank.csv"
@@ -85,7 +86,9 @@ TOTAL_COLUMNS: tuple[str, ...] = (
     "trials_full_above_b0", "trials_full_above_b0_labelled",
     # spec 06 section 3.1 (EV-02..05, EV-08): appended so every earlier column keeps its place
     "reading_scope", "contested_set", "primary_metric", "scope_trial_ids", "chance_per_key_mrr",
-    "chance_pos_per_key_mrr", "labelled_recall_trials")
+    "chance_pos_per_key_mrr", "labelled_recall_trials",
+    # ATK-EV-16: why the S06 margin is undefined (empty when defined)
+    "s06_reason")
 SWEEP_COLUMNS: tuple[str, ...] = (
     "status_note", "point_kind", "lambda_label", "lambda", "w1", "w2", "w3", "top1_expected", "mrr_expected",
     "s06_max_score", "key_attack_score_min", "s06_margin", "s06_held", "same_ranks_as_default",
@@ -223,6 +226,29 @@ def trial_csv(t: TrialRank) -> str:
     return csv_text(RANK_COLUMNS, trial_rows(t))
 
 
+# ---------------------------------------------------------------- exact comparisons (RS-09)
+
+def r12(value: float) -> float:
+    """``value`` rounded to the verdict precision (12 decimals, RS-09 / SC-41)."""
+    return round(value, VERDICT_DECIMALS)
+
+
+def f12(value: float | None) -> str:
+    """The compared value as text (``observed_12``); empty for None."""
+    return "" if value is None else f"{r12(value):.{VERDICT_DECIMALS}f}"
+
+
+def at_least(value: float, threshold: float) -> bool:
+    """value >= threshold, both at 12 decimals (H1, H2: 0.80 exactly is held, 0.849999 is not)."""
+    return r12(value) >= r12(threshold)
+
+
+def strictly_greater(a: float, b: float) -> bool:
+    """a > b, both at 12 decimals (H3, H4, H5 and the per-trial counts: equal at 12 decimals is not greater,
+    ATK-EV-02, ATK-EV-22)."""
+    return r12(a) > r12(b)
+
+
 # ---------------------------------------------------------------- totals
 
 def _mean(values: Sequence[float]) -> float | None:
@@ -304,7 +330,7 @@ def ranking_values(rrs: Sequence[ReadingResult]) -> dict[str, float | int | None
         "chance_per_key_mrr": _mean([rm.chance_line(rr.n, len(kr.placement.matched))["rr"] for rr, kr in kps]),
         "chance_pos_per_key_mrr": _mean([_chance_pos(kr.placement, rr.positive)["rr"] for rr, kr in kps]),
         "score_gap_min": min(gaps) if gaps else None,
-        "trials_gap_positive": sum(1 for g in gaps if g > 0),
+        "trials_gap_positive": sum(1 for g in gaps if strictly_greater(g, 0.0)),         # ATK-EV-22
     }
 
 
@@ -318,27 +344,67 @@ def b0_values(b0s: Sequence[B0Result]) -> dict[str, float | int | None]:
         "b0_recall_mean": _mean([b.b0_recall for b in b0s]),
         "full_recall_labelled_mean": _mean([float(b.full_recall_labelled or 0.0) for b in lab]),
         "b0_recall_labelled_mean": _mean([float(b.b0_recall_labelled or 0.0) for b in lab]),
-        "trials_full_above_b0": sum(1 for b in b0s if b.full_recall > b.b0_recall),
-        "trials_full_above_b0_labelled": sum(1 for b in lab
-                                             if float(b.full_recall_labelled or 0.0)
-                                             > float(b.b0_recall_labelled or 0.0)),
+        "trials_full_above_b0": sum(1 for b in b0s if strictly_greater(b.full_recall, b.b0_recall)),  # ATK-EV-22
+        "trials_full_above_b0_labelled": sum(1 for b in lab                     # ATK-EV-22: at 12 decimals
+                                             if strictly_greater(float(b.full_recall_labelled or 0.0),
+                                                                 float(b.b0_recall_labelled or 0.0))),
     }
 
 
-def s06_facts(results: Sequence[TrialRank], variant: str, reading: str) -> dict[str, Any]:
-    """S06 check (065 H5 reading, development): highest score of every keyed trial without key attack paths vs the
-    lowest key attack first-match score over the keyed attack trials; held iff the margin is > 0. Also the share of
-    attack trials whose own lowest key attack score lies above the S06 maximum (handoff 14.2 "distribution")."""
-    s06 = [t for t in results if t.keyed and not t.attack]
-    s06_max = max((c.score for t in s06 for c in t.candidates[variant]), default=None)
-    rrs = _readings(results, variant, reading)
-    lows = [rr.low for rr in rrs if rr.low is not None]
-    low = min(lows) if lows else None
-    margin = None if low is None or s06_max is None else low - s06_max
-    above = (sum(1 for rr in rrs if rr.low is not None and rr.low > s06_max) / len(rrs)
+def h5_facts(results: Sequence[TrialRank], variant: str = "full", reading: str = rm.READING_NODE) -> dict[str, Any]:
+    """The one S06 check (065 H5; spec 06 RS-05; ATK-EV-04, -15, -16, -21), used by rank_totals.csv / rank.md and by
+    the results tables alike.
+
+    - S06 trials are named by scenario id (``params.is_s06``): keyed ones decide, unkeyed ones are reported beside
+      with the margin they would give.
+    - ``low`` = the lowest first-match score of the key attack paths over the attack trials. If any key attack path
+      has no matching candidate it is **undefined** (never computed over the rest).
+    - Per S06 trial: its highest score and margin = low - that score. ``margin`` = the minimum over the keyed S06
+      trials (= low - the highest keyed S06 score); ``held`` = every keyed margin > 0 at 12 decimals.
+    - When undefined, ``margin`` and ``held`` are None and ``reason`` says why, one distinct text per case.
+    """
+    attack = attack_readings(results, variant, reading)
+    unmatched = [f"{tid}:{kr.key_path.path_id}" for tid, rr in attack for kr in rr.key_paths
+                 if kr.placement.first_score is None]
+    scores = [kr.placement.first_score for _tid, rr in attack for kr in rr.key_paths
+              if kr.placement.first_score is not None]
+    low = None if unmatched or not scores else min(scores)
+
+    def per_trial(t: TrialRank) -> dict[str, Any]:
+        top = max((c.score for c in t.candidates[variant]), default=None)
+        return {"trial_id": t.trial_id, "max": top, "margin": None if low is None or top is None else low - top}
+
+    keyed = [per_trial(t) for t in results if t.keyed and is_s06(t.trial_id)]
+    unkeyed = [per_trial(t) for t in results if not t.keyed and is_s06(t.trial_id)]
+    tops = [k["max"] for k in keyed if k["max"] is not None]
+    empty = [k["trial_id"] for k in keyed if k["max"] is None]
+    if not keyed:
+        reason = "no keyed S06 trial"
+    elif unmatched:
+        reason = ("unmatched key attack path (" + ";".join(unmatched)
+                  + "): no matching candidate, so the lowest key attack score is undefined")
+    elif low is None:
+        reason = "no key attack scores"
+    elif empty:
+        reason = "a keyed S06 trial has no candidate path (" + ";".join(empty) + ")"
+    else:
+        reason = ""
+    margins = [k["margin"] for k in keyed]
+    margin = None if reason else min(margins)
+    held = None if margin is None else all(strictly_greater(m, H5_MIN_MARGIN) for m in margins)
+    s06_max = max(tops) if tops else None
+    rrs = [rr for _t, rr in attack]
+    above = (sum(1 for rr in rrs if rr.low is not None and strictly_greater(rr.low, s06_max)) / len(rrs)
              if rrs and s06_max is not None else None)
-    return {"s06_trials": len(s06), "s06_max": s06_max, "low": low, "margin": margin,
-            "held": None if margin is None else margin > 0, "share_above": above}
+    return {"low": low, "unmatched": unmatched, "keyed": keyed, "unkeyed": unkeyed, "s06_max": s06_max,
+            "margin": margin, "held": held, "reason": reason, "share_above": above}
+
+
+def s06_facts(results: Sequence[TrialRank], variant: str, reading: str) -> dict[str, Any]:
+    """The S06 columns of a totals row, read from ``h5_facts`` (one function for both outputs, ATK-EV-16)."""
+    h = h5_facts(results, variant, reading)
+    return {"s06_trials": len(h["keyed"]), "s06_max": h["s06_max"], "low": h["low"], "margin": h["margin"],
+            "held": h["held"], "share_above": h["share_above"], "reason": h["reason"]}
 
 
 def _count(value: float | int | None) -> str:
@@ -370,7 +436,7 @@ def _ranking_row(split: str, kind: str, variant: str, reading: str, scope: str, 
         row.update(s06_trials=str(s6["s06_trials"]), s06_max_score=f6(s6["s06_max"]),
                    key_attack_score_min=f6(s6["low"]), s06_margin=f6(s6["margin"]),
                    s06_held="" if s6["held"] is None else str(int(s6["held"])),
-                   share_attack_trials_above_s06=f6(s6["share_above"]))
+                   share_attack_trials_above_s06=f6(s6["share_above"]), s06_reason=s6["reason"])
     return row
 
 
@@ -449,7 +515,7 @@ def sweep_rows(default: SweepPoint, points: Sequence[SweepPoint], split: str) ->
                     "lambda": f6(p.lam), "w1": _w(p.w[0]), "w2": _w(p.w[1]), "w3": _w(p.w[2]),
                     "top1_expected": f6(p.top1), "mrr_expected": f6(p.mrr), "s06_max_score": f6(p.s06_max),
                     "key_attack_score_min": f6(p.attack_min), "s06_margin": f6(margin),
-                    "s06_held": "" if margin is None else str(int(margin > 0)),
+                    "s06_held": "" if margin is None else str(int(strictly_greater(margin, 0.0))),
                     "same_ranks_as_default": "1" if not changed else "0", "n_key_paths_changed": str(len(changed)),
                     "changed_key_paths": ";".join(changed),
                     "key_path_ranks": ";".join(f"{t}:{k}={f6(r)}" for t, k, r in p.key_ranks)})
@@ -682,7 +748,7 @@ _BESIDE_COLS: tuple[str, ...] = (
     "mrr_pessimistic", "chance_mrr", "chance_pos_mrr", "mrr_rr_mean_expected", "chance_rr_mean",
     "chance_pos_rr_mean", "mrr_per_key_rr_mean", "score_gap_min", "trials_gap_positive")
 _S06_COLS: tuple[str, ...] = ("variant", "match_reading", "s06_trials", "s06_max_score", "key_attack_score_min",
-                              "s06_margin", "s06_held", "share_attack_trials_above_s06")
+                              "s06_margin", "s06_held", "share_attack_trials_above_s06", "s06_reason")
 _CONTESTED_COLS: tuple[str, ...] = (
     "variant", "match_reading", "contested_set", "attack_trials", "scope_trial_ids", "key_paths", "top1_expected",
     "chance_top1", "chance_pos_top1", "mrr_per_key_expected", "chance_per_key_mrr", "chance_pos_per_key_mrr",

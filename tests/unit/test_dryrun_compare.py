@@ -120,7 +120,7 @@ def test_missing_in_scratch_and_new_in_scratch_both_directions() -> None:
     res = {r.name: r for r in fk.comparer().compare_folder("gate", T1)}
     assert set(res) == {"triggers.csv", "extra.csv", "same.csv"}
     assert res["triggers.csv"].status == dc.MISSING and res["triggers.csv"].status not in dc.PASSING
-    assert res["extra.csv"].status == dc.NEW                            # reported, not a mismatch (DR-06)
+    assert res["extra.csv"].status == dc.NEW and res["extra.csv"].status not in dc.PASSING   # a mismatch (075)
     assert res["same.csv"].status == dc.IDENTICAL
     assert dc.MISSING != dc.NEW != dc.DIFFERS
 
@@ -398,10 +398,14 @@ def test_named_list_is_explicit_and_contains_exactly_the_074_values() -> None:
 
 # ------------------------------------------------------------------------------------------------ report verdict
 
-def test_report_verdict_new_passes_missing_and_differs_fail() -> None:
+def test_report_verdict_new_is_a_failure_unless_allowed_and_missing_and_differs_fail() -> None:
+    """ATK-EV-17 (decision 075): a file only in scratch is `new` and fails the verdict; ALLOWED_NEW is empty."""
     mk = lambda status, name="f.csv": dc.FileResult("stitch", f"out/stitch/{T1}", name, status)   # noqa: E731
+    assert dc.ALLOWED_NEW == frozenset() and dc.NEW not in dc.PASSING
+    lines, ok = dryrun._report([mk(dc.IDENTICAL), mk(dc.EQUAL_NORMALISED, "g.json")])
+    assert ok
     lines, ok = dryrun._report([mk(dc.IDENTICAL), mk(dc.EQUAL_NORMALISED, "g.json"), mk(dc.NEW, "results.md")])
-    assert ok and any("results.md" in x and "new" in x for x in lines)                       # reported (DR-06)
+    assert not ok and any("results.md" in x and "new" in x for x in lines)                   # still reported (DR-06)
     for bad in (dc.DIFFERS, dc.MISSING, dc.EOL_ONLY):
         _, ok2 = dryrun._report([mk(dc.IDENTICAL), mk(bad)])
         assert not ok2, bad

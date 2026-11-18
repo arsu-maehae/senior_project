@@ -10,13 +10,14 @@ Pure functions take the facts as arguments; ``presence_facts`` and ``window_tria
 from __future__ import annotations
 
 import csv
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
 from . import params as p
 
-__all__ = ["allowlist_refusal", "repo_refusal", "PresenceFacts", "presence_facts", "window_trial_ids",
+__all__ = ["allowlist_refusal", "is_under", "repo_refusal", "PresenceFacts", "presence_facts", "window_trial_ids",
            "presence_problems", "create_commands", "presence_refusal"]
 
 
@@ -30,14 +31,32 @@ def allowlist_refusal(trial: str, allowed: Sequence[str] = p.DEVELOPMENT_TRIALS)
             f"no file of it was opened and no stage was started")
 
 
-def repo_refusal(repo: Path) -> str | None:
-    """RT-08: ``--repo`` must be an existing directory holding ``data/`` and ``out/``; refusal text or None."""
+def is_under(path: Path | str, root: Path | str) -> bool:
+    """True iff ``path`` equals or lies under ``root`` after ``os.path.realpath`` (links and junctions resolved;
+    case-insensitive on Windows via ``normcase``)."""
+    a = os.path.normcase(os.path.realpath(path))
+    b = os.path.normcase(os.path.realpath(root))
+    return a == b or a.startswith(b.rstrip("\\/") + os.sep)
+
+
+def repo_refusal(repo: Path, real_repo: Path = p.REPO) -> str | None:
+    """RT-08: ``--repo`` must be an existing directory holding ``data/`` and ``out/``; refusal text or None.
+
+    ATK-EV-25: a ``--repo`` other than the real repository is refused when the realpath of its ``out/`` or
+    ``data/`` lies inside the real repository (a folder below it, or a link / junction into it), because the stages
+    would then write the committed ``out/`` or read the real ``data/`` while the caller believes it is isolated."""
     r = Path(repo)
     if not r.is_dir():
         return f"refused: --repo {r.as_posix()} is not an existing directory (RT-08)"
     missing = [d for d in ("data", "out") if not (r / d).is_dir()]
     if missing:
         return f"refused: --repo {r.as_posix()} has no {' and no '.join(m + '/' for m in missing)} folder (RT-08)"
+    if is_under(r, real_repo) and is_under(real_repo, r):
+        return None                                # the real repository itself
+    inside = [d for d in ("out", "data") if is_under(r / d, real_repo)]
+    if inside:
+        return (f"refused: --repo {r.as_posix()} is not the real repository, but its "
+                f"{' and '.join(d + '/' for d in inside)} resolves inside it (RT-08, ATK-EV-25)")
     return None
 
 

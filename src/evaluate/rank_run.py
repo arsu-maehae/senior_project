@@ -18,13 +18,15 @@ from typing import Any, Mapping, Sequence
 from . import rank_metrics as rm
 from .inputs import EvalError, KeyData, StitchData, load_key, load_stitch
 from .keys import split_list
+from .params import is_s06
 from .rank_inputs import (PATH_VARIANTS, ScoreData, check_key_against_stitch, check_key_present,
                           check_score_against_label, check_score_against_stitch, check_score_pins, default_label_dir,
                           default_params, default_score_dir, label_file_hashes, load_score, recorded_label_files)
 from .rank_sweep import SweepPoint, SweepTrial, components_of, run_sweep
 from .run import default_stitch_dir
 
-__all__ = ["KeyPathResult", "ReadingResult", "B0Result", "TrialRank", "b0_unit_uids", "labelled_key_nodes",
+__all__ = ["KeyPathResult", "ReadingResult", "B0Result", "TrialRank", "check_key_scenario", "b0_unit_uids",
+           "labelled_key_nodes",
            "positive_b0_units", "canonical_b0_rows", "rank_from_inputs", "rank_trial", "sweep_of"]
 
 
@@ -188,10 +190,21 @@ def canonical_b0_rows(rows: Sequence[Mapping[str, str]], alias: Mapping[str, str
     return [dict(r, event_uids=";".join(sorted(rm.canonical(split_list(r["event_uids"]), alias)))) for r in rows]
 
 
+def check_key_scenario(trial: str, n_attack_paths: int) -> None:
+    """ATK-EV-15: a keyed S06 trial must name no key attack path, and every other keyed trial at least one. WHY: H5
+    and the attack-trial metrics are split by scenario id; a key that disagrees (an attack key that lost its paths, or
+    an S06 key naming one) would move a trial between H1-H4 and H5 without anyone noticing."""
+    if is_s06(trial) and n_attack_paths:
+        raise EvalError(f"refused: approved key of {trial} (scenario S06, no attack) names {n_attack_paths} key "
+                        "attack path(s)")
+    if not is_s06(trial) and not n_attack_paths:
+        raise EvalError(f"refused: approved key of {trial} names no key attack path; only S06 keys may name none")
+
+
 def rank_from_inputs(trial: str, split: str, stitch: StitchData, score: ScoreData, key: KeyData | None,
                      inputs: Mapping[str, str] | None = None) -> TrialRank:
-    """The TrialRank of already-checked inputs. Pure. A keyed trial without attack paths (S06) gets no reading rows;
-    its scores feed the S06 check. An unkeyed trial gets the distribution only (no right / wrong)."""
+    """The TrialRank of already-checked inputs. Pure. A keyed S06 trial (no key attack path, ATK-EV-15) gets no
+    reading rows; its scores feed the S06 check. An unkeyed trial gets the distribution only (no right / wrong)."""
     cands = {v: tuple(rm.candidates_of(score.ranked, v)) for v in PATH_VARIANTS}
     dists = {v: rm.distribution(cands[v]) for v in PATH_VARIANTS}
     params = default_params(score)
@@ -201,6 +214,7 @@ def rank_from_inputs(trial: str, split: str, stitch: StitchData, score: ScoreDat
     alias = rm.copy_alias_map(stitch.hops)                  # ATK-SC-16: ST-05 copies resolved on every side
     nodes = rm.path_node_sets(stitch.path_nodes, alias)
     key_paths = rm.build_key_paths(key.data, stitch.hops)
+    check_key_scenario(trial, len(key_paths))                 # ATK-EV-15, before anything is assembled
     readings = tuple(_reading(v, r, cands[v], key_paths, nodes) for v in PATH_VARIANTS for r in rm.READINGS
                      if key_paths)
     b0 = None
