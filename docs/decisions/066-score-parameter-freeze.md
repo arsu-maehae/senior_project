@@ -1,6 +1,6 @@
 # 066 — Score parameters: a-priori values, stability check on development data, freeze before the test keys unlock
 
-**Date:** 2026-11-18 · **Status:** accepted (owner, 2026-11-18) — **frozen at commit `6338884`** (freeze section
+**Date:** 2026-11-18 · **Status:** accepted (owner, 2026-11-18) — **frozen at commit `6338884`**; rows "H readings (primary)" and "Readings reported beside" **superseded by [070](070-score-freeze-amendment-readings.md)** (owner, 2026-11-18) (freeze section
 below) · **Task:** T9.5 · **Relates to:** spec [05_score](../specs/05_score.md) §5, §5.2, SC-42, Q11;
 [065](065-score-baselines-and-success-criteria.md); handoff §12.4 (l. 977), Correction G.7; [019](019-dev-test-split.md);
 review ATK-SC-12

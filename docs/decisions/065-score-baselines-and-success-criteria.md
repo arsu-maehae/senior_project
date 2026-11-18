@@ -1,6 +1,6 @@
 # 065 — Baselines (b0, b1, b2, chance line) and success criteria H1–H5, written before any test trial is scored
 
-**Date:** 2026-11-18 · **Status:** accepted (owner, 2026-11-18); numbers frozen with the commit hash in
+**Date:** 2026-11-18 · **Status:** accepted (owner, 2026-11-18); **H2 and H4 readings and the chance-line wording superseded by [070](070-score-freeze-amendment-readings.md)**; numbers frozen with the commit hash in
 [066](066-score-parameter-freeze.md) · **Task:** T9.0 / T9.5 · **Relates to:** spec [05_score](../specs/05_score.md)
 §3.6, §7.3, Q12, Q13; handoff §14.2, §14.3; Correction J, K; [018](018-s04-both-tracks-exposed.md),
 [021](021-s04-track-a-source-session.md); [019](019-dev-test-split.md); review ATK-SC-01, ATK-SC-02

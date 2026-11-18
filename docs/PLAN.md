@@ -112,6 +112,7 @@ Never tune code or weights on the test set.
 - [ ] 10.4 `/eval-run` on the test set, once
 - [ ] 10.5 Weight sensitivity; results tables; fact-checked summary
 - [ ] 10.6 Ablation independent of the key's evidence: run the stitcher with the command-line source-session method disabled (ports and 4648 only) and score it against the same keys, so at least one result does not rest on the evidence the key uses (decision 020, spec 07 limits)
+- [ ] 10.7 Before the test run: implement the decision 070 readings in `evaluate --rank` (per-key MRR primary for H2/H3, labelled-node recall primary for H4, contested-trial secondary reading for full/b0/b1/b2, chance line over all and scored candidates in every results table); the development check currently labels the 065 readings as primary
 
 ## T11. Output, demo, report — depends on: T10
 - [ ] 11.1 HTML/CSV report per trial (ranked paths, identity per hop, evidence)

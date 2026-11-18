@@ -229,15 +229,20 @@ the top, counts as rank 1.5, reciprocal rank 1/1.5), top-1 credit 1/t when r = 1
 credit = the expected share of the group inside the first k places. Optimistic (r) and pessimistic (r + t − 1)
 readings are reported as sensitivity. `path_id` order is never used.
 
-**Chance line (review ATK-SC-02).** For every hypothesis T10 also reports the number of candidate paths per trial and
-the value a uniformly random order would get (expected top-1 = 1/n), so a held hypothesis can be read against chance.
+**Chance line (review ATK-SC-02; 070 item 5).** For every hypothesis T10 also reports the number of candidate paths per
+trial and the value a uniformly random order would get (expected top-1 = 1/n), over all candidates and over
+candidates with score > 0; **every T10 results table shows the chance line next to the observed values**.
 
-| ID | Hypothesis (proposed numbers, OPEN Q13) |
+**Contested reading (070 item 4, secondary).** For `full`, `b0`, `b1`, `b2`, every metric is also reported over
+contested attack trials only: trials where the variant has more than one candidate with score > 0 (for `b0`, labelled
+units). It never replaces the primary reading.
+
+| ID | Hypothesis (numbers owner 2026-11-18; H2/H4 readings amended by [070](../decisions/070-score-freeze-amendment-readings.md)) |
 |---|---|
 | H1 | `full`: top-1 rate (primary tie reading) ≥ 0.80 over attack test trials. |
-| H2 | `full`: MRR ≥ 0.85 over attack test trials (replaces "top k + 2", which is vacuous in trials with ≤ 3 paths). |
-| H3 | **IdentityCoherence adds ranking value** (identity term ablation, owner 2026-11-18: strict): MRR(`full`) **>** MRR(`b1`) over attack test trials. Top-1 rates and the difference are reported beside it. Equal MRR means H3 is not held; that is a valid, reportable result (Correction K item 1). |
-| H4 | `full` vs `b0`, **equal node budgets** (review ATK-SC-02): `b0` takes its highest-ranked units until it holds as many event nodes as `full`'s top-k paths; node recall against the key attack nodes is higher for `full`. |
+| H2 | `full`: **per-key MRR** (each key attack path's own expected reciprocal rank, averaged over key attack paths; 070) ≥ 0.85 over attack test trials; per-trial MRR (first match, handoff §14.2) reported beside it. Threshold not moved although development per-key MRR is 0.833 (070 item 3). |
+| H3 | **IdentityCoherence adds ranking value** (identity term ablation, owner 2026-11-18: strict): per-key MRR(`full`) **>** per-key MRR(`b1`) over attack test trials. Top-1 rates and the difference are reported beside it. Equal MRR means H3 is not held; that is a valid, reportable result (Correction K item 1). |
+| H4 | `full` vs `b0`, **equal node budgets** (review ATK-SC-02): `b0` takes its highest-ranked units until it holds as many event nodes as `full`'s top-k paths; node recall against the **labelled** key attack nodes (the b0-reachable set; 070) is higher for `full`; recall over all `context` = 0 key nodes reported beside it. |
 | H5 | S06 check, per trial: in each S06 test trial the highest benign path score under `full` is below the **lowest** key attack path score of the S01–S05, S07 test trials (primary); the share of attack trials whose key attack path scores above it is reported (handoff §14.2 "distribution"). |
 
 **Stated limits of H1–H3 (review ATK-SC-02, L-SC5).** Inside one protocol, attack and benign paths have equal
