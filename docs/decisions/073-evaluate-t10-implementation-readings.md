@@ -1,6 +1,6 @@
 # 073 — Implementation readings of spec 06 (070/071 readings in `evaluate --rank`, results tables)
 
-**Date:** 2026-11-18 · **Status:** accepted (stage lead; within approved spec 06 and records 070–072; for owner
+**Date:** 2026-11-18 · **Status:** accepted (stage lead; within approved spec 06 and records 070–072; item 4 accepted by the owner 2026-11-18; for owner
 review at the stage review) · **Task:** T10.B, T10.E · **Relates to:** spec [06_evaluate](../specs/06_evaluate.md)
 EV-01..08, RS-01..11; [071](071-h4-labelled-recall-denominator.md), [072](072-evaluate-t10-readings-and-runner.md)
 
@@ -15,7 +15,7 @@ a threshold or a primary reading. The development values are unchanged by these 
 | 1 | results.csv carries a `note` column not named in §3.3 | keep it | holds the H5 reason, the contested-set name and the "reported beside" labels; the row key is (table, variant, reading_scope, metric, **source**) because EV-04 paired and own-set rows share the first four |
 | 2 | spec 05 §7.3 "stated limits" end with a sentence that quotes the forbidden phrases, and RS-10 forbids them in results.md | leave that one sentence out of results.md; the wording block states the same rule without quoting the phrases | RS-08 and RS-10 both hold |
 | 3 | H3/H4 verdict form | a difference row, compared value r12(r12(a) − r12(b)) against `> 0` | RS-09 on one written value; both sides shown in their own rows |
-| 4 | a keyed S06 trial with no candidates | H5 **not held**, reason "no candidate paths (undefined)" | the conservative reading; a check that cannot be computed never counts as held |
+| 4 | a keyed S06 trial with no candidates | H5 **not held**, reason "no candidate paths (undefined)" | the conservative reading; a check that cannot be computed never counts as held (**owner accepted 2026-11-18**) |
 | 5 | the forbidden-word list in evaluate | a copy, pinned by a test to equal `score.report`'s list | evaluate must not import score (068) |
 | 6 | "distinct b0 units" (EV-03) | distinct canonical `event_uids` sets after the ST-05 copy merge | ATK-EV-14 |
 | 7 | sweep tables: the chance line over score > 0 | labelled "(default w)" | a weight change can move a score to 0 |

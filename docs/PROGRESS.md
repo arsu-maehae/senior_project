@@ -270,3 +270,4 @@ A summary block at the end of each big task. Newest at the bottom.
 - **Development verdicts (not results):** H1 held 0.900 — not above chance over scored paths; H2 not held 0.833 < 0.85; H3 not held (equal); H4 held 0.830 > 0.423 (5 of 5); H5 held +0.306 (1 keyed S06 trial; s06_t01 beside +0.298). Contested s04/s07: top-1 0.750, per-key MRR 0.667.
 - **Open for the owner:** 073 item 4 (S06 trial with no candidates = not held); before 10.4: T5.7 tag, test allowlist decision, `dev_check` → `verdict` for the test split; 10.2 rest (node P/R/F1/FNR, ROC-AUC), 10.5, 10.6 not started.
 - **Hand check:** docs/reviews/06_evaluate-samples-2026-11-18.md (up to 10 rows per output).
+2026-11-18 · T10 owner answer · 073 item 4 accepted (keyed S06 trial with no candidate paths = H5 not held); next: build the parts of 10.2, 10.5, 10.6 that need no test data · see commit · 073
