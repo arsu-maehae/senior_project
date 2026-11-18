@@ -105,14 +105,14 @@ Never tune code or weights on the test set.
 - [x] 9.6 *(done 2026-11-18: tests test_score_* / test_rank_* / test_rank_pins; stage review docs/reviews/05_score-2026-11-18.md (data-checker 7/7 MATCH, fact-checker no blocking, attacker ATK-SC-14..25; fix batch 069); fact-check of 062–069; hand-check docs/reviews/05_score-samples-2026-11-18.md)* Tests + stage review
 **Done when:** ranked output on every development trial; identity values match the keys. **T9 done 2026-11-18:** out/score on 9/9 development trials (53 paths, every path ranked per variant); identity 15/15 keyed hops; full suite REQUIRE_REAL_DATA=1: 5718 passed, 1 skipped, 1 xfailed.
 
-## T10. Evaluation — depends on: T9, T5.7 — spec: docs/specs/06_evaluate.md
-- [ ] 10.1 Baselines B0–B3 + Full
-- [ ] 10.2 Metrics per handoff §14.2 + processing time
-- [ ] 10.3 Dry run of the evaluation on the development set
+## T10. Evaluation — depends on: T9, T5.7 — spec: docs/specs/06_evaluate.md (development part approved by the owner 2026-11-18)
+- [ ] 10.1 Baselines B0–B3 + Full *(partly, 2026-11-18: full/b1/b2/b0 in the results tables on development data; the handoff's B1 "linked, no ranking" is replaced by the chance line (065))*
+- [ ] 10.2 Metrics per handoff §14.2 + processing time *(partly, 2026-11-18: top-1, MRR (per key and per trial), score gap, S06 check, H4 recall, chance lines; processing time per stage via `run_trial` run_log; node P/R/F1/FNR tables and pooled ROC-AUC not done)*
+- [ ] 10.3 Dry run of the evaluation on the development set *(partly, 2026-11-18: `python -m run_trial.dryrun` rebuilds the 9 development trials in a scratch repo and reproduces out/ (074, 075); results tables on development data labelled DEVELOPMENT (`evaluate --results --development`); left open until 10.2 is complete)*
 - [ ] 10.4 `/eval-run` on the test set, once
 - [ ] 10.5 Weight sensitivity; results tables; fact-checked summary
 - [ ] 10.6 Ablation independent of the key's evidence: run the stitcher with the command-line source-session method disabled (ports and 4648 only) and score it against the same keys, so at least one result does not rest on the evidence the key uses (decision 020, spec 07 limits)
-- [ ] 10.7 Before the test run: implement the decision 070 readings in `evaluate --rank` (per-key MRR primary for H2/H3, labelled-node recall primary for H4, contested-trial secondary reading for full/b0/b1/b2, chance line over all and scored candidates in every results table); the development check currently labels the 065 readings as primary
+- [x] 10.7 *(done 2026-11-18: per-key MRR primary, labelled-node recall primary with the 071 denominator, contested reading (072), per-key chance line, chance columns in every table, results tables with dev_check; records 071–075; review docs/reviews/06_evaluate-2026-11-18.md)* Before the test run: implement the decision 070 readings in `evaluate --rank` (per-key MRR primary for H2/H3, labelled-node recall primary for H4, contested-trial secondary reading for full/b0/b1/b2, chance line over all and scored candidates in every results table); the development check currently labels the 065 readings as primary
 
 ## T11. Output, demo, report — depends on: T10
 - [ ] 11.1 HTML/CSV report per trial (ranked paths, identity per hop, evidence)
