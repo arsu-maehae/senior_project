@@ -96,14 +96,14 @@ Never tune code or weights on the test set.
 
 **Done when:** on the 6 keyed development trials every key LSASS dump is labelled T1003.001 (LBA-02) and every key attack hop has a labelled `context` = 0 node (LBA-03); the labelling recall table is written for all 9 development trials (t01 without right/wrong); the stage review has no open blocking item. **T8 done 2026-11-17:** LBA-02 14/14 dumps, LBA-03 holds on every key attack hop, recall written for 9/9 trials, ATK-S01 fixed (061).
 
-## T9. Scoring and identity — depends on: T7, T8 — spec: docs/specs/05_score.md (draft 2026-11-18, awaiting owner answers)
-- [~] 9.1 Own tactic-order table (decision record: substitute for TPPR's tree)
-- [ ] 9.2 Edge order score, LengthScore, NodeScore
-- [ ] 9.3 IdentityCoherence (Correction K)
-- [ ] 9.4 Path score + ranking (no θ); ranked list per trial
-- [ ] 9.5 Weights and λ chosen on the development set only (decision record)
-- [ ] 9.6 Tests + stage review
-**Done when:** ranked output on every development trial; identity values match the keys.
+## T9. Scoring and identity — depends on: T7, T8 — spec: docs/specs/05_score.md (approved by the owner 2026-11-18)  (DONE 2026-11-18)
+- [x] 9.1 *(done 2026-11-18: src/score/order_table.json, templates R1–R5 from ATT&CK/CTI (R2 shortened, T1550.002 in no template, weak step T1078→T1003.001 and R5 stated), tactic-PT with consecutive repeats filtered (TPPR p. 5); decisions 062, 067; research docs/research/score_order_templates.md)* Own tactic-order table (decision record: substitute for TPPR's tree)
+- [x] 9.2 *(done 2026-11-18: technique sequence S1 per hop, hop_chain only across real chain edges, Eq. 2/3/5 (ScoreNI dropped, stated), Eq. 6/7 over technique transitions (stated); NodeScore over context-0 count_key units (context=1 out as a reading of Correction G, node_score_ctx1 reported); decisions 062, 063, 069)* Edge order score, LengthScore, NodeScore
+- [x] 9.3 *(done 2026-11-18: Correction K value from stitch facts, (b′) system-image exclusion, max over accounts, identity_status, clock low/high per account; closes spec 03 Q9; 15/15 keyed hops = identity_expected; decisions 064, 069)* IdentityCoherence (Correction K)
+- [x] 9.4 *(done 2026-11-18: `python -m score`, out/score/<t>/ 8 files on the 9 development trials, competition ranking with ties, variants full/b1/b2 and b0; decisions 065, 067)* Path score + ranking (no θ); ranked list per trial
+- [x] 9.5 *(done 2026-11-18: a-priori values λ = 1/ln 2, w = 1/3 each, α = β = 0.5, a = b = 1, ε = 0.01, **frozen at 6338884** with the order-table hash, H1–H5 numbers and readings (066); `evaluate --rank` / `--rank-sweep` development check (068); sweep never moves a value and is not informative on development data)* Weights and λ chosen on the development set only (decision record)
+- [x] 9.6 *(done 2026-11-18: tests test_score_* / test_rank_* / test_rank_pins; stage review docs/reviews/05_score-2026-11-18.md (data-checker 7/7 MATCH, fact-checker no blocking, attacker ATK-SC-14..25; fix batch 069); fact-check of 062–069; hand-check docs/reviews/05_score-samples-2026-11-18.md)* Tests + stage review
+**Done when:** ranked output on every development trial; identity values match the keys. **T9 done 2026-11-18:** out/score on 9/9 development trials (53 paths, every path ranked per variant); identity 15/15 keyed hops; full suite REQUIRE_REAL_DATA=1: 5718 passed, 1 skipped, 1 xfailed.
 
 ## T10. Evaluation — depends on: T9, T5.7 — spec: docs/specs/06_evaluate.md
 - [ ] 10.1 Baselines B0–B3 + Full
