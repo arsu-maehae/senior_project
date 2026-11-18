@@ -14,7 +14,7 @@ reading, ties by expected rank; DEVELOPMENT numbers, not results):
 
 | Change | Motivating development numbers |
 |---|---|
-| 1. H4 primary = labelled-node recall | all `context` = 0 nodes: `full` 0.877 vs `b0` 0.261 — won by construction, since b0 can hold only labelled events (ATK-SC-14); labelled nodes only: 0.214 vs 0.121 (per trial: s02 0.188 / 0.000, s03 0.250 / 0.238, s04 0.119 / 0.071, s05 0.265 / 0.147, s07 0.250 / 0.150) |
+| 1. H4 primary = labelled-node recall (**numbers corrected by [071](071-h4-labelled-recall-denominator.md)**: denominator = labelled key nodes, dev 0.830 vs 0.423) | all `context` = 0 nodes: `full` 0.877 vs `b0` 0.261 — won by construction, since b0 can hold only labelled events (ATK-SC-14); labelled nodes only: 0.214 vs 0.121 (per trial: s02 0.188 / 0.000, s03 0.250 / 0.238, s04 0.119 / 0.071, s05 0.265 / 0.147, s07 0.250 / 0.150) |
 | 2. MRR primary = per-key MRR | per-trial MRR 0.933 credits s07's first match only; per-key MRR 0.833 (key paths s02 1, s03 1, s04-B 0.667, s05 1, s07-x 0.667, s07-y 0.667) (ATK-SC-15) |
 | 3. Thresholds unchanged | per-key MRR 0.833 is below the MRR ≥ 0.85 threshold on development data; it is **not** moved |
 | 4. Contested-trial reading | only 2 of 5 attack trials (s04, s07) have more than one path with score > 0 under `full`/`b1`/`b2`; in the other 3 the key path is the only scored path, so the chance line over scored paths equals the observed values (0.900 / 0.933, 069) |

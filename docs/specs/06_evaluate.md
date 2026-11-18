@@ -1,7 +1,7 @@
 # Stage spec: 06_evaluate (T10, development-only part)
 
-**Owner:** <stage owner> · **Status:** draft (2026-11-18) — awaiting owner approval; data-checker and attacker review
-merged in §6 and §8 · **Last updated:** 2026-11-18
+**Owner:** <stage owner> · **Status:** **approved (owner, 2026-11-18)**: Q1–Q5 as proposed (record [072](../decisions/072-evaluate-t10-readings-and-runner.md)); Q6 option (a), denominator = labelled key nodes (freeze record [071](../decisions/071-h4-labelled-recall-denominator.md)); data-checker and attacker review
+merged in §6 and §8 ([review](../reviews/06_evaluate-spec-2026-11-18.md)) · **Last updated:** 2026-11-18
 
 **Scope of this draft.** Only the T10 parts that need no test data (owner, 2026-11-18): (A) PLAN 10.7, the
 [070](../decisions/070-score-freeze-amendment-readings.md) readings in `evaluate --rank`; (B) a one-command runner per
@@ -81,7 +81,7 @@ wording block of RS-08.
 | ID | Rule | Source |
 |---|---|---|
 | EV-01 | Primary MRR for H2 and H3 = **per-key MRR** (`mrr_per_key_expected`): each key attack path's own expected RR (065 tie rule), averaged over key attack paths. Per-trial MRR (first match, handoff §14.2) is reported beside. | 070 item 2 |
-| EV-02 | Primary H4 recall = **labelled** `context` = 0 key nodes at an equal labelled-node budget (`*_labelled`); all-node recall reported beside. The H4 comparison uses the mean over attack trials; `trials_full_above_b0_labelled` reported beside. **Denominator: OPEN Q6 (blocking, owner)** — the code divides by *all* key nodes (ATK-EV-01), 070's text says the labelled key nodes. | 070 item 1 |
+| EV-02 | Primary H4 recall = **labelled** `context` = 0 key nodes at an equal labelled-node budget (`*_labelled`); all-node recall reported beside. The H4 comparison uses the mean over attack trials; `trials_full_above_b0_labelled` reported beside. **Denominator (Q6 → 071):** the labelled key nodes = `context` = 0 key nodes (ST-05 copies merged) inside at least one `b0_ranked.csv` unit; a trial with none is undefined, reported and left out of the mean (the code divided by all key nodes, ATK-EV-01). | 070 item 1 |
 | EV-03 | **Contested trial** for variant v ∈ {full, b1, b2}: a keyed attack trial whose v-candidate set has > 1 candidate with written score > 0 (12 decimals; `rank_metrics.positive_ids`). For b0: > 1 distinct labelled unit with score > 0 in `b0_ranked.csv`, ST-05 copies merged first (ATK-EV-14). Every metric of that variant is recomputed over contested trials only and written beside the primary reading, never in its place. Zero contested trials → row written with `attack_trials = 0` and empty metrics. Trials left out are listed with the reason; a trial whose only positive candidate is a rival (key path at 0) is named "uncontested — key path not scored" so the failure stays visible (ATK-EV-05). | 070 item 4 |
 | EV-04 | b0 has no paths, so its contested reading covers the H4 recall only (labelled primary, all-node beside). **Paired comparisons** (H3 full vs b1, H4 full vs b0) under the contested reading use **full's** contested set for both sides; each variant's own contested set is reported beside (ATK-EV-06). Contested rows never carry a verdict. | OPEN Q1; ATK-EV-06 |
 | EV-05 | Every rank.md table that shows a ranking metric shows the chance line over all candidates (`chance_*`) and over candidates with score > 0 (`chance_pos_*`) next to it; for the contested rows the chance line is computed over the contested trials. The chance line beside **per-key MRR** is per key path: each key path uses `chance_line(n, m_k)` with m_k = candidates matching that key path, averaged over key paths (not the per-trial union m; ATK-EV-03, s07_t00). | 070 item 5; ATK-EV-03 |
