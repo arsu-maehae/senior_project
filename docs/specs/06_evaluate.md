@@ -196,7 +196,76 @@ trial, no write outside out/run_trial), RST-01..08 (refusals, verdict logic at t
 | **Q6** | **H4 labelled-recall denominator (ATK-EV-01, blocking).** 070 item 1 says "node recall over **labelled** context = 0 key nodes (the b0-reachable set)"; the code (`rank_run._b0`) divides the labelled-budget coverage by **all** key nodes, and 070's numbers (0.214 vs 0.121) were computed that way. | **(a) proposal:** fix the code to 070's text — denominator = key nodes inside a b0 unit (the b0-reachable set; ST-05 copies merged); development becomes 0.830 vs 0.423 (EVA-03). This changes a value written in a frozen record, so it needs a short freeze record **071 (correction of 070's numbers, reading text unchanged, thresholds unchanged)**, before T5.7. (b) keep the code; amend 070's text to "share of all key nodes reached with labelled nodes only" (also a freeze record). Either way H4's direction on development is unchanged. | owner (freeze record; no council needed unless you want one) |
 
 ## 9. Out of scope
-The test run (PLAN 10.4), the `answer-keys-locked` tag and key approvals (T5.7), test allowlists, weight sensitivity
-on test data and the summary (10.5), the ablation without the command-line method (10.6), node P/R/F1/FNR tables and
-pooled ROC-AUC (10.2 rest), any change to a frozen parameter, threshold or reading, and any change to
-`DEVELOPMENT_TRIALS`.
+- The test run (PLAN 10.4).
+- The `answer-keys-locked` tag and key approvals (T5.7).
+- Test allowlists.
+- Any change to a frozen parameter, threshold or reading.
+- Any change to `DEVELOPMENT_TRIALS`.
+
+The parts of 10.2, 10.5 and 10.6 that need no test data are now in §10. Their test-data runs stay out of scope.
+
+## 10. Addendum D — rest of 10.2, 10.5, 10.6 on development data (owner instruction 2026-11-18; draft)
+The owner asked to build every part of PLAN 10.2, 10.5 and 10.6 that needs no test data, on development data only,
+labelled DEVELOPMENT, with the same limits as above. **No rule in this addendum is a hypothesis.** Every number is
+reported without a verdict. If a part would need a new hypothesis or a change to a frozen record, the work stops and
+the owner is asked first.
+
+### D-A — Node P/R/F1/FNR on the top-k (PLAN 10.2; handoff §14.2 row 1, §14.3 part 1)
+| ID | Rule | Source |
+|---|---|---|
+| NP-01 | Per keyed attack trial and variant (`full`, `b1`, `b2`): **R** = the expected number of key nodes covered by the top-k paths divided by \|key\|; **P** = the expected key nodes covered divided by the expected number of nodes held; F1 = 2PR/(P+R); FNR = 1 − R. Key nodes are the `context` = 0 key attack nodes, the same set as H4's all-node basis, with ST-05 copies merged. The nodes of the top-k paths are their `context` = 0 nodes, with k = the number of key attack paths. Ties at the cut are read by expectation (`rank_metrics.inclusion_probabilities`, 068). | handoff §14.2; 065 tie rule |
+| NP-02 | `b0` at the same node budget as `full`'s top-k, on the all-node basis (NP-05): P, R, F1, FNR the same way. | 065 H4 budget |
+| NP-03 | Per scenario: the mean over that scenario's attack trials. Overall: the macro mean over attack trials. S06 and unkeyed trials are left out, because they have no key nodes. | handoff §14.3 part 1 |
+| NP-04 | Consistency check: `full`'s R equals the H4 all-node `full_recall` of the same trial. A difference refuses the run. | — |
+
+### D-B — Pooled path-level ROC-AUC (PLAN 10.2, optional row of handoff §14.2)
+| ID | Rule | Source |
+|---|---|---|
+| AUC-01 | Per variant (`full`, `b1`, `b2`). **Positives** are candidates that match a key attack path (node reading), in keyed attack trials. **Negatives** are every other candidate of a keyed trial: non-matching candidates of attack trials and every candidate of keyed S06 trials. Unkeyed trials are left out. AUC = Mann–Whitney on the 12-decimal written scores, with ties counted 0.5. The chance line is 0.5. n_pos and n_neg are reported. b0 is left out, because it ranks units, not paths. | handoff §14.2 |
+| AUC-02 | Stated limit: this pools scores across trials. A path score is a score for ordering, not a probability (Correction J), so the pooled AUC is a summary only. | Correction J |
+
+### D-C — Processing time per scenario (PLAN 10.2)
+| ID | Rule | Source |
+|---|---|---|
+| PT-01 | `run_log.md` (runner, `--development`) adds a table: mean and max `wall_ms` per stage per scenario, plus a total per scenario. It is machine-dependent and never copied into `results.md`. | handoff §14.2 row 7; RS-07 |
+
+### D-D — Weight sensitivity (PLAN 10.5; handoff §14.3 part 4)
+| ID | Rule | Source |
+|---|---|---|
+| SW-01 | `rank_sweep.csv` gains `mrr_per_key_expected` (070 primary) for every sweep point. The grid, the defaults and the "a sweep never moves a value" rule (068) are unchanged. | 068, 070 |
+| SW-02 | A "Weight sensitivity (development)" table in `results.md`: number of points, "same ranks as at the default weights: n of N", min and max of top-1, per-trial MRR, per-key MRR and S06 margin across points, and the informativeness sentence (069 item 9; SW-03). No verdict. | handoff §14.3 part 4 |
+
+### D-E — Development summary (PLAN 10.5 "fact-checked summary")
+| ID | Rule | Source |
+|---|---|---|
+| SUM-01 | `docs/results/T10-development-summary-2026-11-18.md`, written by the stage lead from `results.csv` only. Every number cites its row. It is labelled **DEVELOPMENT — not a result**. It is checked by the fact-checker before the last commit. Wording: CLAUDE.md wording rules. | eval-run skill step 5 |
+
+### D-F — Ablation without the command-line source method (PLAN 10.6; decision 020; spec 07 limits)
+| ID | Rule | Source |
+|---|---|---|
+| AB-01 | `python -m stitch --disable-method cmdline_target` (via `StitchParams`): that method emits no link row and adds no evidence anywhere else in the stitcher (tiers, corroboration). Every use is listed in the decision record. The **default** run is unchanged byte for byte; the dry run proves it. The disabled set is recorded in stitch `run_info.json` / `stats.json`. Only `cmdline_target` may be disabled; other names are refused. | Correction I methods; 020 |
+| AB-02 | `python -m run_trial.ablation`: a scratch repo outside the repo, with the same allowlist, copy rules and deletion as the dry run (DR-01, DR-02, DR-05). It runs `run_trial --development --repo <scratch> --stitch-disable-method cmdline_target`, then copies the scratch `out/{stitch,label,score,evaluate}` of the 9 development trials plus `evaluate/development` into the real `out/ablation/no_cmdline/`. The default `out/` is never written; the tree check is DR-06. | PLAN 10.6 |
+| AB-03 | `out/ablation/no_cmdline/ablation.md` and `ablation.csv` hold the default and the ablated values side by side, with the same readings as the H1–H5 tables, the chance lines and the contested reading, plus per-method link counts (link-accuracy totals). They are labelled **DEVELOPMENT — not a result** and carry **no verdict**, because no hypothesis was frozen for the ablation; any verdict would need a new hypothesis and the owner's decision. Inputs are hash-checked against both runs' files. | 065 kill criteria; owner 2026-11-18 |
+| AB-04 | Keys are the same approved t00 keys. Hop matching is unchanged: hops are mapped by target logon uids (ST-25), which do not depend on the source-session method. The node reading does depend on it (AB-08). | 020 |
+
+### D-G — Attacker review merged (ATK-EV-26..36, 2026-11-18)
+| ID | Rule | Source |
+|---|---|---|
+| AB-05 | **The default run stays byte-identical.** `disabled_methods` is written to stitch `run_info.json` / `stats.json` **only when non-empty**. The proof is the dry run against the committed `out/` produced by the pre-change code. The default `out/` is not regenerated before that dry run passes. | ATK-EV-26 |
+| AB-06 | **Only in a scratch repo.** `stitch --disable-method` and `run_trial --stitch-disable-method` are refused when `--repo` resolves to the real repository. `evaluate --results` refuses when any development stitch `run_info.json` carries a non-empty `disabled_methods`. No stage reads `out/ablation/`. | ATK-EV-27 |
+| AB-07 | **"Disabled" means every use of command-line evidence in the stitcher is switched off:** - candidate sessions found only by `by_cmdline`; - `tiers.name_check_of` (names from command lines: tie-break and `link_rank`); - `tiers.hop_verdicts` `consistent_count` over cmdline-only sessions; - `links.data_limits._cmd_after` (the cmd count in `data_limitation` / `evidence_after`); - `session_methods`, `candidate_count_all`, `hops_by_methods_linked`. Every use is listed in the decision record with file:line. Effects in either direction (for example C → B upgrades) are reported, not hidden. | ATK-EV-28 |
+| AB-08 | **Reading of the ablation:** the **hop reading** (key hops mapped by target logon uids, ST-25) is the headline reading of the ablation, because it does not use the command-line evidence the key is built from. The node reading is shown beside it, labelled "key built from the same command-line evidence (020, AK-04): node recall falls by construction". | ATK-EV-29; spec 07 limits |
+| AB-09 | **No verdict anywhere in the ablation:** - `--results` is not run in the scratch repo; - `results.*` are not copied; - ablation.md / ablation.csv have no threshold, comparator or verdict column; - `out/ablation/no_cmdline/README.md` and every ablation table carry the banner **ABLATION (cmdline_target disabled) — DEVELOPMENT, not a result**. | ATK-EV-30 |
+| AB-10 | The ablation table shows its denominators: key nodes, labelled key nodes, b0 units and budgets per trial in both runs. If b0 or the 071 denominator moves with the stitch output, that is stated. | ATK-EV-31 |
+| AB-11 | The copy into `out/ablation/no_cmdline/` goes through a temporary folder in `out/` and a swap; a re-run replaces the whole folder. DR-06's tree check excludes exactly `out/ablation/no_cmdline/` and nothing else. The default side of the table is read from the committed `out/`, which the dry run verified. | ATK-EV-32 |
+| SW-03 | The sweep table never says "stable". It says "same ranks as at the default weights: n of N points" and gives the informativeness sentence. It has no S06 "held" count, only the min and max S06 margin across points. The sweep's reading (hop, 068) is named. Per-key chance at the default point is shown beside per-key MRR. | ATK-EV-33; ATK-SC-22 |
+| AUC-03 | Per-trial AUC (keyed attack trials) is shown beside the pooled AUC, with n_pos and n_neg per trial. AUC is undefined when n_pos or n_neg is 0. Stated limit: pooled negatives from other trials and from S06 measure score level across scenarios, which Correction J does not make comparable. | ATK-EV-34 |
+| NP-05 | b0 in NP-02 uses the **all-node** budget and basis, the same as NP, not H4's labelled primary. P and F1 are undefined when the expected number of nodes held is 0. P counts true events that the key does not list as "not in key"; it is never called a false-positive rate. ST-05 merging covers `member_logon_uids` only (stated). NP-04 is an internal consistency check; the independent check is the data-checker's recomputation. | ATK-EV-35 |
+| PT-02 | Processing time per scenario gives n trials, mean and min–max. The DB size (MB) per trial is shown beside each trial's time. | ATK-EV-36 |
+| SUM-02 | The summary cites, for every number, the written file and row it comes from: results.csv, rank_totals.csv, rank_sweep.csv, ablation.csv or run_log.md. | ATK-EV-36 |
+
+### D acceptance (development)
+- **NPA-01:** P/R/F1/FNR are written for 5 attack trials × 4 variants, and NP-04 holds.
+- **AUCA-01:** n_pos = the number of matched candidates; AUC lies in [0, 1].
+- **SWA-01:** the sweep's per-key MRR at the default point = 0.833333.
+- **ABA-01:** the ablation runs on 9/9 trials. The default dry run still passes. Per-method link counts show no `cmdline_target` row in the ablated run.

@@ -50,3 +50,26 @@ Q5 (a) plus a synthetic hop/node divergence test.
 ## Status
 Draft complete; awaiting owner approval of the spec and an answer to Q6. A Q6 answer changes a number written in
 frozen record 070, so it needs freeze record 071 before T5.7.
+
+## Addendum D (rest of 10.2, 10.5, 10.6), 2026-11-18
+**Data-checker** (read-only, development trials):
+- Every tier-B hop in s02, s04, s05, s07 t00 and s02_t01 is linked by `cmdline_target` only.
+- Key attack hops that depend on `cmdline_target` alone, which drop to target_only / tier D in the ablation:
+  - s02-h1 → h0025
+  - s04-B-h1 → h0024
+  - s05-h1 → h0030
+  - s07-h-x → h0027
+  - s07-h-y → h0031
+- Key attack hops that keep a port and 4648 link (tier A): s03-h1 → h0020 and s05-h2 → h0032.
+- S06 key hops (benign) keep 4648 or port.
+- Identity does not depend on cmdline linking (013).
+
+**Attacker** ATK-EV-26..36, merged as D-G (AB-05..11, SW-03, AUC-03, NP-05, PT-02, SUM-02). The main points:
+- The default run must stay byte-identical (ATK-EV-26).
+- The ablation flag is refused in the real repo (ATK-EV-27).
+- Every use of cmdline evidence in the stitcher is switched off and listed (ATK-EV-28).
+- The hop reading is the ablation's headline reading, because the key is built from the same command-line evidence
+  (ATK-EV-29).
+- No verdict appears anywhere in the ablation (ATK-EV-30).
+
+No item needs a new hypothesis or a change to a frozen record.
