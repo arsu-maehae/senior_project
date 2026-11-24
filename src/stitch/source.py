@@ -476,10 +476,16 @@ def by_cmdline(subject: Subject | tuple, processes: ProcessIndex, cmd: Mapping[s
     in ``before_range`` / ``after_range``. Per session: ``names_found`` = the target-side names of THIS target
     found in its matching uids (ST-46 data side), ``names_by_uid`` = the same names per uid (049 item 5) and the
     field kind / via counts of the matches.
+
+    Spec 06 AB-07: with ``cmdline_target`` in ``params.disabled_methods`` the method returns an empty result (no
+    evidence, no out-of-range or system counts, no names), so no later step (session list, ``candidate_count_all``,
+    ``session_methods``, the name check, the tier's consistent count) can see command-line evidence. WHY here and
+    not only by passing an empty ``cmd``: the method itself honours the switch, so a caller that still holds the
+    command facts cannot reintroduce them.
     """
     s = as_subject(subject)
     out = MethodResult(METHOD_CMD)
-    if s.source_host is None:
+    if s.source_host is None or not params.method_enabled(METHOD_CMD):
         return out
     first = _first(s)
     lo_us, hi_us = _first_us(s), _last_us(s)
@@ -683,7 +689,9 @@ def link_subject(subject: Subject | tuple, scan: ScanResult, processes: ProcessI
     method = its distinct resolved non-system sessions; ``candidate_count_all`` over all methods;
     ``session_methods`` = every method that found the session. ``clock_unreliable`` per row = host part
     (``offsets``; keyword-only, None = no host flag as in ``scan.kept_row``) or any event of the row flagged.
-    Mutates ``sessions`` through ``by_4648`` (see there).
+    Mutates ``sessions`` through ``by_4648`` (see there). With ``cmdline_target`` disabled (spec 06 AB-07)
+    ``by_cmdline`` returns an empty result, so that method adds no row, no session, no count and no out-of-range
+    evidence here; its ``candidate_counts`` entry is 0.
     """
     s = as_subject(subject)
     results = {METHOD_PORT: port_join(s, scan, processes, params),

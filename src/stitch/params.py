@@ -55,6 +55,10 @@ METHODS: tuple[str, ...] = ("sysmon3_port", "source_4648", "cmdline_target", "ta
 ARTEFACT_KINDS: tuple[str, ...] = ("share_burst", "service_install", "winrm_host", "winrm_91", "rdp_connection",
                                    "followup_logon")
 TARGET_ONLY_REASONS: tuple[str, ...] = ("source_host_unknown", "source_host_no_logs", "no_evidence_in_range")
+# Spec 06 AB-01: the one source method an ablation may switch off. WHY only this one: decision 020 builds the answer
+# keys from the same command lines (``command_names_target``), so the ablation asks what the ranking keeps without
+# them; switching off the port join or the 4648 bridge is not part of the approved ablation.
+DISABLEABLE_METHODS: tuple[str, ...] = ("cmdline_target",)
 
 # Decision 046: the stitcher runs on the nine development trials only, until T10. Imported, never copied.
 ALLOWED_TRIALS: tuple[str, ...] = DEVELOPMENT_TRIALS
@@ -104,3 +108,18 @@ class StitchParams:
     # Spec 5: "as src/gate/params.py", one definition.
     lab_host_ips: Mapping[str, str] = field(default_factory=lambda: _GATE_DEFAULTS.lab_host_ips)
     system_logon_ids: frozenset[int] = _GATE_DEFAULTS.system_logon_ids
+    # Spec 06 AB-01 / AB-07: source methods switched off for an ablation run (scratch repo only, AB-06). Empty in
+    # every default run; ``index.params_dict`` leaves the key out while it is empty, so a default run's files stay
+    # byte-identical to the pre-ablation code (AB-05).
+    disabled_methods: frozenset[str] = frozenset()
+
+    def __post_init__(self) -> None:
+        """Refuse a disabled method other than ``DISABLEABLE_METHODS`` (AB-01). WHY here: a test or a sensitivity
+        run that builds the dataclass directly gets the same refusal as the CLI."""
+        bad = sorted(set(self.disabled_methods) - set(DISABLEABLE_METHODS))
+        if bad:
+            raise ValueError(f"only {', '.join(DISABLEABLE_METHODS)} may be disabled (spec 06 AB-01); got {bad}")
+
+    def method_enabled(self, method: str) -> bool:
+        """True unless ``method`` is in ``disabled_methods``. One spelling of the test for every use (AB-07)."""
+        return method not in self.disabled_methods

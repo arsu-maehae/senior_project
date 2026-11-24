@@ -16,6 +16,7 @@ import csv
 import hashlib
 import io
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -150,6 +151,28 @@ def check_label_stitch_hashes(label_run_info: Mapping[str, Any], current: Mappin
                              f"current stitch file {have}; re-run the label stage")
 
 
+# ATK-EV-42: the real repository (this checkout), for ``check_not_ablated``.
+REAL_REPO = Path(__file__).resolve().parents[2]
+
+
+def _same_or_under(path: Path, root: Path) -> bool:
+    """True iff ``path`` equals or lies under ``root`` after resolving links (case-insensitive on Windows)."""
+    a, b = os.path.normcase(os.path.realpath(path)), os.path.normcase(os.path.realpath(root))
+    return a == b or a.startswith(b.rstrip("\\/") + os.sep)
+
+
+def check_not_ablated(stitch_info: Mapping[str, Any], repo: Path, real_repo: Path = REAL_REPO) -> None:
+    """Spec 06 AB-06 / ATK-EV-42: in the real repository, refuse a stitch run_info.json that records non-empty
+    ``disabled_methods`` (an ablated stitch run lives only in a scratch repo). A default run_info has no such key
+    (AB-05), so default behaviour is unchanged; a scratch repo is not checked."""
+    value = stitch_info.get("disabled_methods")
+    if not value:
+        return
+    if _same_or_under(repo, real_repo) and _same_or_under(real_repo, repo):
+        raise ScoreError(f"refused: stitch run_info.json records disabled_methods {value!r} in the real repository "
+                         "(spec 06 AB-06; an ablated stitch run lives only in a scratch repo)")
+
+
 def load_inputs(repo: Path, trial_id: str) -> ScoreInputs:
     """Read every spec 2 file of one trial and run every SC-01 / SC-02 refusal. Raises ScoreError; writes nothing.
 
@@ -161,6 +184,7 @@ def load_inputs(repo: Path, trial_id: str) -> ScoreInputs:
     inp = ScoreInputs(trial_id=trial_id)
     s_data, inp.stitch_sha256[RUN_INFO] = read_bytes(sdir / RUN_INFO)
     s_info = parse_json(f"stitch/{RUN_INFO}", s_data)
+    check_not_ablated(s_info, repo)
     for name, attr in (("paths.csv", "paths"), ("path_edges.csv", "path_edges"), ("hops.csv", "hops"),
                        ("hop_identity.csv", "hop_identity")):
         data, inp.stitch_sha256[name] = read_bytes(sdir / name)

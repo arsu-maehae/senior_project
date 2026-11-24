@@ -24,7 +24,8 @@ from .paths import Path, PathSet, edge_types_text, hop_clock_unreliable
 from .tiers import TIERS
 
 __all__ = ["IDENTITY_SENTENCE", "L_ST2_SENTENCE", "hops_by_protocol_and_tier", "nodes_by_role_and_context",
-           "clock_unreliable_hops", "note_paths", "stats_dict", "edge_types_text", "report_md"]
+           "clock_unreliable_hops", "note_paths", "stats_dict", "disabled_block", "edge_types_text",
+           "report_md"]
 # ``edge_types_text`` is defined in ``paths`` (one spelling for paths.csv and report.md) and re-exported here.
 
 # Decision 013 / STA-08: stated in every report, because an identity value of 1 next to a weak or absent link is
@@ -93,7 +94,7 @@ def stats_dict(li: LinkIndex, pathset: PathSet, nodes: Sequence[PathNode], file_
     """
     c, pc = li.counts, pathset.counts
     near = sorted(h.hop_id for h in li.hopset.hops if h.gap_near_threshold)
-    return jsonable({
+    return jsonable({**disabled_block(params),
         "trial_id": li.trial_id,
         "tool_version": TOOL_VERSION,
         "files": dict(file_rows),
@@ -131,6 +132,13 @@ def stats_dict(li: LinkIndex, pathset: PathSet, nodes: Sequence[PathNode], file_
         "parameters": params_dict(params),
         "db": {"sha256_before": db_sha_before, "sha256_after": db_sha_after},
     })
+
+
+def disabled_block(params: StitchParams) -> dict[str, list[str]]:
+    """``{"disabled_methods": [...]}`` for an ablation run, ``{}`` for a default run (spec 06 AB-01, AB-05). WHY a
+    top-level key and only when non-empty: a reader (``evaluate --results``, AB-06) sees an ablated run without
+    parsing the parameters, and a default run keeps exactly the pre-ablation keys, so its bytes do not change."""
+    return {"disabled_methods": sorted(params.disabled_methods)} if params.disabled_methods else {}
 
 
 # ---------------------------------------------------------------- report.md (pure)
@@ -238,6 +246,9 @@ def report_md(stats: Mapping[str, Any], li: LinkIndex, pathset: PathSet) -> str:
             f"- DB SHA-256 before: {stats['db']['sha256_before']}",
             f"- DB SHA-256 after: {stats['db']['sha256_after']}",
             "- times are corrected (ST-02); paths are candidates for ranking, not verdicts."]
+    if stats.get("disabled_methods"):          # spec 06 AB-01: only an ablation run carries this line
+        head.append(f"- ABLATION: source methods disabled: {', '.join(stats['disabled_methods'])} "
+                    "(spec 06 AB-07; every use of their evidence is switched off)")
     sections = [head, _counts_section(stats), _paths_section(li, pathset), _edges_section(pathset),
                 _no_path_section(stats), _multi_parent_section(stats), _target_only_section(stats),
                 _limits_section(li), _clock_section(stats, pathset), ["## Identity inputs", "", IDENTITY_SENTENCE]]

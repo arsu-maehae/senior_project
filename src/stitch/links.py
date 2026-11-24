@@ -42,7 +42,7 @@ from .tiers import HopVerdicts, all_verdicts
 
 __all__ = ["LinkIndex", "HostLimit", "assemble", "run_links", "run_links_checked", "command_probes",
            "names_by_target", "process_uids_by_host", "link_4648_uids", "last_security_events", "data_limits",
-           "link_counts", "EVIDENCE_METHODS", "REASON_EVIDENCE_AFTER", "REASON_UNKNOWN_SESSION_PROCESS",
+           "link_counts", "read_commands", "EVIDENCE_METHODS", "REASON_EVIDENCE_AFTER", "REASON_UNKNOWN_SESSION_PROCESS",
            "LIMIT_REASONS", "unknown_session_processes_after", "event_times"]
 
 Row = Mapping[str, Any]
@@ -304,13 +304,17 @@ def data_limits(scan: ScanResult, hopset: HopSet, processes: ProcessIndex, cmd: 
     elsewhere that something reached the host after its log stops is, and so is activity on the host itself
     under a logon its log never recorded (owner, 2026-11-14). ``sessions`` is required (keyword only) so no
     caller can silently skip the second condition.
+
+    Spec 06 AB-07: with ``cmdline_target`` disabled the command-line count is 0 with no uids, whatever ``cmd``
+    holds, so a host can be labelled ``evidence_after`` only by Sysmon 3 or 4648 evidence.
     """
     after_s = seconds_to_us(params.link_after_s)
     out: dict[str, HostLimit] = {}
     for host, last in last_security_events(scan).items():
         s3 = _sysmon3_after(host, last["us"], scan, params)
         x4648 = _4648_after(host, last["us"], scan, t4648, params)
-        n_cmd, cmd_uids = _cmd_after(host, last["us"], processes, cmd)
+        n_cmd, cmd_uids = (_cmd_after(host, last["us"], processes, cmd) if params.method_enabled(METHOD_CMD)
+                           else (0, []))
         counts = {METHOD_PORT: len(s3), METHOD_4648: len(x4648), METHOD_CMD: n_cmd}
         n_sys, n_user, unk_uids = unknown_session_processes_after(host, last["us_raw"], processes, sessions)
         reasons = _limit_reasons(counts, n_sys + n_user)
@@ -391,6 +395,21 @@ def link_counts(scan: ScanResult, hopset: HopSet, artefact_set: ArtefactSet, lin
 
 # ---------------------------------------------------------------- assembly
 
+def read_commands(con: sqlite3.Connection, index: TrialIndex, hopset: HopSet, arts: ArtefactSet,
+                  params: StitchParams) -> dict[str, CmdResult]:
+    """The command facts of the trial (``cmdtext.read_command_results``), or {} when ``cmdline_target`` is disabled
+    (spec 06 AB-07).
+
+    WHY skip the read and not only ignore its result: an ablation must show what the stitcher builds without any
+    command-line evidence, and a fact that is never read cannot leak into any later step. The consumers
+    (``by_cmdline``, ``data_limits``) still test the switch themselves, so a caller passing its own facts gets the
+    same result."""
+    if not params.method_enabled(METHOD_CMD):
+        return {}
+    return read_command_results(con, process_uids_by_host(index.processes), command_probes(params),
+                                names_by_target(hopset, arts))
+
+
 def assemble(trial_id: str, con: sqlite3.Connection, scan: ScanResult, gate_rows: GateRows,
              checked: CheckedInputs, params: StitchParams = StitchParams()) -> LinkIndex:
     """The ``extra`` step of ``inputs.load_link_inputs``: index, hops, artefacts, command facts (read on ``con``),
@@ -405,19 +424,21 @@ def assemble(trial_id: str, con: sqlite3.Connection, scan: ScanResult, gate_rows
     ``checked`` supplies the clock offsets (ST-02 host part of ``clock_unreliable``) and the window end. The
     index, the offsets and the in-window event times are also kept on the result for the T7.5 path stage. The
     index's ``SessionIndex`` is mutated by ``source.by_4648`` (unknown-open 4648 sessions, as documented there).
+
+    Spec 06 AB-07: with ``cmdline_target`` disabled no command text is read at all (``cmd`` is empty); the method,
+    the data limits and the name check also test the switch themselves (``read_commands`` documents why both).
     """
     index: TrialIndex = build_index(trial_id, scan, params)
     hopset = build_hops(trial_id, gate_rows, scan, index.sessions, params)
     arts = build_artefacts(hopset, scan, index.sessions, gate_rows, params)
-    cmd = read_command_results(con, process_uids_by_host(index.processes), command_probes(params),
-                               names_by_target(hopset, arts))
+    cmd = read_commands(con, index, hopset, arts, params)
     t4648 = read_4648_targets(con, link_4648_uids(scan))
     links = build_links(hopset, scan, index, cmd, t4648, params, offsets=checked.clock.offsets)
     confirm = {h.hop_id: confirm_of(h, scan.link_rows, arts) for h in hopset.hops}
     limits = data_limits(scan, hopset, index.processes, cmd, t4648, checked.end_us, params,
                          sessions=index.sessions)
     counts = link_counts(scan, hopset, arts, links, confirm, limits)
-    verdicts = all_verdicts(hopset, links, arts.rows)
+    verdicts = all_verdicts(hopset, links, arts.rows, name_check_run=params.method_enabled(METHOD_CMD))
     reads = lsass_reads(gate_rows.supporting, scan)
     identity = build_identity(hopset, links, reads, index.sessions, checked.clock.offsets, params)
     return LinkIndex(trial_id=trial_id, hopset=hopset, artefacts=arts, links=links, confirm=confirm,

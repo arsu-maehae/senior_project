@@ -18,6 +18,7 @@ from gate.params import OUTPUT_FILES as GATE_FILES
 from label.outputs import OUTPUT_FILES as LABEL_FILES
 from score.outputs import OUTPUT_FILES as SCORE_FILES
 from stitch.__main__ import OUTPUT_FILES as STITCH_FILES
+from stitch.params import DISABLEABLE_METHODS
 
 __all__ = ["TOOL_VERSION", "DEVELOPMENT_TRIALS", "KEYED_DEVELOPMENT_TRIALS", "REPO", "RUN_TRIAL_OUT_REL",
            "DEVELOPMENT_DIR_NAME", "RUN_LOG_JSON", "RUN_LOG_MD", "PROCESSED_REL", "WINDOWS_REL", "DB_SUFFIX",
@@ -25,7 +26,8 @@ __all__ = ["TOOL_VERSION", "DEVELOPMENT_TRIALS", "KEYED_DEVELOPMENT_TRIALS", "RE
            "SCORE_FILES", "EVAL_LINK_FILES_UNKEYED", "EVAL_LINK_FILES_KEYED", "EVAL_SUMMARY_DIR", "LINK_SUMMARY_FILES",
            "LABEL_RECALL_FILE", "LABEL_RECALL_MD", "RANK_FILE", "RANK_SWEEP_SUMMARY_FILES", "RESULTS_FILES",
            "STDERR_TAIL_LINES", "MTIME_SLACK_S", "EXIT_REFUSED", "EXIT_FAILED", "STATUS_OK", "STATUS_REFUSED",
-           "STATUS_FAILED", "RESULT_NOT_RUN", "NOT_RUN_NOTE", "PRESENCE_STEP", "ALLOWLIST_STEP", "REPO_STEP"]
+           "STATUS_FAILED", "RESULT_NOT_RUN", "NOT_RUN_NOTE", "PRESENCE_STEP", "ALLOWLIST_STEP", "REPO_STEP",
+           "DISABLEABLE_METHODS", "DB_MB"]
 
 TOOL_VERSION = "run_trial 0.1.0"
 
@@ -66,3 +68,5 @@ NOT_RUN_NOTE = ("not run because an earlier step stopped the run; outputs from a
                 "step's folders (RT-10)")
 # Pseudo-step names for the runner's own refusals (no subprocess).
 ALLOWLIST_STEP, REPO_STEP, PRESENCE_STEP = "allowlist", "repo", "presence"
+# PT-02: DB size in run_log.md in MB = 10^6 bytes (decimal; the unit is stated in run_log.md).
+DB_MB = 1_000_000

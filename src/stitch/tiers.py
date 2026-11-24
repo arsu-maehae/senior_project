@@ -31,7 +31,7 @@ from .sessions import SessionKey
 from .source import METHOD_CMD, METHOD_PORT, SubjectLinks
 
 __all__ = ["ACCOUNT_DIRECT", "ACCOUNT_4648", "ACCOUNT_NONE", "ACCOUNT_MATCHES", "NAME_MATCH", "NAME_NO_MATCH",
-           "NAME_NO_NAMES", "TIERS", "RANK_BASES", "NAMED_KINDS", "account_match_member", "best_account_match",
+           "NAME_NO_NAMES", "NAME_NOT_RUN", "TIERS", "RANK_BASES", "NAMED_KINDS", "account_match_member", "best_account_match",
            "is_consistent", "hop_names", "name_check_of", "tier_of", "SessionVerdict", "HopVerdicts",
            "rank_sessions", "hop_verdicts", "all_verdicts"]
 
@@ -39,6 +39,9 @@ ACCOUNT_DIRECT, ACCOUNT_4648, ACCOUNT_NONE = "direct", "4648", "none"
 # Best first: the display order of ``best_account_match`` (049 item 2).
 ACCOUNT_MATCHES: tuple[str, ...] = (ACCOUNT_DIRECT, ACCOUNT_4648, ACCOUNT_NONE)
 NAME_MATCH, NAME_NO_MATCH, NAME_NO_NAMES = "match", "no_match", "no_names"
+# Spec 06 ATK-EV-41: the name check reads cmdline_target evidence only; with that method disabled (ablation) it is
+# not run, and "no_match" would claim a search that never happened. Never written by a default run.
+NAME_NOT_RUN = "not_run"
 # Best first: the tier is the first rank key (ST-50).
 TIERS: tuple[str, ...] = ("A", "B", "C", "D")
 RANK_BASES: tuple[str, ...] = ("only", "tier", "account_match", "name_check", "equal", "no_session", "target_only")
@@ -112,7 +115,7 @@ def hop_names(hop_id: str, artefact_rows: Iterable[ArtefactRow]) -> list[str]:
 
 
 def name_check_of(session_key: SessionKey, sl: SubjectLinks,
-                  names: Sequence[str]) -> tuple[str, list[str], list[str]]:
+                  names: Sequence[str], run: bool = True) -> tuple[str, list[str], list[str]]:
     """(``name_check``, matched names, event uids) of one candidate session (ST-46, 049 item 5).
 
     A hop name matches when it equals, case-insensitively, a name in ``Evidence.names_by_uid[u]`` of THIS
@@ -120,11 +123,16 @@ def name_check_of(session_key: SessionKey, sl: SubjectLinks,
     search in the command text was already done by ``cmdtext`` (048 item 1) and reduced to names; this step only
     asks which of the hop's own names were among them. Evidence of another session, another method or another
     hop never counts. Names keep the hop's spelling, sorted case-insensitively then exactly; uids sorted.
-    ``no_names`` when the hop has no names; else ``match`` / ``no_match``.
+    ``no_names`` when the hop has no names; else ``match`` / ``no_match``. With ``cmdline_target`` disabled (spec
+    06 AB-07) the caller passes ``run`` False: a hop with names gets ``not_run`` (ATK-EV-41; never ``no_match``),
+    so no session can reach ``match`` and the name check can no longer break a tie or move a ``link_rank``. A hop
+    without names stays ``no_names``: that fact comes from the hop's artefacts, not from command lines.
     """
     hop = _sorted_names(names)
     if not hop:
         return NAME_NO_NAMES, [], []
+    if not run:
+        return NAME_NOT_RUN, [], []
     matched: set[str] = set()
     uids: set[str] = set()
     result = sl.methods.get(METHOD_CMD)
@@ -252,12 +260,13 @@ def _member_order(members: Iterable[RemoteLogon]) -> list[RemoteLogon]:
     return sorted(members, key=lambda m: (m.us_raw, m.uid))
 
 
-def hop_verdicts(hop: Hop, sl: SubjectLinks, names: Sequence[str]) -> HopVerdicts:
+def hop_verdicts(hop: Hop, sl: SubjectLinks, names: Sequence[str], name_check_run: bool = True) -> HopVerdicts:
     """Account match, name check, tier and rank for every candidate session of one hop.
 
     Account data per session: ``SessionData.account`` (the session's in-window 4624, ``window_open``) and
     ``SessionData.credential_accounts``. Port sessions = the ``sysmon3_port`` method's candidate sessions. The
     tier is computed before and independently of the name check, so ``names`` can only move the rank fields.
+    ``name_check_run`` False (cmdline_target disabled, ATK-EV-41) writes ``not_run`` where a check would run.
     """
     members = _member_order(hop.members)
     port = sl.methods.get(METHOD_PORT)
@@ -271,7 +280,7 @@ def hop_verdicts(hop: Hop, sl: SubjectLinks, names: Sequence[str]) -> HopVerdict
     best = {k: best_account_match(v) for k, v in per_member.items()}
     consistent_count = sum(1 for v in best.values() if is_consistent(v))
     tiers = {k: tier_of(best[k], k in port_sessions, len(port_sessions), consistent_count) for k in keys}
-    checks = {k: name_check_of(k, sl, names) for k in keys}
+    checks = {k: name_check_of(k, sl, names, name_check_run) for k in keys}
     ranks = rank_sessions({k: (tiers[k], is_consistent(best[k]), checks[k][0] == NAME_MATCH) for k in keys})
     sessions = {k: SessionVerdict(session_key=k, account_match=best[k], account_match_members=per_member[k],
                                   account_match_member_count=sum(1 for v in per_member[k] if is_consistent(v)),
@@ -283,13 +292,15 @@ def hop_verdicts(hop: Hop, sl: SubjectLinks, names: Sequence[str]) -> HopVerdict
     return HopVerdicts(hop_id=hop.hop_id, sessions=sessions,
                        candidate_count_account=sum(1 for v in best.values() if v != ACCOUNT_NONE),
                        names=tuple(hop_name_list),
-                       no_session_name_check=NAME_NO_MATCH if hop_name_list else NAME_NO_NAMES,
+                       no_session_name_check=(NAME_NO_NAMES if not hop_name_list
+                                              else NAME_NO_MATCH if name_check_run else NAME_NOT_RUN),
                        best_tier=min(tiers.values(), key=TIERS.index, default="D"))
 
 
 def all_verdicts(hopset: HopSet, links: Mapping[str, SubjectLinks],
-                 artefact_rows: Iterable[ArtefactRow]) -> dict[str, HopVerdicts]:
+                 artefact_rows: Iterable[ArtefactRow], name_check_run: bool = True) -> dict[str, HopVerdicts]:
     """``hop_verdicts`` for every hop of the set, by hop id, with the hop's own names (``hop_names``).
-    Follow-up groups have no links and so no verdicts (ST-26)."""
+    Follow-up groups have no links and so no verdicts (ST-26). ``name_check_run`` see ``hop_verdicts``."""
     rows = list(artefact_rows)
-    return {h.hop_id: hop_verdicts(h, links[h.hop_id], hop_names(h.hop_id, rows)) for h in hopset.hops}
+    return {h.hop_id: hop_verdicts(h, links[h.hop_id], hop_names(h.hop_id, rows), name_check_run)
+            for h in hopset.hops}

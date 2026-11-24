@@ -19,7 +19,8 @@ from stitch.index import jsonable
 from stitch.inputs import CheckedInputs, TrialPaths
 
 from .events import count_keys
-from .inputs import (DbRead, StitchData, check_allowed, check_allowlist, check_stitch_fresh, load_stitch,
+from .inputs import (DbRead, StitchData, check_allowed, check_allowlist, check_not_ablated, check_stitch_fresh,
+                     load_stitch,
                      read_events, stitch_dir, trial_paths)
 from .join import hop_label_rows, label_facts, node_label_rows, stitch_copy_groups
 from .labels import Match, apply_rules, wanted
@@ -117,6 +118,7 @@ def label_trial(repo: Path, trial_id: str, params: LabelParams = LabelParams(), 
     paths = trial_paths(repo, trial_id)
     checked = check_allowed(paths)
     stitch = load_stitch(stitch_dir(repo, trial_id))
+    check_not_ablated(stitch.run_info, repo)
     check_stitch_fresh(stitch.run_info, checked)
     rules = load_rules(rules_dir)
     db = read_events(checked, paths, stitch.run_info, wanted(rules.rules))

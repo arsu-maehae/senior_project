@@ -61,8 +61,13 @@ def build_index(trial_id: str, scan: ScanResult, params: StitchParams = StitchPa
 
 
 def params_dict(params: StitchParams) -> dict[str, Any]:
-    """Parameters as JSON-ready values (sets sorted, tuples as lists, mappings as sorted dicts)."""
-    return {f.name: jsonable(getattr(params, f.name)) for f in fields(params)}
+    """Parameters as JSON-ready values (sets sorted, tuples as lists, mappings as sorted dicts).
+
+    ``disabled_methods`` is written only when non-empty (spec 06 AB-05): a default run then writes exactly the
+    parameter block of the pre-ablation code, so its run_info.json / stats.json / check files stay byte-identical
+    and the dry run can prove it."""
+    return {f.name: jsonable(getattr(params, f.name)) for f in fields(params)
+            if f.name != "disabled_methods" or params.disabled_methods}
 
 
 def jsonable(value: Any) -> Any:

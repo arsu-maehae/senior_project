@@ -78,14 +78,16 @@ def is_under(path: Path | str, root: Path | str) -> bool:
     return _is_under(path, root)
 
 
-def leftover_dirs(temp_dir: str) -> list[str]:
-    """Folders with the dry-run prefix in the temp folder (from a hard kill, ATK-EV-09)."""
-    return sorted(d for d in glob.glob(os.path.join(temp_dir, PREFIX + "*")) if os.path.isdir(d))
+def leftover_dirs(temp_dir: str, prefix: str = PREFIX) -> list[str]:
+    """Folders with the dry-run prefix (or the ablation's, ``prefix``) in the temp folder (from a hard kill,
+    ATK-EV-09)."""
+    return sorted(d for d in glob.glob(os.path.join(temp_dir, prefix + "*")) if os.path.isdir(d))
 
 
-def make_scratch(repo: Path) -> Path:
-    """Create the scratch repo in the system temp folder; delete it again and raise if it lies under ``repo``."""
-    path = tempfile.mkdtemp(prefix=PREFIX)
+def make_scratch(repo: Path, prefix: str = PREFIX) -> Path:
+    """Create the scratch repo in the system temp folder; delete it again and raise if it lies under ``repo``.
+    ``prefix`` lets the ablation (``run_trial.ablation``, AB-02) reuse the same DR-01 rule under its own name."""
+    path = tempfile.mkdtemp(prefix=prefix)
     if is_under(path, repo):
         shutil.rmtree(path, ignore_errors=True)
         raise RuntimeError(f"refused: scratch folder {path} lies under the repository {repo} (DR-01)")

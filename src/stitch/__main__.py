@@ -26,12 +26,19 @@ renames: the spec says the folder is rebuilt on every run, and a reader must nev
 or a half-written file. ``out/stitch/.<trial>.tmp`` is filled, the old folder is renamed to ``.<trial>.old``, the
 new one renamed in, and the old one deleted. A DB whose SHA-256 after the read differs from before is refused
 too (spec 2, ``check_db_unchanged``). A refusal prints ``refused: <reason>`` to stderr and exits 2.
+
+Ablation (spec 06 AB-01, AB-05, AB-06): ``--disable-method cmdline_target`` switches off every use of command-line
+evidence (``StitchParams.disabled_methods``); no other name is accepted. It is refused when ``--repo`` (or ``--out``)
+resolves into the real repository, so an ablated stitch output can only exist in a scratch repo. The disabled set
+is written to run_info.json and stats.json (top-level ``disabled_methods`` and in ``parameters``) only when
+non-empty, so a default run is byte-identical to the pre-ablation code.
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -51,13 +58,13 @@ from .outputs import (ARTEFACT_COLUMNS, ARTEFACT_FILE, EDGES_COLUMNS, EDGES_FILE
                       IDENTITY_COLUMNS, IDENTITY_FILE, LINKS_COLUMNS, LINKS_FILE, NODES_COLUMNS, NODES_FILE,
                       PATHS_COLUMNS, PATHS_FILE, artefact_rows, csv_text, edge_rows, hop_rows, identity_rows,
                       link_rows, node_rows, path_rows)
-from .params import STITCH_OUT_REL, TOOL_VERSION, StitchParams
+from .params import DISABLEABLE_METHODS, STITCH_OUT_REL, TOOL_VERSION, StitchParams
 from .paths import PathSet
-from .report import report_md, stats_dict
+from .report import disabled_block, report_md, stats_dict
 
 __all__ = ["RUN_INFO_FILE", "STATS_FILE", "REPORT_FILE", "OUTPUT_FILES", "check_db_unchanged", "csv_files",
            "path_csv_files", "file_facts", "run_info", "run_info_text", "json_text", "build_files", "out_dir",
-           "replace_folder", "main"]
+           "replace_folder", "is_under", "disable_refusal", "main"]
 
 RUN_INFO_FILE = "run_info.json"
 STATS_FILE, REPORT_FILE = "stats.json", "report.md"
@@ -113,6 +120,7 @@ def run_info(trial_id: str, params: StitchParams, db_display: str, sha_before: s
     The window is the summary of ``check_index.window_summary`` (its ``rule`` text names an image and is left
     out, as in the check files)."""
     return jsonable({
+        **disabled_block(params),              # spec 06 AB-05: only an ablation run has this key
         "tool_version": TOOL_VERSION,
         "trial_id": trial_id,
         "generated_utc": generated_utc,
@@ -203,6 +211,43 @@ def replace_folder(target: Path, files: Mapping[str, str]) -> None:
         shutil.rmtree(old)
 
 
+def is_under(path: Path | str, root: Path | str) -> bool:
+    """True iff ``path`` equals or lies under ``root`` after ``os.path.realpath`` (links and junctions resolved;
+    case-insensitive on Windows). The same test as ``run_trial.checks.is_under``, kept here so the stage does not
+    import the runner."""
+    a = os.path.normcase(os.path.realpath(path))
+    b = os.path.normcase(os.path.realpath(root))
+    return a == b or a.startswith(b.rstrip("\\/") + os.sep)
+
+
+def disable_refusal(disabled: Sequence[str], repo: Path, out: Path | None, real_repo: Path = REPO,
+                    trial: str | None = None) -> str | None:
+    """Spec 06 AB-01 / AB-06: the refusal text for ``--disable-method``, or None.
+
+    Refused: any name outside ``DISABLEABLE_METHODS``; and, when any method is disabled, a ``--repo`` that is or lies
+    inside the real repository, whose ``out/`` or ``data/`` resolves into it, or a ``--out`` that resolves into it.
+    ATK-EV-42: the real write targets are resolved too: ``<repo>/out/stitch`` and, with ``trial``,
+    ``<repo>/out/stitch/<trial>`` (a junction or link there would otherwise write the real folder). Resolving a
+    path opens no file, so this may run before the allowlist. WHY: an ablated stitch folder in the committed ``out/`` would feed label, score and evaluate as if it were the
+    default run; only a scratch repo may hold one. Pure apart from resolving links."""
+    bad = sorted(set(disabled) - set(DISABLEABLE_METHODS))
+    if bad:
+        return (f"--disable-method accepts only {', '.join(DISABLEABLE_METHODS)} (spec 06 AB-01); got "
+                f"{', '.join(bad)}")
+    if not disabled:
+        return None
+    targets = [repo, repo / "out", repo / "data", repo / STITCH_OUT_REL]
+    if trial:
+        targets.append(repo / STITCH_OUT_REL / trial)
+    hits = [str(x) for x in targets if is_under(x, real_repo)]
+    if out is not None and is_under(out, real_repo):
+        hits.append(f"--out {out}")
+    if hits:
+        return ("--disable-method runs only in a scratch repository outside the real repository (spec 06 AB-06); "
+                "resolved into the real repository: " + "; ".join(hits))
+    return None
+
+
 def _utc_now() -> str:
     """Current UTC instant for run_info.json only (never in a CSV)."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -218,9 +263,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     ap.add_argument("--repo", type=Path, default=REPO)
     ap.add_argument("--out", type=Path, default=None,
                     help="output folder (default out/stitch/<trial>); replaced whole on every run")
+    ap.add_argument("--disable-method", action="append", default=[], metavar="METHOD",
+                    help="ablation only (spec 06 AB-01): switch off a source method; only cmdline_target is "
+                         "accepted, and only in a scratch repo outside the real repository (AB-06)")
     a = ap.parse_args(argv)
     repo = a.repo.resolve()
-    params = StitchParams()
+    refusal = disable_refusal(a.disable_method, repo, None if a.out is None else a.out.resolve(), trial=a.trial)
+    if refusal:
+        print(f"refused: {refusal}", file=sys.stderr)
+        return 2
+    params = StitchParams(disabled_methods=frozenset(a.disable_method))
     try:
         li, checked, paths, before, after = run_links_checked(repo, a.trial, params)
         check_db_unchanged(before, after)

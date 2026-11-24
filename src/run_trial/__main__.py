@@ -10,7 +10,13 @@ recall for keyed trials, rank), each as ``python -m <stage> ... --repo <abs R>``
 succeed runs ``evaluate --development`` (link accuracy, ``--label-recall``, ``--rank-sweep``, ``--results``); it writes
 ``<R>/out/run_trial/development/run_log.json`` and ``run_log.md`` (processing time per stage).
 
-Order of checks: the allowlist (RT-01) before anything else, so a test trial creates nothing and no file of it is
+Ablation (spec 06 AB-02, AB-06, AB-09): ``--stitch-disable-method cmdline_target`` (repeatable; no other name) is
+passed to the stitch step only (``stitch --disable-method``); it is refused unless ``--repo`` lies outside the real
+repository, and with ``--development`` the ``--results`` summary step is left out, so no ``dev_check`` verdict is
+computed from an ablated stitch output. Without the flag the argv and the steps are exactly those of the default
+chain. ``python -m run_trial.ablation`` is the only intended caller.
+
+Order of checks: the allowlist (RT-01) before anything else, then the ablation check (AB-06) before any stage or log, so a test trial creates nothing and no file of it is
 opened; then the repo shape (RT-08); then the presence of the DB, the clock files and the window row (RT-02), which
 prints the commands that create anything missing. Every stage keeps its own refusals (RT-04). The runner never runs
 ``clock_offset``, ``trial_window`` or ingest, never deletes or edits stage outputs (RT-05), and writes only
@@ -25,7 +31,8 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from . import params as p
-from .checks import allowlist_refusal, presence_facts, presence_refusal, repo_refusal
+from .checks import (ablation_refusal, allowlist_refusal, db_size_bytes, presence_facts, presence_refusal,
+                     repo_refusal)
 from .execute import StepRecord, not_run_record, redact_repo, run_step, runner_exit_code
 from .runlog import development_log, development_md, json_text, trial_log, utc_now, write_log
 from .steps import Step, summary_steps, trial_steps
@@ -44,6 +51,9 @@ def _parser() -> argparse.ArgumentParser:
     mode.add_argument("--trial")
     mode.add_argument("--development", action="store_true")
     ap.add_argument("--repo", default=None, help="repository root holding data/ and out/ (default: this checkout)")
+    ap.add_argument("--stitch-disable-method", action="append", default=[], metavar="METHOD",
+                    help="ablation only (spec 06 AB-02): passed to the stitch step as --disable-method; only "
+                         f"{', '.join(p.DISABLEABLE_METHODS)}, and only with a --repo outside the real repository")
     return ap
 
 
@@ -82,18 +92,20 @@ def _presence_record(text: str, repo_abs: Path) -> StepRecord:
                       stderr_tail=redact_repo(text, repo_abs), result=p.STATUS_REFUSED)
 
 
-def run_trial(trial: str, repo_abs: Path, repo_display: str, run_fn: RunFn = run_step) -> tuple[dict[str, Any], int]:
+def run_trial(trial: str, repo_abs: Path, repo_display: str, run_fn: RunFn = run_step,
+              stitch_disabled: Sequence[str] = ()) -> tuple[dict[str, Any], int]:
     """RT-01..RT-04 for one trial: allowlist, presence check, the steps, the log. Returns (run_log object, exit
     code) and writes ``<R>/out/run_trial/<t>/run_log.json``.
 
     WHY the allowlist again here (ATK-EV-25): ``main`` checks it first, but this function is importable; a caller
     that skips ``main`` must still never reach gate with a test trial. A refused id returns ({}, 2) and creates
-    nothing."""
-    refused = allowlist_refusal(trial)
+    nothing. The same holds for ``stitch_disabled`` (AB-06): an ablation on the real repository returns ({}, 2)
+    before any stage or log."""
+    refused = allowlist_refusal(trial) or ablation_refusal(stitch_disabled, repo_abs, trials=(trial,))
     if refused:
         print(refused, file=sys.stderr)
         return {}, p.EXIT_REFUSED
-    steps = trial_steps(trial, repo_abs)
+    steps = trial_steps(trial, repo_abs, stitch_disabled)
     refusal = presence_refusal(trial, presence_facts(repo_abs, trial))
     if refusal:
         print(refusal, file=sys.stderr)
@@ -107,27 +119,39 @@ def run_trial(trial: str, repo_abs: Path, repo_display: str, run_fn: RunFn = run
 
 
 def run_development(repo_abs: Path, repo_display: str, run_fn: RunFn = run_step,
-                    trials: Sequence[str] = p.DEVELOPMENT_TRIALS) -> tuple[dict[str, Any], int]:
+                    trials: Sequence[str] = p.DEVELOPMENT_TRIALS,
+                    stitch_disabled: Sequence[str] = ()) -> tuple[dict[str, Any], int]:
     """RT-06: every development trial in order, stop at the first one that is not ok (naming trial and step), then
-    the summary steps only if all succeeded; writes the development run_log.json and run_log.md."""
+    the summary steps only if all succeeded; writes the development run_log.json and run_log.md.
+
+    With ``stitch_disabled`` (an ablation, AB-02) every stitch step gets ``--disable-method`` and the summary steps
+    leave out ``--results`` (AB-09). The DB size of each trial (PT-02, stat only, after RT-01) goes into the
+    development log."""
+    refusal = ablation_refusal(stitch_disabled, repo_abs, trials=trials)
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return {}, p.EXIT_REFUSED
     logs: list[dict[str, Any]] = []
+    sizes: dict[str, int | None] = {}
     code = 0
     for i, trial in enumerate(trials):
         refusal = allowlist_refusal(trial)       # RT-01 also here: the list is imported, but stay explicit
         if refusal:
             print(refusal, file=sys.stderr)
             return {}, p.EXIT_REFUSED
-        log, code = run_trial(trial, repo_abs, repo_display, run_fn)
+        sizes[trial] = db_size_bytes(repo_abs, trial)
+        log, code = run_trial(trial, repo_abs, repo_display, run_fn, stitch_disabled)
         logs.append(log)
         if code != 0:
             stop = log["refused_step"] or log["failed_step"]
             print(f"development run stopped at trial {trial}, step {stop} (exit {code})", file=sys.stderr)
             break
     not_run = list(trials[len(logs):])
-    summary = summary_steps(trials)
+    summary = summary_steps(trials, with_results=not stitch_disabled)
     records = (run_steps(summary, repo_abs, run_fn, p.DEVELOPMENT_DIR_NAME) if code == 0
                else [not_run_record(s, repo_abs) for s in summary])
-    dev = development_log(repo_display, logs, not_run, records, utc_now())
+    dev = development_log(repo_display, logs, not_run, records, utc_now(), db_sizes=sizes,
+                          stitch_disabled=stitch_disabled)
     write_log(repo_abs, p.DEVELOPMENT_DIR_NAME, {p.RUN_LOG_JSON: json_text(dev), p.RUN_LOG_MD: development_md(dev)})
     if code == 0:
         stop = next((r for r in records if r.result in (p.STATUS_REFUSED, p.STATUS_FAILED)), None)
@@ -136,7 +160,8 @@ def run_development(repo_abs: Path, repo_display: str, run_fn: RunFn = run_step,
 
 
 def main(argv: Sequence[str] | None = None, run_fn: RunFn = run_step) -> int:
-    """Parse, check RT-01 first, then RT-08, then run. Returns the exit code (0 ok, 2 refused, else failed)."""
+    """Parse, check RT-01 first, then the ablation check (AB-06), then RT-08, then run. Returns the exit code (0 ok,
+    2 refused, else failed). Without ``--stitch-disable-method`` the calls are exactly the default chain's."""
     a = _parser().parse_args(argv)
     if a.trial is not None:
         refusal = allowlist_refusal(a.trial)
@@ -145,14 +170,19 @@ def main(argv: Sequence[str] | None = None, run_fn: RunFn = run_step) -> int:
             return p.EXIT_REFUSED
     repo_display = "." if a.repo is None else a.repo
     repo_abs = p.REPO if a.repo is None else Path(a.repo).resolve()
+    disabled = tuple(a.stitch_disable_method)
+    refusal = ablation_refusal(disabled, repo_abs)
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return p.EXIT_REFUSED
     bad = repo_refusal(repo_abs)
     if bad:
         print(bad, file=sys.stderr)
         return p.EXIT_REFUSED
     if a.development:
-        _dev, code = run_development(repo_abs, repo_display, run_fn)
+        _dev, code = run_development(repo_abs, repo_display, run_fn, stitch_disabled=disabled)
     else:
-        _log, code = run_trial(a.trial, repo_abs, repo_display, run_fn)
+        _log, code = run_trial(a.trial, repo_abs, repo_display, run_fn, stitch_disabled=disabled)
     print(f"run_trial: exit {code}; log in out/run_trial/{a.trial or p.DEVELOPMENT_DIR_NAME}/")
     return code
 

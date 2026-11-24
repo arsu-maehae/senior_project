@@ -17,8 +17,8 @@ from typing import Sequence
 
 from . import params as p
 
-__all__ = ["allowlist_refusal", "is_under", "repo_refusal", "PresenceFacts", "presence_facts", "window_trial_ids",
-           "presence_problems", "create_commands", "presence_refusal"]
+__all__ = ["allowlist_refusal", "is_under", "repo_refusal", "ablation_refusal", "PresenceFacts", "presence_facts",
+           "window_trial_ids", "presence_problems", "create_commands", "presence_refusal", "db_size_bytes"]
 
 
 def allowlist_refusal(trial: str, allowed: Sequence[str] = p.DEVELOPMENT_TRIALS) -> str | None:
@@ -60,6 +60,29 @@ def repo_refusal(repo: Path, real_repo: Path = p.REPO) -> str | None:
     return None
 
 
+def ablation_refusal(disabled: Sequence[str], repo: Path, real_repo: Path = p.REPO,
+                     trials: Sequence[str] = ()) -> str | None:
+    """Spec 06 AB-06 / AB-01 for ``--stitch-disable-method``: refusal text or None.
+
+    Refused: a method name stitch does not accept (only ``DISABLEABLE_METHODS``), and any disabled method when
+    ``--repo`` is, or lies inside, the real repository, or its ``out/`` / ``data/`` / ``out/stitch`` (or
+    ``out/stitch/<t>`` for each of ``trials``, ATK-EV-42: the real write targets) resolves into it. WHY in the
+    runner as well as in stitch: the runner would otherwise start gate on the real repo before stitch refuses, and
+    an ablation must never write a single committed folder. Pure apart from resolving links."""
+    bad = sorted(set(disabled) - set(p.DISABLEABLE_METHODS))
+    if bad:
+        return (f"refused: --stitch-disable-method accepts only {', '.join(p.DISABLEABLE_METHODS)} (spec 06 AB-01); "
+                f"got {', '.join(bad)}")
+    if not disabled:
+        return None
+    r = Path(repo)
+    stitch = r / p.STAGE_OUT_REL["stitch"]
+    if any(is_under(x, real_repo) for x in (r, r / "out", r / "data", stitch, *(stitch / t for t in trials))):
+        return ("refused: --stitch-disable-method runs only with a --repo outside the real repository (a scratch "
+                "repo; spec 06 AB-06); no stage was started")
+    return None
+
+
 @dataclass(frozen=True)
 class PresenceFacts:
     """What RT-02 looks at, read once: which input files exist and the trial ids in ``trial_windows.csv``
@@ -88,6 +111,15 @@ def presence_facts(repo: Path, trial: str) -> PresenceFacts:
                          offsets=(proc / f"{trial}{p.OFFSETS_SUFFIX}").is_file(),
                          changes=(proc / f"{trial}{p.CHANGES_SUFFIX}").is_file(),
                          window_ids=window_trial_ids(Path(repo) / p.WINDOWS_REL))
+
+
+def db_size_bytes(repo: Path, trial: str) -> int | None:
+    """Size of the trial's DB in bytes (PT-02), None if it is missing. Stat only: the DB is never opened (RT-02).
+    Only called after RT-01 accepted the trial."""
+    try:
+        return (Path(repo) / p.PROCESSED_REL / f"{trial}{p.DB_SUFFIX}").stat().st_size
+    except OSError:
+        return None
 
 
 def presence_problems(trial: str, facts: PresenceFacts) -> list[str]:

@@ -14,6 +14,7 @@ import csv
 import hashlib
 import io
 import json
+import os
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -127,6 +128,29 @@ def check_stitch_file_hashes(run_info: Mapping[str, Any], file_sha256: Mapping[s
             raise LabelError(f"refused: stitch run_info.json records no SHA-256 for {name}")
         if want.lower() != sha.lower():
             raise LabelError(f"refused: stitch {name} SHA-256 {sha} differs from stitch run_info.json {want}")
+
+
+# ATK-EV-42: the real repository (this checkout), for ``check_not_ablated``.
+REAL_REPO = Path(__file__).resolve().parents[2]
+
+
+def _same_or_under(path: Path, root: Path) -> bool:
+    """True iff ``path`` equals or lies under ``root`` after resolving links (case-insensitive on Windows)."""
+    a, b = os.path.normcase(os.path.realpath(path)), os.path.normcase(os.path.realpath(root))
+    return a == b or a.startswith(b.rstrip("\\/") + os.sep)
+
+
+def check_not_ablated(run_info: Mapping[str, Any], repo: Path, real_repo: Path = REAL_REPO) -> None:
+    """Spec 06 AB-06 / ATK-EV-42: in the real repository, refuse a stitch run_info.json that records non-empty
+    ``disabled_methods``. WHY: an ablated stitch output may exist only in a scratch repo; if one ever reached the
+    real ``out/stitch`` it must not be labelled as if it were the default run. A default run_info has no such key
+    (AB-05), so default behaviour is unchanged; a scratch repo is not checked."""
+    value = run_info.get("disabled_methods")
+    if not value:
+        return
+    if _same_or_under(repo, real_repo) and _same_or_under(real_repo, repo):
+        raise LabelError(f"refused: stitch run_info.json records disabled_methods {value!r} in the real repository "
+                         "(spec 06 AB-06; an ablated stitch run lives only in a scratch repo)")
 
 
 def load_stitch(folder: Path) -> StitchData:
