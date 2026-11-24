@@ -20,7 +20,7 @@ import math
 from typing import Any, Iterable, Mapping, Sequence
 
 from . import rank_metrics as rm
-from .rank_run import B0Result, KeyPathResult, ReadingResult, TrialRank
+from .rank_run import B0Result, KeyPathResult, NodePRF, ReadingResult, TrialRank
 from .rank_sweep import LAMBDA_GRID, SweepPoint, changed_keys, informativeness, stable_region
 from .writers import csv_text, md_header
 from .params import H5_MIN_MARGIN, SPLIT_DEVELOPMENT, VERDICT_DECIMALS, is_s06
@@ -31,7 +31,10 @@ __all__ = ["RANK_FILE", "RANK_MD", "RANK_TOTALS", "RANK_SWEEP", "RANK_SUMMARY_FI
            "PRIMARY_B0", "PATH_VARIANT_ORDER", "PAIRED_SET", "B0_SET", "CHANCE_NA_RECALL", "CHANCE_NA_MARGIN", "f6",
            "trial_rows", "trial_csv", "attack_readings", "contested_ids", "b0_contested_ids", "uncontested_rows",
            "ranking_values", "b0_values", "b0_of", "contested_plan", "r12", "f12", "at_least", "strictly_greater",
-           "h5_facts", "s06_facts", "total_rows", "sweep_rows",
+           "h5_facts", "s06_facts", "total_rows", "sweep_rows", "KIND_NODE_PRF", "KIND_NODE_PRF_SCENARIO",
+           "KIND_AUC_TRIAL", "KIND_AUC_POOLED", "PRF_VARIANT_ORDER", "AUC_CHANCE", "METHOD_AUC", "scenario_of",
+           "attack_scenarios", "addendum_rows", "node_prf_pairs", "node_prf_values", "auc_split", "auc_trial_values",
+           "auc_values", "SW04_SENTENCE",
            "informative_sentence", "rank_md", "summary_files"]
 
 RANK_FILE = "rank.csv"
@@ -59,6 +62,23 @@ PAIRED_SET = "full"
 B0_SET = "b0"
 CHANCE_NA_RECALL = "n/a: node recall at an equal node budget, no ranking order to draw at random"
 CHANCE_NA_MARGIN = "n/a: score margin across trials, no ranking order to draw at random"
+# Spec 06 section 10 (addendum D): node P/R/F1/FNR (D-A) and the path-level ROC-AUC (D-B) get their own row kinds, so
+# every earlier row kind keeps its rows (EV-08 style). No verdict, no threshold: no hypothesis was frozen for them.
+KIND_NODE_PRF, KIND_NODE_PRF_SCENARIO = "node_prf", "node_prf_scenario"
+KIND_AUC_TRIAL, KIND_AUC_POOLED = "auc_trial", "auc_pooled"
+PRF_VARIANT_ORDER: tuple[str, ...] = PATH_VARIANT_ORDER + ("b0",)
+AUC_CHANCE = 0.5                 # AUC-01: a random score order
+METHOD_AUC = "mann_whitney_ties_half_node_match"
+# ATK-EV-45: the rank.md sweep column that counts grid points with a positive S06 margin. Never called "held":
+# a sweep point is a development sensitivity reading, not an H5 verdict (rank_sweep.csv keeps its own columns).
+S06_POINTS_COL = "points with S06 margin > 0"
+S06_POINTS_TEXT = ("`points with S06 margin > 0` = grid points where the lowest key attack score exceeds the highest "
+                   "S06 score (development sensitivity, not an H5 verdict).")
+# Spec 06 SW-04 (owner 2026-11-24): the one sentence both the rank.md sweep section and the results.md sensitivity
+# section carry, so neither can be read as a re-tuning of the frozen parameters (066 at 6338884; 068).
+SW04_SENTENCE = ("Development-only sensitivity analysis: the sweep never changes a frozen default — λ, "
+                 "w1–w3, α, β, a, b and ε stay as frozen in decision 066 at 6338884, and every "
+                 "score, rank and H verdict uses only those values (decision 068).")
 
 RANK_COLUMNS: tuple[str, ...] = (
     "status_note", "trial_id", "split", "keyed", "row_kind", "variant", "match_reading", "key_path_id", "key_role",
@@ -73,7 +93,10 @@ RANK_COLUMNS: tuple[str, ...] = (
     "b0_recall", "budget_nodes_labelled", "full_recall_labelled", "b0_recall_labelled", "score_max", "score_min",
     "score_mean", "n_zero_score", "n_distinct_scores", "top_tie_size",
     # spec 06 section 3.1 (EV-02, EV-03): appended so every earlier column keeps its place
-    "contested", "n_positive_units", "key_nodes_labelled")
+    "contested", "n_positive_units", "key_nodes_labelled",
+    # spec 06 section 10 D-A (row_kind node_prf) and D-B (row_kind auc_trial): appended
+    "expected_key_nodes_covered", "expected_nodes_held", "node_precision", "node_recall", "node_f1", "node_fnr",
+    "auc", "auc_n_pos", "auc_n_neg", "auc_chance")
 TOTAL_COLUMNS: tuple[str, ...] = (
     "status_note", "split", "row_kind", "variant", "match_reading", "attack_trials", "key_paths", "key_paths_matched",
     "top1_expected", "top1_optimistic", "top1_pessimistic", "mrr_expected", "mrr_optimistic", "mrr_pessimistic",
@@ -88,11 +111,16 @@ TOTAL_COLUMNS: tuple[str, ...] = (
     "reading_scope", "contested_set", "primary_metric", "scope_trial_ids", "chance_per_key_mrr",
     "chance_pos_per_key_mrr", "labelled_recall_trials",
     # ATK-EV-16: why the S06 margin is undefined (empty when defined)
-    "s06_reason")
+    "s06_reason",
+    # spec 06 section 10 D-A (row_kinds node_prf, node_prf_scenario) and D-B (row_kind auc_pooled): appended
+    "scenario", "node_precision_mean", "node_recall_mean", "node_f1_mean", "node_fnr_mean", "node_precision_trials",
+    "node_recall_trials", "node_f1_trials", "auc", "auc_n_pos", "auc_n_neg", "auc_chance", "auc_trials")
 SWEEP_COLUMNS: tuple[str, ...] = (
     "status_note", "point_kind", "lambda_label", "lambda", "w1", "w2", "w3", "top1_expected", "mrr_expected",
     "s06_max_score", "key_attack_score_min", "s06_margin", "s06_held", "same_ranks_as_default",
-    "n_key_paths_changed", "changed_key_paths", "key_path_ranks")
+    "n_key_paths_changed", "changed_key_paths", "key_path_ranks",
+    # spec 06 SW-01 (070 primary, hop reading as the sweep): appended
+    "mrr_per_key_expected")
 
 _METHOD = {rm.READING_HOP: "hop_jaccard", rm.READING_NODE: "node_jaccard"}
 _TIE_NOTE = ("Ties (decision 065): expected rank r - 1 + (t+1)/(m+1) for m matches in a tie group of size t at "
@@ -208,8 +236,36 @@ def _dist_rows(t: TrialRank) -> list[dict[str, str]]:
     return out
 
 
+def _prf_row(t: TrialRank, p: NodePRF, budget: float | None) -> dict[str, str]:
+    """Spec 06 D-A: node P/R/F1/FNR of one variant (``budget_nodes`` = full's expected all-node budget on the b0
+    row, NP-02; empty for the path variants, whose top k is fixed by k)."""
+    row = _blank(t.split, t.trial_id, t.keyed, KIND_NODE_PRF)
+    row.update(variant=p.variant, method=p.method,
+               n_candidates=str(len(t.candidates[p.variant])) if p.variant in t.candidates else "",
+               k=str(p.k), key_node_count=str(p.key_nodes), budget_nodes=f6(budget) if p.variant == "b0" else "",
+               supporting_event_uids=";".join(p.covered_uids), expected_key_nodes_covered=f6(p.covered),
+               expected_nodes_held=f6(p.held), node_precision=f6(p.precision), node_recall=f6(p.recall),
+               node_f1=f6(p.f1), node_fnr=f6(p.fnr))
+    return row
+
+
+def _auc_row(t: TrialRank, variant: str) -> dict[str, str]:
+    """Spec 06 D-B / AUC-03: the per-trial AUC of one variant on one keyed attack trial (node reading); the positive
+    candidates are listed in ``matched_path_ids``."""
+    pos, neg, pos_ids = auc_split(t, variant)
+    auc = rm.mann_whitney_auc(pos, neg)
+    row = _blank(t.split, t.trial_id, t.keyed, KIND_AUC_TRIAL)
+    row.update(variant=variant, match_reading=rm.READING_NODE, method=METHOD_AUC,
+               threshold=f6(rm.MATCH_THRESHOLD), n_candidates=str(len(pos) + len(neg)),
+               candidate_count=str(len(pos)), matched_path_ids=_ids(pos_ids), auc=f6(auc), auc_n_pos=str(len(pos)),
+               auc_n_neg=str(len(neg)), auc_chance=f6(AUC_CHANCE))
+    return row
+
+
 def trial_rows(t: TrialRank) -> list[dict[str, str]]:
-    """Every rank.csv row of one trial: key-path and trial rows per (variant, reading), the b0 row, distributions."""
+    """Every rank.csv row of one trial: key-path and trial rows per (variant, reading), the b0 row, distributions;
+    then (spec 06 section 10, appended so every earlier row keeps its position) the ``node_prf`` rows (full, b1, b2,
+    b0) and the ``auc_trial`` rows (full, b1, b2) of a keyed attack trial."""
     rows: list[dict[str, str]] = []
     if t.attack:
         for rr in t.readings:
@@ -218,6 +274,10 @@ def trial_rows(t: TrialRank) -> list[dict[str, str]]:
         if t.b0 is not None:
             rows.append(_b0_row(t))
     rows.extend(_dist_rows(t))
+    if t.attack:
+        full = next((p for p in t.node_prf if p.variant == "full"), None)
+        rows.extend(_prf_row(t, p, None if full is None else full.held) for p in t.node_prf)
+        rows.extend(_auc_row(t, v) for v in PATH_VARIANT_ORDER)
     return rows
 
 
@@ -495,6 +555,114 @@ def total_rows(results: Sequence[TrialRank], split: str) -> list[dict[str, str]]
     for set_name, set_ids in ((PAIRED_SET, sets[PAIRED_SET]), (B0_SET, b0_contested_ids(results))):
         ids, b0s = b0_of(results, set_ids)
         out.append(_b0_total_row(split, KIND_B0_CONTESTED, SCOPE_CONTESTED, set_name, ids, b0s))
+    return out + addendum_rows(results, split)                     # spec 06 section 10, appended after the rest
+
+
+# ---------------------------------------------------------------- node P/R/F1/FNR and ROC-AUC (spec 06 section 10)
+
+def scenario_of(trial: str) -> str:
+    """The scenario id of a trial id (``s02_t00`` -> ``s02``)."""
+    return trial.split("_")[0]
+
+
+def node_prf_pairs(results: Sequence[TrialRank], variant: str,
+                   scenario: str | None = None) -> list[tuple[str, NodePRF]]:
+    """(trial id, NodePRF) of ``variant`` on every keyed attack trial (NP-03: S06 and unkeyed trials have no key
+    nodes and are left out), restricted to one scenario when given; trial order."""
+    return [(t.trial_id, p) for t in results if t.attack
+            and (scenario is None or scenario_of(t.trial_id) == scenario) for p in t.node_prf if p.variant == variant]
+
+
+def attack_scenarios(results: Sequence[TrialRank]) -> tuple[str, ...]:
+    """Scenario ids of the keyed attack trials, sorted."""
+    return tuple(sorted({scenario_of(t.trial_id) for t in results if t.attack}))
+
+
+def node_prf_values(prfs: Sequence[NodePRF]) -> dict[str, float | int | None]:
+    """NP-03 macro means (fsum) of P, R, F1, FNR over the trials where each is defined, with the number of trials
+    that entered each mean (P and F1 are undefined when the expected number of nodes held is 0, NP-05). WHY the mean
+    of per-trial F1 and not F1 of the mean P and R: each trial is one reconstruction, weighted equally (macro)."""
+    ps = [p.precision for p in prfs if p.precision is not None]
+    rs = [p.recall for p in prfs if p.recall is not None]
+    fs = [p.f1 for p in prfs if p.f1 is not None]
+    ns = [p.fnr for p in prfs if p.fnr is not None]
+    return {"attack_trials": len(prfs), "node_precision_mean": _mean(ps), "node_recall_mean": _mean(rs),
+            "node_f1_mean": _mean(fs), "node_fnr_mean": _mean(ns), "node_precision_trials": len(ps),
+            "node_recall_trials": len(rs), "node_f1_trials": len(fs)}
+
+
+def auc_split(t: TrialRank, variant: str) -> tuple[list[float], list[float], tuple[str, ...]]:
+    """(positive scores, negative scores, positive ids) of one keyed trial (AUC-01): positives = candidates
+    matching any key attack path under the node reading (EV-06); every other candidate is a negative, so a keyed S06
+    trial gives negatives only. An unkeyed trial gives nothing (it is left out)."""
+    if not t.keyed:
+        return [], [], ()
+    hit: set[str] = set()
+    for rr in t.readings:
+        if rr.variant == variant and rr.reading == rm.READING_NODE:
+            hit |= set(rr.trial.matched)
+    cands = t.candidates[variant]
+    return ([c.score for c in cands if c.path_id in hit], [c.score for c in cands if c.path_id not in hit],
+            tuple(sorted(hit)))
+
+
+def auc_trial_values(t: TrialRank, variant: str) -> dict[str, float | int | None]:
+    """AUC-03: AUC, n_pos and n_neg of one keyed attack trial (AUC None when either count is 0)."""
+    pos, neg, _ids = auc_split(t, variant)
+    return {"auc": rm.mann_whitney_auc(pos, neg), "auc_n_pos": len(pos), "auc_n_neg": len(neg)}
+
+
+def auc_values(results: Sequence[TrialRank], variant: str) -> dict[str, Any]:
+    """AUC-01: the pooled AUC over every keyed trial (attack and S06), with n_pos, n_neg and the pooled trial ids."""
+    pos: list[float] = []
+    neg: list[float] = []
+    ids: list[str] = []
+    for t in results:
+        if not t.keyed:
+            continue
+        p, n, _h = auc_split(t, variant)
+        pos += p
+        neg += n
+        ids.append(t.trial_id)
+    return {"auc": rm.mann_whitney_auc(pos, neg), "auc_n_pos": len(pos), "auc_n_neg": len(neg),
+            "auc_trials": len(ids), "trial_ids": tuple(ids)}
+
+
+def _prf_total_row(split: str, kind: str, variant: str, scenario: str,
+                   pairs: Sequence[tuple[str, NodePRF]]) -> dict[str, str]:
+    """One node P/R/F1/FNR totals row (NP-03): the macro means over ``pairs``; no primary metric, no verdict."""
+    v = node_prf_values([p for _t, p in pairs])
+    row = {c: "" for c in TOTAL_COLUMNS}
+    row.update(status_note=_note(split), split=split, row_kind=kind, variant=variant, reading_scope=SCOPE_ALL,
+               scenario=scenario, scope_trial_ids=";".join(tid for tid, _p in pairs),
+               attack_trials=_count(v["attack_trials"]))
+    for name in ("node_precision_mean", "node_recall_mean", "node_f1_mean", "node_fnr_mean"):
+        row[name] = f6(v[name])
+    for name in ("node_precision_trials", "node_recall_trials", "node_f1_trials"):
+        row[name] = _count(v[name])
+    return row
+
+
+def _auc_total_row(results: Sequence[TrialRank], split: str, variant: str) -> dict[str, str]:
+    """One ``auc_pooled`` row (AUC-01): pooled over the keyed trials; ``attack_trials`` = keyed attack trials among
+    them, ``auc_trials`` = every pooled trial (keyed S06 included)."""
+    v = auc_values(results, variant)
+    row = {c: "" for c in TOTAL_COLUMNS}
+    row.update(status_note=_note(split), split=split, row_kind=KIND_AUC_POOLED, variant=variant,
+               match_reading=rm.READING_NODE, reading_scope=SCOPE_ALL, scope_trial_ids=";".join(v["trial_ids"]),
+               attack_trials=str(sum(1 for t in results if t.attack)), auc=f6(v["auc"]),
+               auc_n_pos=str(v["auc_n_pos"]), auc_n_neg=str(v["auc_n_neg"]), auc_chance=f6(AUC_CHANCE),
+               auc_trials=str(v["auc_trials"]))
+    return row
+
+
+def addendum_rows(results: Sequence[TrialRank], split: str) -> list[dict[str, str]]:
+    """The spec 06 section 10 totals rows, appended after every earlier row: ``node_prf`` per variant (full, b1, b2,
+    b0), ``node_prf_scenario`` per (variant, scenario), ``auc_pooled`` per path variant."""
+    out = [_prf_total_row(split, KIND_NODE_PRF, v, "", node_prf_pairs(results, v)) for v in PRF_VARIANT_ORDER]
+    out += [_prf_total_row(split, KIND_NODE_PRF_SCENARIO, v, s, node_prf_pairs(results, v, s))
+            for v in PRF_VARIANT_ORDER for s in attack_scenarios(results)]
+    out += [_auc_total_row(results, split, v) for v in PATH_VARIANT_ORDER]
     return out
 
 
@@ -518,7 +686,8 @@ def sweep_rows(default: SweepPoint, points: Sequence[SweepPoint], split: str) ->
                     "s06_held": "" if margin is None else str(int(strictly_greater(margin, 0.0))),
                     "same_ranks_as_default": "1" if not changed else "0", "n_key_paths_changed": str(len(changed)),
                     "changed_key_paths": ";".join(changed),
-                    "key_path_ranks": ";".join(f"{t}:{k}={f6(r)}" for t, k, r in p.key_ranks)})
+                    "key_path_ranks": ";".join(f"{t}:{k}={f6(r)}" for t, k, r in p.key_ranks),
+                    "mrr_per_key_expected": f6(p.mrr_per_key)})
     return out
 
 
@@ -669,7 +838,7 @@ def _sweep_section(default: SweepPoint, points: Sequence[SweepPoint], check: Map
     lines = ["", "## Stability sweep (spec 05 section 5.2 step 2; decision 066)", "",
              "Scores recomputed from `ranked_paths.csv` columns only (L = (1 - e^(-seq_len/lambda)) * edge_score; "
              "score = w1 L + w2 node_score + w3 identity_coherence). The sweep never changes a parameter; it reports.",
-             "", f"- The sweep is {informative_sentence(facts)} (ATK-SC-22).",
+             "", SW04_SENTENCE, "", f"- The sweep is {informative_sentence(facts)} (ATK-SC-22).",
              f"- Default check: {check['paths']} paths, max |recomputed - written full score| = "
              f"{check['max_abs_diff']:.3g} (tolerance 1e-6); rank mismatches {check['rank_mismatch']}.",
              f"- Default point: lambda {default.lam:.6f}, w = ({default.w[0]:.6f}, {default.w[1]:.6f}, "
@@ -690,14 +859,18 @@ def _sweep_section(default: SweepPoint, points: Sequence[SweepPoint], check: Map
         ps = [p for p in grid if p.lam_label == lab]
         t1 = [p.top1 for p in ps if p.top1 is not None]
         mr = [p.mrr for p in ps if p.mrr is not None]
-        held = [p for p in ps if p.attack_min is not None and p.s06_max is not None and p.attack_min > p.s06_max]
+        pk = [p.mrr_per_key for p in ps if p.mrr_per_key is not None]
+        above = [p for p in ps if p.attack_min is not None and p.s06_max is not None and p.attack_min > p.s06_max]
         by_lam.append(_with_chance({"lambda": lab, "top1_min": f6(min(t1) if t1 else None),
                                     "top1_max": f6(max(t1) if t1 else None), "mrr_min": f6(min(mr) if mr else None),
                                     "mrr_max": f6(max(mr) if mr else None),
-                                    "s06_held_points": f"{len(held)}/{len(ps)}"}, chance))
-    lines += _section("Metric range over the w grid per lambda (hop reading, expected ties, per-trial MRR)",
-                      ("lambda", "top1_min", "top1_max", "mrr_min", "mrr_max") + _SWEEP_CHANCE_COLS
-                      + ("s06_held_points",), by_lam)
+                                    "per_key_mrr_min": f6(min(pk) if pk else None),
+                                    "per_key_mrr_max": f6(max(pk) if pk else None),
+                                    S06_POINTS_COL: f"{len(above)}/{len(ps)}"}, chance))
+    lines += _section("Metric range over the w grid per lambda (hop reading, expected ties; per-trial MRR and "
+                      "per-key MRR side by side). " + S06_POINTS_TEXT,
+                      ("lambda", "top1_min", "top1_max", "mrr_min", "mrr_max", "per_key_mrr_min", "per_key_mrr_max")
+                      + _SWEEP_CHANCE_COLS + (S06_POINTS_COL,), by_lam)
     dw = [_with_chance({"lambda": p.lam_label, "top1_exp": f6(p.top1), "mrr_exp": f6(p.mrr),
                         "s06_max": f6(p.s06_max), "attack_min": f6(p.attack_min),
                         "changed": ";".join(changed_keys(p, default)) or "none"}, chance)

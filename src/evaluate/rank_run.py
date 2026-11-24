@@ -25,8 +25,8 @@ from .rank_inputs import (PATH_VARIANTS, ScoreData, check_key_against_stitch, ch
 from .rank_sweep import SweepPoint, SweepTrial, components_of, run_sweep
 from .run import default_stitch_dir
 
-__all__ = ["KeyPathResult", "ReadingResult", "B0Result", "TrialRank", "check_key_scenario", "b0_unit_uids",
-           "labelled_key_nodes",
+__all__ = ["KeyPathResult", "ReadingResult", "B0Result", "NodePRF", "TrialRank", "check_key_scenario",
+           "b0_unit_uids", "labelled_key_nodes", "METHOD_PRF_TOPK", "METHOD_PRF_B0", "node_prf_of", "check_np04",
            "positive_b0_units", "canonical_b0_rows", "rank_from_inputs", "rank_trial", "sweep_of"]
 
 
@@ -100,6 +100,24 @@ class B0Result:
 
 
 @dataclass(frozen=True)
+class NodePRF:
+    """Node P/R/F1/FNR of one variant on one keyed attack trial (spec 06 D-A, NP-01..05): full / b1 / b2 on their
+    top-k paths (k = key attack paths, ties at the cut by expectation), b0 at full's all-node budget. ``covered_uids``
+    = the key nodes held with a share > 0 (supporting uids)."""
+    variant: str
+    method: str
+    k: int
+    key_nodes: int
+    covered: float
+    held: float
+    covered_uids: tuple[str, ...]
+    precision: float | None
+    recall: float | None
+    f1: float | None
+    fnr: float | None
+
+
+@dataclass(frozen=True)
 class TrialRank:
     """Everything the ranking check produced for one trial (rows and texts are built by ``rank_report``)."""
     trial_id: str
@@ -113,6 +131,7 @@ class TrialRank:
     sweep_trial: SweepTrial | None
     params: Mapping[str, float]
     inputs: Mapping[str, str] = field(default_factory=dict)
+    node_prf: tuple[NodePRF, ...] = ()          # spec 06 D-A: full, b1, b2, b0 (keyed attack trials only)
 
 
 # ---------------------------------------------------------------- pure assembly
@@ -184,6 +203,47 @@ def _b0(full: Sequence[rm.Candidate], k: int, key_nodes: frozenset[str], nodes: 
                     key_nodes_labelled=len(reach), n_positive_units=positive_b0_units(b0_rows))
 
 
+METHOD_PRF_TOPK = "node_prf_topk_expected"
+METHOD_PRF_B0 = "node_prf_b0_equal_all_node_budget"
+
+
+def _prf(variant: str, method: str, k: int, key_nodes: frozenset[str], covered: float, held: float,
+         uids: frozenset[str]) -> NodePRF:
+    """One NodePRF from the expected counts (``rank_metrics.node_prf``)."""
+    p, r, f1, fnr = rm.node_prf(covered, held, len(key_nodes))
+    return NodePRF(variant=variant, method=method, k=k, key_nodes=len(key_nodes), covered=covered, held=held,
+                   covered_uids=tuple(sorted(uids)), precision=p, recall=r, f1=f1, fnr=fnr)
+
+
+def node_prf_of(cands: Mapping[str, Sequence[rm.Candidate]], k: int, key_nodes: frozenset[str],
+                nodes: Mapping[str, frozenset[str]], b0_rows: Sequence[Mapping[str, str]]) -> tuple[NodePRF, ...]:
+    """Spec 06 NP-01, NP-02, NP-05: full, b1, b2 on their own top-k ``context`` = 0 nodes; b0 at **full's** expected
+    all-node budget on the all-node basis (not H4's labelled primary). Key nodes = the H4 all-node key set (canonical,
+    ST-05 copies merged). Pure."""
+    out: list[NodePRF] = []
+    full_held = 0.0
+    for variant in PATH_VARIANTS:
+        covered, held, uids = rm.topk_node_coverage(cands[variant], k, nodes, key_nodes)
+        if variant == "full":
+            full_held = held
+        out.append(_prf(variant, METHOD_PRF_TOPK, k, key_nodes, covered, held, uids))
+    covered, held, uids = rm.b0_coverage(b0_rows, full_held, key_nodes)
+    out.append(_prf("b0", METHOD_PRF_B0, k, key_nodes, covered, held, uids))
+    return tuple(out)
+
+
+def check_np04(trial: str, prf: Sequence[NodePRF], b0: B0Result) -> None:
+    """NP-04: full's node recall must equal the H4 all-node ``full_recall`` of the same trial (12 decimals, RS-09
+    precision), and full's expected nodes held must equal the H4 budget. WHY a refusal: both are computed from the
+    same top-k coverage; a difference means the two codes read different node sets, and neither number can be
+    trusted. An internal consistency check only; the independent check is the data-checker's recomputation."""
+    full = next(p for p in prf if p.variant == "full")
+    recall = 0.0 if full.recall is None else full.recall
+    if round(recall, 12) != round(b0.full_recall, 12) or round(full.held, 12) != round(b0.budget, 12):
+        raise EvalError(f"refused: {trial}: NP-04: full node recall {recall!r} / nodes held {full.held!r} differ "
+                        f"from the H4 all-node full_recall {b0.full_recall!r} / budget {b0.budget!r}")
+
+
 def canonical_b0_rows(rows: Sequence[Mapping[str, str]], alias: Mapping[str, str]) -> list[dict[str, str]]:
     """``b0_ranked.csv`` rows with ST-05 copies in ``event_uids`` replaced by their representative (ATK-SC-16), so
     the H4 budget counts one 4624 once on both sides."""
@@ -218,16 +278,19 @@ def rank_from_inputs(trial: str, split: str, stitch: StitchData, score: ScoreDat
     readings = tuple(_reading(v, r, cands[v], key_paths, nodes) for v in PATH_VARIANTS for r in rm.READINGS
                      if key_paths)
     b0 = None
+    prf: tuple[NodePRF, ...] = ()
     if key_paths:
         key_nodes = frozenset().union(*(kp.node_uids for kp in key_paths))
-        b0 = _b0(cands["full"], len(key_paths), key_nodes, nodes, rm.unit_node_sets(score.units, alias),
-                 canonical_b0_rows(score.b0, alias))
+        b0_rows = canonical_b0_rows(score.b0, alias)
+        b0 = _b0(cands["full"], len(key_paths), key_nodes, nodes, rm.unit_node_sets(score.units, alias), b0_rows)
+        prf = node_prf_of(cands, len(key_paths), key_nodes, nodes, b0_rows)          # spec 06 D-A
+        check_np04(trial, prf, b0)                                                    # NP-04, refuses
     hop_full = [r for r in readings if r.variant == "full" and r.reading == rm.READING_HOP]
     sweep = SweepTrial(trial_id=trial, paths=components_of(score.ranked),
                        key_matches=tuple((r.key_path.path_id, frozenset(r.matched))
                                          for h in hop_full for r in h.key_paths))
     return TrialRank(trial, split, True, bool(key_paths), readings, b0, dists, cands, sweep, params,
-                     dict(inputs or {}))
+                     dict(inputs or {}), prf)
 
 
 # ---------------------------------------------------------------- reads

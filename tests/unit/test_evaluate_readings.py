@@ -369,7 +369,12 @@ def test_evt07_new_row_kinds_leave_the_existing_ranking_and_b0_recall_rows_and_c
     assert all(r["primary_metric"] == "mrr_per_key_expected" for r in ranking)
     assert len(pick(rows, row_kind="b0_recall")) == 1 and pick(rows, row_kind="b0_recall")[0]["reading_scope"] == "all"
     kinds = {r["row_kind"] for r in rows}
-    assert kinds == {"ranking", "b0_recall", "ranking_contested", "b0_recall_contested"}
+    # spec 06 section 10 (D-A, D-B) appends row kinds; every earlier kind keeps exactly its rows (the old set is a subset,
+    # and the new kinds are only the three the addendum names)
+    old_kinds = {"ranking", "b0_recall", "ranking_contested", "b0_recall_contested"}
+    assert old_kinds <= kinds
+    assert kinds - old_kinds <= {"node_prf", "node_prf_scenario", "auc_pooled"}
+    assert len(pick(rows, row_kind="ranking_contested")) == 8 and len(pick(rows, row_kind="b0_recall_contested")) == 2
     assert {r["reading_scope"] for r in rows if r["row_kind"].endswith("_contested")} == {"contested"}
 
 

@@ -451,7 +451,10 @@ def test_rst06_results_csv_columns_and_row_keys(ranked):
                 "n_key_paths", "source"):
         assert col in header, col
     assert "dev_check" in header and "verdict" not in header                         # RS-10
-    assert {r["table"] for r in rows} == {"H1", "H2", "H3", "H4", "H5", "baselines", "contested", "recall"}
+    # the old tables keep their rows; spec 06 section 10 adds the three tables below (D-A reconstruction, D-B auc, D-D sensitivity)
+    old_tables = {"H1", "H2", "H3", "H4", "H5", "baselines", "contested", "recall"}
+    assert old_tables <= {r["table"] for r in rows}
+    assert {r["table"] for r in rows} - old_tables <= {"reconstruction", "auc", "sensitivity"}
     assert {r["reading_scope"] for r in rows} == {"all", "contested"}
     assert {r["split"] for r in rows} == {"development"}
     # one row per (table, variant, reading_scope, metric): the paired and own contested rows of H3 / H4 share that key and
@@ -461,7 +464,11 @@ def test_rst06_results_csv_columns_and_row_keys(ranked):
     for r in rows:
         if r["observed"] and r["metric"] not in ("contested_trials", "labelled_recall_trials",
                                                   "trials_full_above_b0_labelled"):
-            assert re.fullmatch(r"-?\d\.\d{6}", r["observed"]), r
+            if r["table"] in ("auc", "sensitivity") and r["metric"] in ("auc_n_pos", "auc_n_neg", "sweep_points",
+                                                                         "same_ranks_points"):
+                assert re.fullmatch(r"\d+", r["observed"]), r             # counts of the section 10 tables are integers
+            else:
+                assert re.fullmatch(r"-?\d\.\d{6}", r["observed"]), r
 
 
 def test_rst06_baselines_and_recall_tables_hold_all_variants_labelled_recall_primary_all_node_beside(ranked):

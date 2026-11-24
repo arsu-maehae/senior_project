@@ -66,3 +66,62 @@ def test_keyed_development_trials_are_t00_of_s02_to_s07_and_a_subset_of_the_deve
     assert set(ep.KEYED_DEVELOPMENT_TRIALS) <= set(ep.DEVELOPMENT_TRIALS)
     assert tuple(ep.DEVELOPMENT_TRIALS) == tuple(sp.ALLOWED_TRIALS) or set(ep.DEVELOPMENT_TRIALS) == set(sp.ALLOWED_TRIALS)
     assert "s01_t00" not in ep.KEYED_DEVELOPMENT_TRIALS
+
+
+# ================================================================================================ SW-04 (spec 06 section 10)
+# The frozen values at commit 6338884, the one the SW-04 sentence names, are read from git itself: neither copy in the
+# working tree can then move the other (and a later edit of score/params.py cannot move the reference).
+FREEZE_COMMIT = "6338884"
+SW04_SENTENCE = ("Development-only sensitivity analysis: the sweep never changes a frozen default — λ, "
+                 "w1–w3, α, β, a, b and ε stay as frozen in decision 066 at 6338884, and every "
+                 "score, rank and H verdict uses only those values (decision 068).")
+
+
+def _frozen_defaults_at_freeze_commit() -> dict[str, float]:
+    """The ``ScoreParams`` field defaults of ``src/score/params.py`` at the freeze commit (ast, no import)."""
+    import ast
+    import subprocess
+    try:
+        src = subprocess.run(["git", "show", f"{FREEZE_COMMIT}:src/score/params.py"], cwd=REPO, check=True,
+                             capture_output=True, text=True, encoding="utf-8").stdout
+    except (OSError, subprocess.CalledProcessError):
+        pytest.skip(f"git object {FREEZE_COMMIT} is not available here")
+    (cls,) = [n for n in ast.parse(src).body if isinstance(n, ast.ClassDef) and n.name == "ScoreParams"]
+    out = {}
+    for n in cls.body:
+        if isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name) and n.value is not None:
+            out[n.target.id] = float(eval(compile(ast.Expression(n.value), "<freeze>", "eval"), {"math": math}))
+    return out
+
+
+def test_sw04_score_params_defaults_equal_the_values_at_the_freeze_commit():
+    old = _frozen_defaults_at_freeze_commit()
+    for name in DECISION_066:
+        assert getattr(sp.ScoreParams(), name) == pytest.approx(old[name], abs=1e-15), name
+        assert old[name] == pytest.approx(DECISION_066[name], abs=1e-15), name
+
+
+def test_sw04_evaluate_frozen_parameters_equal_the_values_at_the_freeze_commit():
+    old = _frozen_defaults_at_freeze_commit()
+    assert set(ep.FROZEN_SCORE_PARAMETERS) == set(DECISION_066)
+    for name, want in ep.FROZEN_SCORE_PARAMETERS.items():
+        assert want == pytest.approx(old[name], abs=1e-15), name
+
+
+def test_sw04_order_table_pin_is_unchanged_since_the_freeze_commit():
+    import subprocess
+    try:
+        old = subprocess.run(["git", "show", f"{FREEZE_COMMIT}:src/score/params.py"], cwd=REPO, check=True,
+                             capture_output=True, text=True, encoding="utf-8").stdout
+    except (OSError, subprocess.CalledProcessError):
+        pytest.skip(f"git object {FREEZE_COMMIT} is not available here")
+    assert f'ORDER_TABLE_SHA256 = "{HASH_067}"' in old
+    assert sp.ORDER_TABLE_SHA256 == ep.FROZEN_ORDER_TABLE_SHA256 == HASH_067
+
+
+def test_sw04_the_sentence_is_one_sentence_naming_every_frozen_parameter_and_both_decisions():
+    from evaluate import rank_report as rr
+    assert rr.SW04_SENTENCE == SW04_SENTENCE
+    assert SW04_SENTENCE.count(". ") == 0 and SW04_SENTENCE.endswith(".")           # one sentence
+    for token in ("λ", "w1–w3", "α", "β", "a, b", "ε", "decision 066", "6338884", "decision 068", "never changes"):
+        assert token in SW04_SENTENCE

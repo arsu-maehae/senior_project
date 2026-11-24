@@ -60,7 +60,7 @@ from .rank_report import summary_files as rank_summary_files
 from .rank_report import trial_csv as rank_trial_csv
 from .rank_run import rank_trial, sweep_of
 from .results_report import RESULTS_FILES
-from .results_run import development_results
+from .results_run import development_results, guarded_trials, real_repo_ablation_refusal
 from .run import (default_out_dir, default_stitch_dir, evaluate_trial, summary_dir, summary_files, utc_now)
 from .writers import (FACTS_FILE, JSON_FILE, KEYED_FILE, LABEL_RECALL_FILE, LABEL_RECALL_MD, MD_FILE, RUN_INFO_FILE,
                       SUMMARY_CSV, SUMMARY_MD, TOTALS_FILE, kept_file_refusal, replace_folder)
@@ -260,7 +260,14 @@ def _run_results(a: argparse.Namespace, repo: Path) -> int:
 
 
 def _run(a: argparse.Namespace, repo: Path) -> int:
-    """Dispatch on the parsed arguments; option combinations that do not apply are refused."""
+    """Dispatch on the parsed arguments; option combinations that do not apply are refused. First (ATK-EV-42): in
+    the real repository no evaluation reads an ablated stitch run (``real_repo_ablation_refusal``)."""
+    extra = [] if getattr(a, "stitch_dir", None) is None else [Path(a.stitch_dir)]
+    if getattr(a, "trial", None) is not None and a.trial not in DEVELOPMENT_TRIALS:
+        extra = []                       # a test id: the allowlist below refuses it before any file is opened
+    reason = real_repo_ablation_refusal(repo, guarded_trials(getattr(a, "trial", None), bool(a.development)), extra)
+    if reason:
+        raise EvalError(reason)
     if a.results:
         return _run_results(a, repo)
     if a.rank or a.rank_sweep:

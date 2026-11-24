@@ -52,7 +52,8 @@ __all__ = ["ATTACK_ROLES", "MATCH_THRESHOLD", "READING_HOP", "READING_NODE", "RE
            "Candidate", "KeyPath", "Placement", "jaccard", "copy_alias_map", "canonical", "member_logon_uid_set",
            "key_attack_paths", "key_hop_node_uids", "build_key_paths", "positive_ids", "first_rr_mean",
            "check_groups", "candidates_of", "path_node_sets", "unit_node_sets", "matches", "placement", "chance_line",
-           "score_gap", "inclusion_probabilities", "expected_coverage", "b0_recall", "distribution"]
+           "score_gap", "inclusion_probabilities", "expected_coverage", "b0_coverage", "b0_recall",
+           "topk_node_coverage", "node_prf", "mann_whitney_auc", "distribution"]
 
 ATTACK_ROLES: frozenset[str] = frozenset({"attack", "attack_pair"})
 MATCH_THRESHOLD = 0.5            # handoff 14.2, spec 05 section 7.3
@@ -387,14 +388,17 @@ def expected_coverage(nodes: Mapping[str, frozenset[str]], sure: Iterable[str], 
     return dict(sorted(out.items()))
 
 
-def b0_recall(b0_rows: Sequence[Mapping[str, str]], budget: float,
-              key_nodes: frozenset[str]) -> tuple[float, float]:
-    """(expected recall of ``key_nodes``, expected nodes held) of ``b0`` taking units in rank order until it holds
-    ``budget`` event nodes; the tie group at the cut is read by expectation at node level (module docstring)."""
+def b0_coverage(b0_rows: Sequence[Mapping[str, str]], budget: float,
+                key_nodes: frozenset[str]) -> tuple[float, float, frozenset[str]]:
+    """(expected key nodes covered, expected nodes held, key nodes held with a share > 0) of ``b0`` taking units in
+    rank order until it holds ``budget`` event nodes; the tie group at the cut is read by expectation at node level
+    (module docstring). WHY a separate function: H4 needs the recall only, the node P/R/F1 of spec 06 NP-02 needs the
+    numerator and the nodes held as well, and both must come from one walk so they cannot disagree."""
     items = [(r["unit_id"], _int(r["rank"], "b0 rank"), _int(r["tie_size"], "b0 tie_size"),
               frozenset(split_list(r["event_uids"]))) for r in b0_rows]
     check_groups([(u, rk, ts) for u, rk, ts, _ in items], "b0_ranked.csv")
     held: set[str] = set()
+    touched: set[str] = set()
     hit = 0.0
     total = 0.0
     for rank in sorted({rk for _, rk, _, _ in items}):
@@ -407,12 +411,68 @@ def b0_recall(b0_rows: Sequence[Mapping[str, str]], budget: float,
             held |= new
             total += len(new)
             hit += len(new & key_nodes)
+            touched |= new & key_nodes
             continue
         share = (budget - total) / len(new)
         hit += share * len(new & key_nodes)
+        touched |= new & key_nodes
         total = budget
+    return hit, total, frozenset(touched)
+
+
+def b0_recall(b0_rows: Sequence[Mapping[str, str]], budget: float,
+              key_nodes: frozenset[str]) -> tuple[float, float]:
+    """(expected recall of ``key_nodes``, expected nodes held) of ``b0`` at ``budget`` (``b0_coverage``)."""
+    hit, total, _touched = b0_coverage(b0_rows, budget, key_nodes)
     recall = hit / len(key_nodes) if key_nodes else 0.0
     return recall, total
+
+
+# ---------------------------------------------------------------- node P/R/F1/FNR on the top-k (spec 06 D-A)
+
+def topk_node_coverage(candidates: Sequence[Candidate], k: int, nodes: Mapping[str, frozenset[str]],
+                       key_nodes: frozenset[str]) -> tuple[float, float, frozenset[str]]:
+    """(expected key nodes covered, expected distinct nodes held, key nodes covered with a share > 0) of the top-k
+    candidates, the tie group at the cut read by expectation (``inclusion_probabilities``, ``expected_coverage``;
+    NP-01). The two sums are formed exactly as the H4 budget and all-node recall are (plain ``sum`` over the same
+    coverage map), so NP-04 can compare them."""
+    sure, cut, slots = inclusion_probabilities(candidates, k)
+    cover = expected_coverage(nodes, sure, cut, slots)
+    held = sum(cover.values())
+    covered = sum(cover.get(u, 0.0) for u in key_nodes)
+    return covered, held, frozenset(u for u in key_nodes if cover.get(u, 0.0) > 0.0)
+
+
+def node_prf(covered: float, held: float, n_key: int) -> tuple[float | None, float | None, float | None,
+                                                                float | None]:
+    """(P, R, F1, FNR) from expected key nodes covered, expected nodes held and the key node count (NP-01, NP-05).
+    P = covered / held, undefined (None) when nothing is held; R = covered / n_key, undefined when the key has no
+    node; F1 = 2PR / (P + R), undefined when P or R is, and 0 when P = R = 0 (the limit of 2PR / (P + R), which is at
+    most 2 min(P, R)); FNR = 1 - R. WHY undefined and not 0: a mean over trials must leave an undefined trial out
+    instead of counting it as a miss or a hit."""
+    p = covered / held if held > 0 else None
+    r = covered / n_key if n_key > 0 else None
+    if p is None or r is None:
+        f1 = None
+    elif p + r == 0:
+        f1 = 0.0
+    else:
+        f1 = 2 * p * r / (p + r)
+    return p, r, f1, (None if r is None else 1.0 - r)
+
+
+# ---------------------------------------------------------------- pooled ROC-AUC (spec 06 D-B)
+
+def mann_whitney_auc(positive: Sequence[float], negative: Sequence[float]) -> float | None:
+    """P(positive score > negative score) + 0.5 P(equal) over every (positive, negative) pair, scores compared at 12
+    decimals (the written precision, ATK-SC-24); None when either side is empty (AUC-03). Counted in integers (2 per
+    win, 1 per tie) so the value is exact before the one division."""
+    if not positive or not negative:
+        return None
+    pos = [round(s, 12) for s in positive]
+    neg = [round(s, 12) for s in negative]
+    twice = sum(2 if a > b else 1 if a == b else 0 for a in pos for b in neg)
+    return twice / (2 * len(pos) * len(neg))
 
 
 # ---------------------------------------------------------------- unkeyed trials

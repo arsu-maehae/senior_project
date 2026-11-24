@@ -18,11 +18,16 @@ from . import rank_metrics as rm
 from .inputs import EvalError
 from .params import (H1_TOP1_MIN, H2_MRR_PER_KEY_MIN, H3_MIN_DIFFERENCE, H4_MIN_DIFFERENCE, H5_MIN_MARGIN,
                      SPLIT_DEVELOPMENT)
-from .rank_report import (B0_SET, CHANCE_NA_MARGIN, CHANCE_NA_RECALL, KIND_B0, KIND_B0_CONTESTED, KIND_RANKING,
-                          KIND_RANKING_CONTESTED, PAIRED_SET, PATH_VARIANT_ORDER, SCOPE_ALL, SCOPE_CONTESTED,
-                          at_least, attack_readings, b0_contested_ids, b0_of, b0_values, contested_ids, f6, f12,
-                          h5_facts, r12, ranking_values, strictly_greater, total_rows, uncontested_rows)
-from .rank_run import TrialRank
+from .rank_report import (AUC_CHANCE, B0_SET, CHANCE_NA_MARGIN, CHANCE_NA_RECALL, KIND_AUC_POOLED, KIND_B0,
+                          KIND_B0_CONTESTED, KIND_NODE_PRF, KIND_NODE_PRF_SCENARIO, KIND_RANKING,
+                          KIND_RANKING_CONTESTED, PAIRED_SET, PATH_VARIANT_ORDER, PRF_VARIANT_ORDER, SCOPE_ALL,
+                          SW04_SENTENCE,
+                          SCOPE_CONTESTED, at_least, attack_readings, attack_scenarios, auc_trial_values, auc_values,
+                          b0_contested_ids, b0_of, b0_values, contested_ids, f6, f12, h5_facts, informative_sentence,
+                          node_prf_pairs, node_prf_values, r12, ranking_values, strictly_greater, total_rows,
+                          uncontested_rows)
+from .rank_run import TrialRank, sweep_of
+from .rank_sweep import SweepPoint, changed_keys, informativeness
 from .writers import csv_text, md_header
 
 __all__ = ["RESULTS_MD", "RESULTS_CSV", "RESULTS_FILES", "RESULTS_NOTE", "VERDICT_COLUMN", "RESULTS_COLUMNS",
@@ -409,10 +414,167 @@ def _recall(ctx: _Ctx) -> list[dict[str, str]]:
             _b0_metric(ctx, "recall", "b0", None, "b0_recall_mean", note="all context-0 nodes, beside")]
 
 
-def result_rows(results: Sequence[TrialRank], split: str = SPLIT_DEVELOPMENT) -> list[dict[str, str]]:
-    """Every results.csv row, table by table (H1-H5, baselines, contested, recall)."""
+# ---------------------------------------------------------------- spec 06 section 10 (addendum D): no verdict anywhere
+
+TABLE_RECON, TABLE_AUC, TABLE_SWEEP = "reconstruction", "auc", "sensitivity"
+CHANCE_NA_PRF = "n/a: node set measure at a fixed node budget, no ranking order to draw at random"
+CHANCE_NA_AUC_POS = "n/a: the AUC chance line is 0.5 on any candidate set"
+PRF_METRICS: tuple[str, ...] = ("node_precision_mean", "node_recall_mean", "node_f1_mean", "node_fnr_mean")
+_PRF_TRIALS = {"node_precision_mean": "node_precision_trials", "node_recall_mean": "node_recall_trials",
+               "node_f1_mean": "node_f1_trials", "node_fnr_mean": "node_recall_trials"}
+_P_NOTE = ("P = share of the expected held nodes that the key lists; a held event the key does not list counts as "
+           "'not in key' (the key lists the move evidence only)")
+# SW-03: the sensitivity table never uses this word (checked on its rows and its Markdown block).
+SWEEP_BANNED_WORD = "stable"
+SWEEP_READING = "hop reading (decision 068: the sweep matches key hops by target logon uids)"
+LIMIT_AUC_POOLED = ("AUC-02: the pooled AUC pools scores across trials. A path score is a score for ordering, not a "
+                    "probability (Correction J), so the pooled AUC is a summary only.")
+LIMIT_AUC_NEGATIVES = ("AUC-03: pooled negatives from other trials and from S06 measure the score level across "
+                       "scenarios, which Correction J does not make comparable; the per-trial AUC is shown beside it, "
+                       "and an AUC with n_pos or n_neg = 0 is undefined.")
+
+
+def _find(ctx: _Ctx, kind: str, variant: str, scenario: str = "") -> Mapping[str, str]:
+    """The rendered totals row of an addendum row kind (EvalError when missing: the two codes disagree)."""
+    for r in ctx.totals:
+        if (r["row_kind"], r["variant"], r["scenario"]) == (kind, variant, scenario):
+            return r
+    raise EvalError(f"refused: internal: no rank_totals row {kind}/{variant}/{scenario or '-'}")
+
+
+def _addendum_source(row: Mapping[str, str]) -> str:
+    """The rank_totals.csv row key of an addendum row (``_source`` plus the scenario when set)."""
+    return _source(row) + (f"/{row['scenario']}" if row.get("scenario") else "")
+
+
+def _reconstruction(ctx: _Ctx) -> list[dict[str, str]]:
+    """Spec 06 D-A (NP-01..05): node P/R/F1/FNR of full, b1, b2 and b0, overall (macro mean over attack trials) then
+    per scenario; each value checked against its rank_totals.csv cell. No threshold, comparator or dev_check."""
+    rows: list[dict[str, str]] = []
+    na = (CHANCE_NA_PRF, CHANCE_NA_PRF)
+    for v in PRF_VARIANT_ORDER:
+        for scenario in ("",) + attack_scenarios(ctx.results):
+            vals = node_prf_values([p for _t, p in node_prf_pairs(ctx.results, v, scenario or None)])
+            trow = _find(ctx, KIND_NODE_PRF_SCENARIO if scenario else KIND_NODE_PRF, v, scenario)
+            where = f"scenario {scenario}" if scenario else "overall: macro mean over attack trials"
+            for m in PRF_METRICS:
+                _check(trow, m, vals[m])
+                note = f"{where}; {_P_NOTE}" if m == "node_precision_mean" else where
+                rows.append(_row(ctx.split, TABLE_RECON, "", v, SCOPE_ALL, m, vals[m], chance=na,
+                                 n_trials=int(vals[_PRF_TRIALS[m]] or 0),
+                                 source=f"{_addendum_source(trow)}:{m}", note=note))
+    return rows
+
+
+def _auc_note(n_pos: int, n_neg: int, auc: float | None) -> str:
+    """n_pos / n_neg and, when undefined, why (AUC-03)."""
+    base = f"n_pos {n_pos}, n_neg {n_neg}"
+    return base + ("; undefined: n_pos or n_neg is 0" if auc is None else "")
+
+
+def _auc(ctx: _Ctx) -> list[dict[str, str]]:
+    """Spec 06 D-B (AUC-01..03): per path variant the pooled AUC with n_pos and n_neg (checked against rank_totals),
+    then the per-trial AUC of each keyed attack trial. Chance line 0.5; no verdict."""
+    rows: list[dict[str, str]] = []
+    ch = (f6(AUC_CHANCE), CHANCE_NA_AUC_POS)
+    for v in PATH_VARIANT_ORDER:
+        vals = auc_values(ctx.results, v)
+        trow = _find(ctx, KIND_AUC_POOLED, v)
+        _check(trow, "auc", vals["auc"])
+        _check(trow, "auc_n_pos", vals["auc_n_pos"], count=True)
+        _check(trow, "auc_n_neg", vals["auc_n_neg"], count=True)
+        src = _addendum_source(trow)
+        pooled = (f"pooled over the {vals['auc_trials']} keyed trials (keyed S06 included, unkeyed left out); "
+                  + _auc_note(vals["auc_n_pos"], vals["auc_n_neg"], vals["auc"]))
+        rows.append(_row(ctx.split, TABLE_AUC, "", v, SCOPE_ALL, "auc_pooled", vals["auc"], chance=ch,
+                         n_trials=int(vals["auc_trials"]), source=f"{src}:auc", note=pooled))
+        for m in ("auc_n_pos", "auc_n_neg"):
+            rows.append(_row(ctx.split, TABLE_AUC, "", v, SCOPE_ALL, m, vals[m], count=True, chance=("", ""),
+                             n_trials=int(vals["auc_trials"]), source=f"{src}:{m}", note="pooled"))
+        for t in ctx.results:
+            if not t.attack:
+                continue
+            tv = auc_trial_values(t, v)
+            rows.append(_row(ctx.split, TABLE_AUC, "", v, SCOPE_ALL, "auc_trial", tv["auc"], chance=ch, n_trials=1,
+                             source=f"out/evaluate/{t.trial_id}/rank.csv auc_trial/{v}:auc",
+                             note=f"trial {t.trial_id}; " + _auc_note(int(tv["auc_n_pos"] or 0),
+                                                                     int(tv["auc_n_neg"] or 0), tv["auc"])))
+    return rows
+
+
+def sweep_values(default: SweepPoint, points: Sequence[SweepPoint]) -> dict[str, Any]:
+    """SW-02 facts over the grid points (every lambda of the grid x every weight point in steps of 0.1; the
+    ``default_w`` check points are not counted): N, points with the same expected rank of every key attack path as
+    at the default weights, min / max of top-1, per-trial MRR, per-key MRR and the S06 margin, and the default
+    point's values. Pure."""
+    grid = [p for p in points if p.kind == "grid"]
+
+    def margin(p: SweepPoint) -> float | None:
+        return None if p.attack_min is None or p.s06_max is None else p.attack_min - p.s06_max
+
+    out: dict[str, Any] = {"points": len(grid), "same_ranks": sum(1 for p in grid if not changed_keys(p, default))}
+    for name, get in (("top1_expected", lambda p: p.top1), ("mrr_expected", lambda p: p.mrr),
+                      ("mrr_per_key_expected", lambda p: p.mrr_per_key), ("s06_margin", margin)):
+        vals = [x for x in (get(p) for p in grid) if x is not None]
+        out[name] = {"default": get(default), "min": min(vals) if vals else None,
+                     "max": max(vals) if vals else None, "undefined": len(grid) - len(vals)}
+    return out
+
+
+_SWEEP_CHANCE = {"top1_expected": ("chance_top1", "chance_pos_top1"), "mrr_expected": ("chance_mrr", "chance_pos_mrr"),
+                 "mrr_per_key_expected": ("chance_per_key_mrr", "chance_pos_per_key_mrr")}
+
+
+def _sensitivity(ctx: _Ctx, sweep: tuple[SweepPoint, Sequence[SweepPoint], Mapping[str, Any]]) -> list[dict[str, str]]:
+    """Spec 06 D-D (SW-02, SW-03): the weight sensitivity over the sweep grid, hop reading (068), with the chance line
+    of full / hop reading beside each ranking metric (over all candidates: any w; over score > 0: default w). The
+    default point's values are checked against the full / hop ``ranking`` row of rank_totals.csv. No verdict, no S06
+    held count, never the word of SW-03."""
+    default, points, _check_facts = sweep
+    sv = sweep_values(default, points)
+    hop = ctx.total(KIND_RANKING, "full", rm.READING_HOP, "")
+    for m in _SWEEP_CHANCE:
+        _check(hop, m, sv[m]["default"])
+    trials = [t.sweep_trial for t in ctx.results if t.sweep_trial is not None]
+    info = informative_sentence(informativeness(trials))
+    base = dict(variant="full", scope=SCOPE_ALL)
+    rows = [_row(ctx.split, TABLE_SWEEP, "", base["variant"], base["scope"], "sweep_points", sv["points"],
+                 count=True, chance=("", ""), source="rank_sweep.csv point_kind grid",
+                 note=f"grid points: every lambda of the grid x every weight point in steps of 0.1; {SWEEP_READING}; "
+                      f"{info}"),
+            _row(ctx.split, TABLE_SWEEP, "", base["variant"], base["scope"], "same_ranks_points", sv["same_ranks"],
+                 count=True, chance=("", ""), source="rank_sweep.csv point_kind grid:same_ranks_as_default",
+                 note=f"same ranks as at the default weights: {sv['same_ranks']} of {sv['points']} points")]
+    for m, (call, cpos) in _SWEEP_CHANCE.items():
+        ch = (hop[call], hop[cpos])
+        for part in ("default", "min", "max"):
+            src = (f"rank_sweep.csv default:{m}" if part == "default" else f"rank_sweep.csv grid:{part}({m})")
+            rows.append(_row(ctx.split, TABLE_SWEEP, "", "full", SCOPE_ALL, f"{m}_{part}", sv[m][part], chance=ch,
+                             n_trials=int(ranking_values([rr for _t, rr in attack_readings(
+                                 ctx.results, "full", rm.READING_HOP)])["attack_trials"]),
+                             source=src, note=f"{SWEEP_READING}; chance over score > 0 at the default weights"))
+    na = (CHANCE_NA_MARGIN, CHANCE_NA_MARGIN)
+    for part in ("default", "min", "max"):
+        src = "rank_sweep.csv default:s06_margin" if part == "default" else f"rank_sweep.csv grid:{part}(s06_margin)"
+        rows.append(_row(ctx.split, TABLE_SWEEP, "", "full", SCOPE_ALL, f"s06_margin_{part}", sv["s06_margin"][part],
+                         chance=na, source=src,
+                         note=f"{SWEEP_READING}; grid points with an undefined margin: {sv['s06_margin']['undefined']}"))
+    for r in rows:
+        if SWEEP_BANNED_WORD in " ".join(r.values()).lower():
+            raise EvalError(f"refused: the weight sensitivity rows would contain the word {SWEEP_BANNED_WORD!r}")
+    return rows
+
+
+def result_rows(results: Sequence[TrialRank], split: str = SPLIT_DEVELOPMENT,
+                sweep: tuple[SweepPoint, Sequence[SweepPoint], Mapping[str, Any]] | None = None
+                ) -> list[dict[str, str]]:
+    """Every results.csv row, table by table (H1-H5, baselines, contested, recall, then the spec 06 section 10 tables:
+    reconstruction quality, pooled ROC-AUC, weight sensitivity). The sweep is computed here when not given
+    (``rank_run.sweep_of``, with its default check)."""
     ctx = _Ctx(results, split)
-    return _h1(ctx) + _h2(ctx) + _h3(ctx) + _h4(ctx) + _h5(ctx) + _baselines(ctx) + _contested(ctx) + _recall(ctx)
+    swept = sweep if sweep is not None else sweep_of(results)
+    return (_h1(ctx) + _h2(ctx) + _h3(ctx) + _h4(ctx) + _h5(ctx) + _baselines(ctx) + _contested(ctx) + _recall(ctx)
+            + _reconstruction(ctx) + _auc(ctx) + _sensitivity(ctx, swept))
 
 
 # ---------------------------------------------------------------- results.md
@@ -520,6 +682,94 @@ def _baseline_md(rows: Sequence[Mapping[str, str]]) -> list[dict[str, str]]:
     return out
 
 
+_RECON_TEXT = (
+    "No verdict: no hypothesis was frozen for these numbers (spec 06 section 10). Per keyed attack trial and variant, "
+    "the top-k paths (k = number of key attack paths; a tie group at the cut read by expectation, decisions 065, 068) "
+    "hold an expected number of distinct `context` = 0 nodes; R = expected key nodes covered / key nodes, P = expected "
+    "key nodes covered / expected nodes held, F1 = 2PR / (P + R) (0 when P = R = 0), FNR = 1 - R. Key nodes = the "
+    "`context` = 0 key attack nodes (the H4 all-node basis; ST-05 copies merged, which covers `member_logon_uids` "
+    "only). b0 takes labelled units in rank order up to full's expected all-node budget, on the same all-node basis "
+    "(NP-02, NP-05). P counts a held event the key does not list as 'not in key': the key lists the move evidence "
+    "only, so P is the share of key nodes among the held nodes. P and F1 are undefined (`-`) when the expected number "
+    "of nodes held is 0. Per scenario: mean over its attack trials; overall: macro mean over attack trials; S06 and "
+    "unkeyed trials have no key nodes and are left out. NP-04 (internal consistency): full's R equals the H4 all-node "
+    "full recall of every trial, else the run refuses; the independent check is the data-checker's recomputation.")
+
+
+# ATK-EV-39: P is E[key nodes covered] / E[nodes held] (a ratio of expectations, decision 076 item 1), and F1 is
+# built from that P; both headers say so.
+_P_HEAD, _F1_HEAD = "P (ratio of expectations)", "F1 (from P as a ratio of expectations)"
+
+
+def _reconstruction_md(rows: Sequence[Mapping[str, str]]) -> list[str]:
+    """The "Reconstruction quality" block: one line per (scenario or overall, variant) with P, R, F1, FNR."""
+    rec = [r for r in rows if r["table"] == TABLE_RECON]
+    by: dict[tuple[str, str], dict[str, Mapping[str, str]]] = {}
+    for r in rec:
+        where = r["source"].split(":")[0].rsplit("/", 1)[-1] if "node_prf_scenario" in r["source"] else "overall"
+        by.setdefault((where, r["variant"]), {})[r["metric"]] = r
+    order = sorted({w for w, _v in by if w != "overall"}) + ["overall"]
+    out = []
+    for where in order:
+        for v in PRF_VARIANT_ORDER:
+            cells = by.get((where, v))
+            if not cells:
+                continue
+            out.append({"scenario": where, "variant": v, _P_HEAD: cells["node_precision_mean"]["observed"],
+                        "R": cells["node_recall_mean"]["observed"], _F1_HEAD: cells["node_f1_mean"]["observed"],
+                        "FNR": cells["node_fnr_mean"]["observed"],
+                        "trials (R / P / F1)": f"{cells['node_recall_mean']['n_trials']} / "
+                                               f"{cells['node_precision_mean']['n_trials']} / "
+                                               f"{cells['node_f1_mean']['n_trials']}"})
+    return _block(f"Reconstruction quality (handoff 14.3 part 1); chance line {CHANCE_NA_PRF}",
+                  ("scenario", "variant", _P_HEAD, "R", _F1_HEAD, "FNR", "trials (R / P / F1)"), out, _RECON_TEXT)
+
+
+def _auc_md(rows: Sequence[Mapping[str, str]]) -> list[str]:
+    """The "Pooled ROC-AUC" block: pooled and per-trial AUC per path variant with n_pos, n_neg, chance 0.5 and the
+    AUC-02 / AUC-03 limits."""
+    out = []
+    for r in rows:
+        if r["table"] != TABLE_AUC or r["metric"] not in ("auc_pooled", "auc_trial"):
+            continue
+        out.append({"variant": r["variant"], "scope": "pooled" if r["metric"] == "auc_pooled" else "per trial",
+                    "AUC": r["observed"] or "undefined", "chance": r["chance_all"], "note": r["note"]})
+    text = ("No verdict. Positives = candidates matching a key attack path (node reading, EV-06) in keyed attack "
+            "trials; negatives = every other candidate of a keyed trial (non-matching candidates of attack trials and "
+            "every candidate of the keyed S06 trials); unkeyed trials are left out; b0 ranks units, not paths, and is "
+            "left out. AUC = Mann–Whitney on the 12-decimal written scores, ties counted 0.5; chance line 0.5.\n\n"
+            f"- {LIMIT_AUC_POOLED}\n- {LIMIT_AUC_NEGATIVES}")
+    return _block("Pooled ROC-AUC (optional, handoff 14.2)", ("variant", "scope", "AUC", "chance", "note"), out, text)
+
+
+def _sensitivity_md(rows: Sequence[Mapping[str, str]]) -> list[str]:
+    """The "Weight sensitivity (development)" block (SW-02, SW-03, SW-04): the SW-04 sentence first (the sweep never
+    moves a frozen value, so the block cannot be read as a re-tuning), then the same-rank count, min / max per metric
+    with the default point and the chance line beside, the informativeness sentence and the reading."""
+    sw = {r["metric"]: r for r in rows if r["table"] == TABLE_SWEEP}
+    if not sw:
+        return []
+    n, same = sw["sweep_points"]["observed"], sw["same_ranks_points"]["observed"]
+    info = sw["sweep_points"]["note"].split(f"{SWEEP_READING}; ", 1)[-1]      # the sentence itself holds "; "
+    table = []
+    for m, label in (("top1_expected", "top-1 (expected)"), ("mrr_expected", "per-trial MRR"),
+                     ("mrr_per_key_expected", "per-key MRR"), ("s06_margin", "S06 margin")):
+        d = sw[f"{m}_default"]
+        table.append({"metric": label, "default point": d["observed"], "min": sw[f"{m}_min"]["observed"],
+                      "max": sw[f"{m}_max"]["observed"], "chance (all candidates, any w)": d["chance_all"],
+                      "chance (score > 0, default w)": d["chance_pos"]})
+    text = (f"{SW04_SENTENCE} No verdict. Same ranks as at the default weights: {same} of {n} points (every lambda of the grid x every "
+            f"weight point in steps of 0.1). Reading: {SWEEP_READING}. The sweep is {info}. Min and max are taken "
+            "over the same points; the S06 margin is given as its min and max only (no count of points). Source: "
+            "`rank_sweep.csv`.")
+    block = _block("Weight sensitivity (development)",
+                   ("metric", "default point", "min", "max", "chance (all candidates, any w)",
+                    "chance (score > 0, default w)"), table, text)
+    if SWEEP_BANNED_WORD in "\n".join(block).lower():
+        raise EvalError(f"refused: the weight sensitivity table would contain the word {SWEEP_BANNED_WORD!r}")
+    return block
+
+
 def results_md(results: Sequence[TrialRank], rows: Sequence[Mapping[str, str]], split: str = SPLIT_DEVELOPMENT) -> str:
     """The results.md text (spec 06 section 3.3): header, one table per hypothesis, baselines, contested reading,
     recall, per-key and per-trial MRR, the processing-time pointer, the stated limits and the wording block."""
@@ -558,6 +808,7 @@ def results_md(results: Sequence[TrialRank], rows: Sequence[Mapping[str, str]], 
     lines += _block("Per-trial MRR inputs (full, node reading; first match of any key attack path)",
                     ("trial", "n", "n_pos", "top1_expected", "chance_top1", "chance_pos_top1", "rr_expected",
                      "chance_rr", "chance_pos_rr", "contested"), _per_trial_rows(results))
+    lines += _reconstruction_md(rows) + _auc_md(rows) + _sensitivity_md(rows)
     lines += ["", "## Processing time", "",
               "Processing time per stage is recorded by the runner in `out/run_trial/development/run_log.md` "
               "(machine-dependent; referenced only, never copied here, so this file stays deterministic; RS-07)."]
@@ -566,13 +817,16 @@ def results_md(results: Sequence[TrialRank], rows: Sequence[Mapping[str, str]], 
     return "\n".join(lines) + "\n"
 
 
-def results_files(results: Sequence[TrialRank], split: str = SPLIT_DEVELOPMENT) -> dict[str, str]:
+def results_files(results: Sequence[TrialRank], split: str = SPLIT_DEVELOPMENT,
+                  sweep: tuple[SweepPoint, Sequence[SweepPoint], Mapping[str, Any]] | None = None) -> dict[str, str]:
     """results.md and results.csv texts; EvalError when either would carry a forbidden phrase (RS-10) or the
     split is not development (RS-01: test results need the key lock and an owner-approved test allowlist)."""
     if split != SPLIT_DEVELOPMENT:
         raise EvalError("refused: results tables on test trials need the T5.7 key lock and an owner-approved test "
                         "allowlist (PLAN 10.4)")
-    rows = result_rows(results, split)
+    # the two-argument call stays the default path (callers and tests that wrap result_rows(results, split)); the
+    # sweep is computed inside result_rows then
+    rows = result_rows(results, split) if sweep is None else result_rows(results, split, sweep)
     files = {RESULTS_MD: results_md(results, rows, split), RESULTS_CSV: csv_text(RESULTS_COLUMNS, rows)}
     for name, text in files.items():                           # RS-10, ATK-EV-23: both files are scanned
         hits = forbidden_hits(text)

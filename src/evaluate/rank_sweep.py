@@ -78,6 +78,7 @@ class SweepPoint:
     key_ranks: tuple[tuple[str, str, float | None], ...]   # (trial, key path, expected rank)
     s06_max: float | None
     attack_min: float | None
+    mrr_per_key: float | None = None            # spec 06 SW-01: mean over key attack paths of 1 / expected rank
 
 
 def components_of(ranked: Sequence[Mapping[str, str]]) -> tuple[PathComponents, ...]:
@@ -165,13 +166,16 @@ def grid_points(default_lam: float, default_w: Sequence[float]) -> list[tuple[st
 def evaluate_point(trials: Sequence[SweepTrial], lam_label: str, lam: float, w: tuple[float, float, float],
                    kind: str) -> SweepPoint:
     """Metrics at one point: per key attack path its expected rank (065), per attack trial the top-1 credit and RR
-    of its first match of any key attack path (handoff 14.2: per trial), their means, and the S06 inputs (highest
-    score of a keyed trial without attack paths; lowest first-match score of the attack trials)."""
+    of its first match of any key attack path (handoff 14.2: per trial), their means, the per-key MRR (070 primary,
+    spec 06 SW-01: each key attack path's own expected RR, 0 when unmatched, averaged over key attack paths; hop
+    reading as the rest of the sweep) and the S06 inputs (highest score of a keyed trial without attack paths; lowest
+    first-match score of the attack trials)."""
     key_ranks: list[tuple[str, str, float | None]] = []
     top1: list[float] = []
     rrs: list[float] = []
     s06: list[float] = []
     attack_low: list[float] = []
+    key_rrs: list[float] = []
     for t in trials:
         if not t.keyed:
             continue
@@ -183,6 +187,7 @@ def evaluate_point(trials: Sequence[SweepTrial], lam_label: str, lam: float, w: 
         for kid, hit in t.key_matches:
             pl = placement(cands, hit)
             key_ranks.append((t.trial_id, kid, pl.rank_expected))
+            key_rrs.append(pl.rr("expected"))
             firsts.append(pl.first_score)
         trial_pl = placement(cands, frozenset().union(*(h for _k, h in t.key_matches)))
         top1.append(trial_pl.top1_expected)
@@ -192,7 +197,8 @@ def evaluate_point(trials: Sequence[SweepTrial], lam_label: str, lam: float, w: 
     return SweepPoint(lam_label=lam_label, lam=lam, w=w, kind=kind,
                       top1=math.fsum(top1) / len(top1) if top1 else None,
                       mrr=math.fsum(rrs) / len(rrs) if rrs else None, key_ranks=tuple(key_ranks),
-                      s06_max=max(s06) if s06 else None, attack_min=min(attack_low) if attack_low else None)
+                      s06_max=max(s06) if s06 else None, attack_min=min(attack_low) if attack_low else None,
+                      mrr_per_key=math.fsum(key_rrs) / len(key_rrs) if key_rrs else None)
 
 
 def run_sweep(trials: Sequence[SweepTrial], default_lam: float, default_w: Sequence[float]
