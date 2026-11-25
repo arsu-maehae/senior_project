@@ -193,6 +193,39 @@ def test_failed_attempt_spec_rejects_unsafe_arguments(scenario, trial, attempt):
         archive.failed_attempt_spec(scenario, trial, attempt)
 
 
+# Decisions 034 and 052 as amended by 078 (owner, 2026-11-26): S06 x10_v2 trials are numbered t11..t20.
+
+def test_failed_attempt_spec_s06_is_numbered_t11_to_t20():
+    s = archive.failed_attempt_spec("s06", "t11", 1)
+    assert s.label == "x10_v2_failed_s06_attempt_1"
+    assert tuple(s.scenarios) == ("s06",) and tuple(s.trials) == ("t11",) and s.source_prefix == "x10_v2/"
+    assert tuple(archive.failed_attempt_spec("s06", "t20", 3).trials) == ("t20",)
+
+
+@pytest.mark.parametrize("trial", ["t01", "t10", "t21", "t99", "t00", "t1", "t110", "t11/.."])
+def test_failed_attempt_spec_s06_refuses_numbers_outside_t11_t20(trial):
+    with pytest.raises(ValueError):
+        archive.failed_attempt_spec("s06", trial, 1)
+
+
+def test_archive_spec_accepts_trials_above_t10_but_never_t00():
+    s = archive.ArchiveSpec(label="x10_v2_failed_s06_attempt_1", scenarios=("s06",), trials=("t11",),
+                            source_prefix="x10_v2/")
+    assert s.trials == ("t11",)
+    for bad in ("t00", "t100", "t1"):
+        with pytest.raises(ValueError):
+            archive.ArchiveSpec(label="x10_v2_failed_s06_attempt_1", scenarios=("s06",), trials=(bad,),
+                                source_prefix="x10_v2/")
+
+
+def test_validator_and_retire_tool_use_the_same_v2_series():
+    """The two copies of the series (x10_validate is stdlib-only) must never drift apart."""
+    from x10_validate import cli as vcli
+    assert set(vcli.X10_V2_SCENARIOS) == set(archive.FAILED_SCENARIOS)
+    for s in vcli.X10_V2_SCENARIOS:
+        assert vcli.source_trials(vcli.X10_V2, s) == archive.FAILED_SERIES.get(s, archive.FAILED_DEFAULT_TRIALS), s
+
+
 def test_spec_selecting_t00_is_refused_by_the_plan_builder(w):
     before = tree(w.repo)
     with pytest.raises((archive.ArchiveError, ValueError)):

@@ -620,3 +620,18 @@ def test_verify_failed_archive_empty_and_flipped_byte(w):
     victim.write_bytes(victim.read_bytes() + b"!")
     v = archive.verify_archive(roots_of(w.repo), spec)
     assert not v.ok and v.verified == v.expected - 1
+
+
+def test_retire_an_s06_t11_attempt_end_to_end(tmp_path):
+    """034/052 amended by 078 (owner, 2026-11-26): S06 x10_v2 trials are numbered t11..t20 and a failed one is
+    retired like any other v2 attempt, so its number can be run again."""
+    w6 = build_failed(tmp_path, scenario="s06", trial="t11")
+    assert w6.label == "x10_v2_failed_s06_attempt_1"
+    res = run_retire(w6.repo, 1, "s06", "t11")
+    assert res.ok and res.expected == res.verified == len(w6.moved)
+    for rel in w6.moved:
+        assert not (w6.repo / rel).exists(), f"left on the normal path: {rel}"
+        assert (w6.repo / w6.dest_of(rel)).read_bytes() == w6.initial[rel], f"bad copy: {rel}"
+    assert (w6.repo / "data/processed" / w6.label / "s06_t11.sqlite3").is_file()
+    assert live_paths(w6.repo, "s06", "t11", label=w6.label) == []
+    assert archive.verify_archive(roots_of(w6.repo), archive.failed_attempt_spec("s06", "t11", 1)).ok

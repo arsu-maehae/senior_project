@@ -258,3 +258,58 @@ def test_v2_verdict_expected_is_not_a_fixed_ten(tmp_path):
     assert run_cli(tmp_path, "report", "--source", "x10_v2") == 0
     text = (tmp_path / "out/x10_validate_v2/report.md").read_text(encoding="utf-8")
     assert "1 / 10" not in text and "1/10" not in text
+
+
+# ============================================================================ S06 series t11..t20
+# Decisions 034 and 052 as amended by 078 (owner, 2026-11-26): new S06 trials arrive in x10_v2 numbered from
+# trial_11 (all test, minimum 5 accepted), so they never collide with the old S06 ids t01..t10.
+
+S06_SERIES = tuple(f"t{n:02d}" for n in range(11, 21))
+
+
+def put_s06_v2(repo: Path, tid: str) -> None:
+    put_db(repo, tid)
+    put_ingest(repo, tid, source_dir=f"data/incoming/x10_v2/S06/trial_{tid.split('_t')[1]}")
+
+
+def test_s06_is_a_v2_scenario_numbered_from_t11():
+    assert "s06" in cli.X10_V2_SCENARIOS
+    assert cli.X10_V2_SERIES == {"s06": S06_SERIES}
+    assert cli.source_trials(cli.X10_V2, "s06") == S06_SERIES
+    for s in ("s01", "s04", "s05", "s07"):
+        assert cli.source_trials(cli.X10_V2, s) == cli.X10_TRIALS
+    assert cli.source_trials(cli.X10, "s06") == cli.X10_TRIALS      # v1 keeps t01..t10
+
+
+def test_v2_expected_ids_take_s06_from_t11_and_the_others_from_t01():
+    ids = set(cli.expected_trial_ids(cli.X10_V2))
+    assert {f"s06_t{n}" for n in range(11, 16)} <= ids               # the minimum of 5
+    assert not {f"s06_t{n:02d}" for n in range(1, 11)} & ids
+    assert "s06_t16" not in ids
+    assert {f"s04_t{n:02d}" for n in range(1, 6)} <= ids and "s04_t11" not in ids
+
+
+def test_v1_expected_ids_unchanged_by_the_s06_series():
+    ids = cli.expected_trial_ids(cli.X10)
+    assert [i for i in ids if i.startswith("s06_")] == [f"s06_t{n:02d}" for n in range(1, 11)]
+
+
+def test_v2_discover_keeps_s06_only_inside_its_series(tmp_path):
+    for tid in ("s06_t03", "s06_t11", "s06_t21"):
+        put_s06_v2(tmp_path, tid)
+    assert cli.discover(tmp_path, cli.X10_V2) == ["s06_t11"]
+
+
+def test_v2_run_skips_an_s06_trial_outside_its_series(tmp_path, capsys):
+    put_s06_v2(tmp_path, "s06_t03")
+    assert run_cli(tmp_path, "run", "--source", "x10_v2", "--trials", "s06_t03") == 0
+    assert "s06_t03: skipped (outside the x10_v2 series of s06 (t11..t20))" in capsys.readouterr().out
+    assert not (tmp_path / "out/x10_validate_v2/s06_t03.json").exists()
+
+
+def test_v2_run_validates_s06_t11(tmp_path):
+    put_s06_v2(tmp_path, "s06_t11")
+    assert run_cli(tmp_path, "run", "--source", "x10_v2", "--trials", "s06_t11") == 0
+    res = json.loads((tmp_path / "out/x10_validate_v2/s06_t11.json").read_text(encoding="utf-8"))
+    assert res["trial_id"] == "s06_t11" and res["scenario"] == "s06"
+    assert not (tmp_path / "out" / "x10_validate").exists()
