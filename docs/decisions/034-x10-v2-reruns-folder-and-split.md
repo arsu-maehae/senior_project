@@ -35,6 +35,17 @@ Decision 029 numbers replacements from `trial_11`. That is fine for a few replac
 - **Failed v2 trials (Consequences):** "If a v2 trial fails, it is replaced by a new trial in `x10_v2` numbered `trial_11` onwards" is replaced (decision 052 item 6, accepted by the owner 2026-11-17): **any** failed v2 trial is moved to `data/incoming/x10_v2_failed/<scenario>/attempt_N/`, its ingested copies are retired by the `retire-failed` tool, and its number is reused (never `trial_11+`; a failed first trial never takes `trial_01`). A failed 1-trial gate (`trial_01`) stops the scenario until the design is fixed. A later failed trial is retired and its number is run again; the lab stops and asks the owner only if two trials of the same scenario fail in a row.
 - **Split (item 4):** `t01` stays development. The test set is every v2 trial that passed the operational checks by the cutoff, recorded in `docs/lab/test_set.csv`, with a minimum of `t02`–`t05` (4 test trials) per scenario, not a fixed 9. In the table above read "v2 `t02`–`t10`" as "v2 `t02` … `t(N)`, N = accepted by the cutoff". Replacement trials of S03 and S06 are unchanged.
 
+## Amended by decision 078 (owner, 2026-11-26): S06 test trials come from x10_v2 as t11+
+- Item 1: the partial replacements `s06_t11`, `s06_t12` in `data/incoming/x10/` are cancelled and are never run
+  there. `s03_t11` stays as planned.
+- New S06 trials arrive in `data/incoming/x10_v2/S06/trial_11`, `trial_12`, … (ids `s06_t11` onwards; at most
+  `trial_20`). They are numbered from 11 so that they never collide with the old S06 ids `t01`–`t10`. No archive step
+  is needed, and the old S06 copies stay on the normal paths.
+- Split for S06: development `t00`, `t01` (unchanged; old `t01` is kept with the limitation in 078). Test: the
+  accepted v2 trials `t11` … `t(10+N)`. The old `t02`–`t10` are not test (078: t02–t08 fail the tail rule; t09 and
+  t10 failed the validator). Table row S06 reads: development `t00`, `t01` · test v2 `t11` … `t(10+N)`.
+- Item 3 (archive) does not apply to S06.
+
 ## Kill criteria
 If the archive move cannot be verified by hash, it is not done and the v2 trials get a separate path (as in decision 030) instead.
 

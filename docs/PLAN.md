@@ -53,6 +53,7 @@ Never tune code or weights on the test set.
 - [x] 5.5 Every listed event exists in the logs  (verify ok on the six approved keys, 0 failures)
 - [ ] 5.6 Test key drafts → user approves
 - [ ] 5.7 Lock test keys: git tag `answer-keys-locked` (before T10). Gate (AK-21): every hop in an approved key is `confirmed` or explicitly excluded by the owner; no `unconfirmed` hop may remain; every hop has `role` (attack | benign | background)
+  - Test allowlist (T10 test part): read `docs/lab/test_set.csv`, never a `t02`–`t10` pattern. Decision 078 excludes trials in S02, S03 and S06, and S06 test trials are `t11`+ (034 amendment, 2026-11-26).
 
 ## T6. Gate — depends on: T4 — spec: docs/specs/02_gate.md (create with /stage-spec)
 - [x] 6.1 Spec from handoff §7.2 — docs/specs/02_gate.md approved by the owner 2026-11-11 (decisions 037–039)

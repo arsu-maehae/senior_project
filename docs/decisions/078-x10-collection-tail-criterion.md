@@ -1,6 +1,7 @@
 # 078 — Collection-tail criterion for the old ×10 trials (S02, S03, S06 t01–t10)
 
-**Date:** 2026-11-25 · **Status:** accepted (owner, 2026-11-25, after the kill test) ·
+**Date:** 2026-11-25 · **Status:** accepted (owner, 2026-11-25, after the kill test); amended 2026-11-26 (S06 hybrid,
+see the last section) ·
 **Relates to:** [029](029-x10-replacement-rule-and-pass-criteria.md) (pass criteria), [019](019-dev-test-split.md) (split),
 [014](014-cross-host-time-tolerance.md) (cross-host tolerance), [034](034-x10-v2-reruns-folder-and-split.md) / [052](052-lab-stopping-rule.md) (full reruns),
 spec 03_stitch ST-23/ST-26/ST-42/ST-43, `tools/lab` 5-minute tail (commit cf3362b) · **Evidence:**
@@ -128,6 +129,25 @@ The new campaign keeps the 5-minute tail (`tools/lab` `-TailSec 300`).
   at step + 15 s + own skew, raise the threshold in a new record.
 - If the new campaign's coordinator manifests show tails at or above 300 s but validator criterion b still finds
   missing steps, the tail is not the cause, and this criterion is revisited.
+
+## Amended (owner, 2026-11-26): scope, s06_t01 and the S06 test trials
+- **Scope:** the criterion decides test-set membership. A development trial that fails it is kept with a stated
+  limitation; development trials are never replaced because of this rule.
+- **s06_t01 is kept as development.** Its corrected tail is 16 s, which exceeds `link_after_s` (15 s), the after-step
+  window that affects linking. It fails only the skew margin (+18.8 s, minimum 33.8 s). The +0 s kill-test arm showed
+  that the first seconds after the last step matter, and s06_t01 has them.
+  - Limitation: the 16–34 s after the step are missing, and the kill test cannot vouch for them, because s06_t01's
+    own clip (+33.8 s) lay beyond its data.
+- **S06 test trials** come from x10_v2 as `s06_t11` onwards (034 and 052 amendments), not from a full rerun.
+  "Consequences: S06 needs a full rerun" and the development-set bullet above are superseded. The development set
+  and `DEVELOPMENT_TRIALS` are unchanged.
+- **Limitation (machine A / machine B):** S06's development trials (`t00`, `t01`) were collected on machine A with the
+  old procedure, while its test trials (`t11`+) come from machine B with the `tools/lab` scripts of cf3362b
+  (readiness gate, OP_DONE, 5-minute tail). S02 and S03 are machine A only, and the full-rerun scenarios are machine B
+  only, so this split is specific to S06 and is stated with every S06 test figure.
+- **Closed: no 029 replacements for S02 or S03.** Both meet the minimum under 078 (S02 7 test trials, S03 5); their
+  tail-failed trials (S02 t05, t06; S03 t03, t04, t10) are excluded from the test set and not replaced. This closes the
+  open point in "Consequences" above.
 
 ## Committee answer
 **EN:** We set the minimum log tail from the time window the pipeline actually uses to link events: 15 s after the

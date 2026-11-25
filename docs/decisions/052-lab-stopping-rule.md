@@ -30,6 +30,21 @@ Decision 034 plans 10 new trials for each of S01, S04, S05, S07 in `data/incomin
 - Supersedes 034 item 4 "each scenario ends with 9 test trials" and 034 consequence "replaced by `trial_11` onwards"; rerun_plan rule 5 is reworded accordingly. The validator's "full rerun (≥ 6 of 10 fail)" wording is not used for v2.
 - Needs tooling (plan of 2026-11-15): batch `--source x10_v2`, validator `--source x10_v2`, archive of the old S04/S07 `t01`–`t10` (not `t00`), `retire-failed`, clock-file ingest.
 
+## Amended by decision 078 (owner, 2026-11-26): S06 joins the x10_v2 stopping rule, numbered from trial_11
+- Item 1: scope adds S06. Its x10_v2 trials are numbered `trial_11` … `trial_20` (034 amendment). They are all test;
+  there is no new S06 development trial.
+- Item 2: within S06 the numbers run in order from `trial_11`, with no gaps.
+- Item 3: minimum 5 accepted S06 trials (`t11`–`t15`), all test. Continue towards `t20` if time allows.
+- Items 4–5 unchanged; a trial counts on the operational checks only. The 078 tail rule is checked from the
+  coordinator manifest (`D:\evtx_share\manifest.csv`, copied into the repo after each lab day).
+- Item 6 for S06:
+  - The first S06 trial (`trial_11`) is the 1-trial gate. A FAIL stops S06 until the design is fixed, and a failed
+    first trial never takes `trial_11`.
+  - Later failures are retired (`data/incoming/x10_v2_failed/S06/attempt_N/`, `retire-failed`) and the number is run
+    again.
+  - Two failures in a row: stop and ask the owner.
+- Kill criteria: for S06 read "fewer than 4 test trials" as "fewer than 5 accepted S06 trials".
+
 ## Kill criteria
 If fewer than 4 test trials of a scenario pass by the cutoff, that scenario is reported as "test set too small" and not scored as a test set; the owner decides whether to extend the cutoff. If two trials of one scenario fail in a row, the owner is asked before any further trial of that scenario (item 6). If the retire step cannot be verified by hash, the failed attempt is not moved and the next run uses a separate path (as in 034 and 030).
 
