@@ -4,7 +4,14 @@
 =====================================================================================
  VMware twin. Each cycle: clear READY_C -> revert EP-02 + EP-03 -> WAIT for a fresh
  DC_READY (DC-01 must boot first, v2.2 s10) -> boot EP-02/03 -> wait ready ->
- write READY_C -> wait GO -> collect over WinRM -> clear READY_C -> COLLECTED_C -> loop.
+ write READY_C -> wait GO -> check OP_DONE -> collect over WinRM -> clear READY_C ->
+ COLLECTED_C -> loop.
+
+ After DC_READY, C also checks DC-01 port 88 itself before booting, so a stale DC_READY
+ left on the share cannot let EP-02/03 boot first. READY_C is written only after EP-02
+ and EP-03 both answer on 445 and 5985. GO alone does not start collection: OP_DONE.txt
+ must name the same scenario and trial (the 5-minute tail is waited in fire_scenario.ps1
+ before GO). No clock is synchronised by this script.
 
  Migrated to PC-B share: \\192.168.50.98\evtx, account kasuma\evtxwriter.
 
@@ -30,6 +37,7 @@ param(
     [string]$Ep03Vmx = 'E:\VMware\Endpoint-03\Endpoint-02.vmx',
     [string]$Ep02Ip  = '192.168.50.22',
     [string]$Ep03Ip  = '192.168.50.23',
+    [string]$DcIp    = '192.168.50.10',
 
     [switch]$Once,
     [switch]$NoCollect,
@@ -99,6 +107,26 @@ function Wait-Go($last){
         Start-Sleep -Seconds 5
     }
     throw "timed out waiting for GO"
+}
+
+# --- OP_DONE collect guard -------------------------------------------------------------
+function Read-OpDone(){
+    $f = Join-Path $ReadyDir 'OP_DONE.txt'
+    if(Test-Path $f){
+        $parts = ((Get-Content $f -Raw).Trim()) -split '\s+'
+        if($parts.Count -ge 2){ return @{ scen=$parts[0]; trial=[int]$parts[1] } }
+    }
+    return $null
+}
+function Wait-OpDone($g){
+    Log ("  checking OP_DONE for {0} trial {1} before collecting ..." -f $g.scen,$g.trial)
+    $deadline=(Get-Date).AddSeconds($GoTimeoutSec)
+    while((Get-Date) -lt $deadline){
+        $d = Read-OpDone
+        if($d -and $d.scen -eq $g.scen -and $d.trial -eq $g.trial){ Log "  OP_DONE matches GO - collecting"; return }
+        Start-Sleep -Seconds 5
+    }
+    throw ("timed out waiting for OP_DONE '{0} {1}' - NOT collecting" -f $g.scen,$g.trial)
 }
 
 if(-not (Test-Path $VmrunPath)){ throw "vmrun not found at '$VmrunPath' - fix -VmrunPath." }
@@ -212,7 +240,10 @@ do {
     foreach($vm in $MyVMs){ Revert-One $vm }
 
     # v2.2 s10: do not boot endpoints until DC-01 is up for this cycle
-    $lastDcReady = Wait-DcReady $lastDcReady
+    $seen = Wait-DcReady $lastDcReady
+    # live check: a stale DC_READY on the share must not let the endpoints boot before DC-01
+    if(-not (Wait-Port $DcIp 88)){ Log "  DC_READY seen but DC-01 ($DcIp) not answering on 88 - retrying cycle"; continue }
+    $lastDcReady = $seen
 
     # boot endpoints; vmrun start is intermittently flaky, so a failed pass
     # re-reverts and retries (DC stays up - no DC_READY re-wait) instead of crashing.
@@ -232,10 +263,12 @@ do {
 
     $allReady = $true
     foreach($vm in $MyVMs){
-        $ok = Wait-Port $vm.ip 445
+        $missing = @(@(445,5985) | Where-Object { -not (Wait-Port $vm.ip $_) })
+        $ok = ($missing.Count -eq 0)
         if($ok -and $CheckTrust){ $ok = (Check-Trust $vm.ip) }
-        if($ok){ Log ("  READY: {0} ({1})" -f $vm.name, $vm.ip) }
-        else   { $allReady=$false; Log ("  NOT READY: {0} ({1})" -f $vm.name, $vm.ip) }
+        if($ok){ Log ("  READY: {0} ({1}) ports 445/5985" -f $vm.name, $vm.ip) }
+        elseif($missing.Count){ $allReady=$false; Log ("  NOT READY: {0} ({1}) no answer on port(s) {2}" -f $vm.name, $vm.ip, ($missing -join '/')) }
+        else   { $allReady=$false; Log ("  NOT READY: {0} ({1}) trust check failed" -f $vm.name, $vm.ip) }
     }
     if(-not $allReady){ Log "  one or more VMs not ready - retrying cycle"; continue }
 
@@ -247,6 +280,7 @@ do {
         if(-not $Once){ Read-Host "Press ENTER to re-arm for next trial" }
     } else {
         $g = Wait-Go $myLast
+        Wait-OpDone $g
         Collect-Guests $g.scen $g.trial
         Clear-MyFlag
         Write-Collected $g.trial

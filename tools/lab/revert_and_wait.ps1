@@ -4,11 +4,22 @@
 =====================================================================================
  Each cycle: clear READY -> revert my VMs -> (DC owner boots DC FIRST + writes DC_READY;
  EP owner WAITS for a fresh DC_READY before booting) -> wait ready -> write READY ->
- wait GO -> collect guests over WinRM -> clear READY -> write COLLECTED -> loop.
+ wait GO -> check OP_DONE -> collect guests over WinRM -> clear READY -> write COLLECTED -> loop.
 
  BOOT ORDER (v2.2 s10): DC-01 boots first. EP workers do not power on their VMs until
  Owner A has published DC_READY for the current cycle (so EP boot logons get Kerberos
- tickets and the pipeline has clock-offset pairs).
+ tickets and the pipeline has clock-offset pairs). Owner A writes DC_READY only after
+ DC-01 answers on 389 and 88 plus a settle; if DC-01 does not answer, A retries the cycle
+ (it never writes READY_A without DC_READY). Owner B also checks DC-01 port 88 itself
+ before booting, so a stale DC_READY left on the share cannot let EP-01 boot first.
+
+ READY means booted and reachable: READY_<owner> is written only after every VM this
+ owner hosts answers - DC-01 on 88 and 389, endpoints on 445 and 5985, Caldera on 8888.
+
+ COLLECT GUARD: GO alone does not start collection; the worker also needs OP_DONE.txt
+ naming the same scenario and trial (written by fire_scenario.ps1 after the Caldera
+ operation has finished, or by hand). The 5-minute tail is waited in fire_scenario.ps1
+ before GO. No clock is synchronised by this script.
 
  Migrated to PC-B: share = \\192.168.50.98\evtx, account = kasuma\evtxwriter.
 
@@ -110,6 +121,35 @@ function Wait-Go($last){
         Start-Sleep -Seconds 5
     }
     throw "timed out waiting for GO"
+}
+
+# --- OP_DONE collect guard -------------------------------------------------------------
+function Read-OpDone(){
+    $f = Join-Path $ReadyDir 'OP_DONE.txt'
+    if(Test-Path $f){
+        $parts = ((Get-Content $f -Raw).Trim()) -split '\s+'
+        if($parts.Count -ge 2){ return @{ scen=$parts[0]; trial=[int]$parts[1] } }
+    }
+    return $null
+}
+function Wait-OpDone($g){
+    Log ("  checking OP_DONE for {0} trial {1} before collecting ..." -f $g.scen,$g.trial)
+    $deadline=(Get-Date).AddSeconds($GoTimeoutSec)
+    while((Get-Date) -lt $deadline){
+        $d = Read-OpDone
+        if($d -and $d.scen -eq $g.scen -and $d.trial -eq $g.trial){ Log "  OP_DONE matches GO - collecting"; return }
+        Start-Sleep -Seconds 5
+    }
+    throw ("timed out waiting for OP_DONE '{0} {1}' - NOT collecting" -f $g.scen,$g.trial)
+}
+
+# ports a VM must answer on before READY is written
+function Ready-Ports($vm){
+    switch($vm.kind){
+        'dc'      { return @(88,389) }
+        'caldera' { return @($CalderaPort) }
+        default   { return @(445,5985) }
+    }
 }
 
 $Sets = @{
@@ -218,10 +258,13 @@ do {
         Log "  waiting for DC LDAP ($($dc.ip):389) + Kerberos (88)..."
         $dcUp = (Wait-Port $dc.ip 389) -and (Wait-Port $dc.ip 88)
         if($dcUp){ Log "  DC up; settling ${DcSettleSec}s"; Start-Sleep -Seconds $DcSettleSec; Write-DcReady }
-        else { Log "  WARN: DC 389/88 timeout - NOT writing DC_READY" }
+        else { Log "  WARN: DC 389/88 timeout - NOT writing DC_READY; retrying cycle"; continue }
     } else {
         # ---- Owner B: wait for DC before booting the endpoint ----
-        $lastDcReady = Wait-DcReady $lastDcReady
+        $seen = Wait-DcReady $lastDcReady
+        # live check: a stale DC_READY on the share must not let the endpoint boot before DC-01
+        if(-not (Wait-Port $DcIp 88)){ Log "  DC_READY seen but DC-01 ($DcIp) not answering on 88 - retrying cycle"; continue }
+        $lastDcReady = $seen
     }
 
     # boot my non-DC revertable VMs (EP-01 for B; none for A)
@@ -229,13 +272,10 @@ do {
 
     $allReady = $true
     foreach($vm in $MyVMs){
-        switch($vm.kind){
-            'dc'      { $ok = Wait-Port $vm.ip 389 }
-            'caldera' { $ok = Wait-Port $vm.ip $CalderaPort }
-            default   { $ok = Wait-Port $vm.ip 445 }
-        }
-        if($ok){ Log ("  READY: {0} ({1})" -f $vm.name, $vm.ip) }
-        else   { $allReady=$false; Log ("  NOT READY: {0} ({1})" -f $vm.name, $vm.ip) }
+        $ports = @(Ready-Ports $vm)
+        $missing = @($ports | Where-Object { -not (Wait-Port $vm.ip $_) })
+        if($missing.Count -eq 0){ Log ("  READY: {0} ({1}) ports {2}" -f $vm.name, $vm.ip, ($ports -join '/')) }
+        else { $allReady=$false; Log ("  NOT READY: {0} ({1}) no answer on port(s) {2}" -f $vm.name, $vm.ip, ($missing -join '/')) }
     }
     if(-not $allReady){ Log "  one or more VMs not ready - retrying cycle"; continue }
 
@@ -247,6 +287,7 @@ do {
         if(-not $Once){ Read-Host "Press ENTER to re-arm for next trial" }
     } else {
         $g = Wait-Go $myLast
+        Wait-OpDone $g
         Collect-Guests $g.scen $g.trial
         Clear-MyFlag
         Write-Collected $g.trial
