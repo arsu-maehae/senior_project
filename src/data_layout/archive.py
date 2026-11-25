@@ -45,9 +45,15 @@ BOM = b"\xef\xbb\xbf"
 V1_LABEL = batch.ARCHIVE_V1_LABEL
 V1_PREFIX = "x10/"
 V2_PREFIX = batch.V2_SOURCE_PREFIX
-FAILED_SCENARIOS = ("s01", "s04", "s05", "s07")      # decision 034/052: the scenarios rerun in x10_v2
+# decision 034/052: the scenarios rerun in x10_v2; s06 added by the 078 amendment (2026-11-26), numbered from t11
+FAILED_SCENARIOS = ("s01", "s04", "s05", "s06", "s07")
+# The x10_v2 trial numbers a failed attempt may carry, per scenario (default t01..t10). s06 runs t11..t20 so its new
+# trials never collide with the old S06 ids (034 amendment). Same mapping as x10_validate.cli.X10_V2_SERIES (a test
+# checks they are equal; that package is stdlib-only, so it keeps its own copy).
+FAILED_DEFAULT_TRIALS = tuple(f"t{n:02d}" for n in range(1, 11))
+FAILED_SERIES: dict[str, tuple[str, ...]] = {"s06": tuple(f"t{n:02d}" for n in range(11, 21))}
 SCENARIO_RE = re.compile(r"s0[1-9]")
-TRIAL_RE = re.compile(r"t(?:0[1-9]|10)")             # t00 is never selectable (decision 034: t00 stays)
+TRIAL_RE = re.compile(r"t(?:0[1-9]|[1-9]\d)")        # t00 is never selectable (decision 034: t00 stays)
 LABEL_RE = re.compile(r"[a-z0-9_]+")
 TRIAL_ID_LIKE_RE = re.compile(r"s0\d(?:q)?_t\d\d")
 JOURNAL_VERSION = 1
@@ -93,7 +99,7 @@ class ArchiveSpec:
                 raise ValueError(f"bad scenario {s!r}")
         for t in self.trials:
             if not (isinstance(t, str) and TRIAL_RE.fullmatch(t)):
-                raise ValueError(f"bad trial {t!r}: only t01..t10 can be archived (t00 never)")
+                raise ValueError(f"bad trial {t!r}: only t01..t99 can be archived (t00 never)")
         if not (self.source_prefix.endswith("/") and ".." not in self.source_prefix):
             raise ValueError(f"source_prefix must end with '/' and contain no '..': {self.source_prefix!r}")
 
@@ -104,12 +110,14 @@ V1 = ArchiveSpec(V1_LABEL, ("s04", "s07"), tuple(f"t{n:02d}" for n in range(1, 1
 def failed_attempt_spec(scenario: str, trial: str, attempt: int) -> ArchiveSpec:
     """Spec for retiring ONE failed x10_v2 attempt (decision 052 item 6).
 
-    WHY strict arguments: this tool deletes files, so the scenario must be one of the rerun scenarios, the trial
-    t01..t10 and the attempt a positive int; `..`, separators and look-alikes (t1, t010) are ValueErrors."""
+    WHY strict arguments: this tool deletes files, so the scenario must be one of the rerun scenarios, the trial one
+    of that scenario's x10_v2 numbers (``FAILED_SERIES``: s06 t11..t20, the others t01..t10) and the attempt a
+    positive int; `..`, separators and look-alikes (t1, t010) are ValueErrors."""
     if not (isinstance(scenario, str) and scenario in FAILED_SCENARIOS):
         raise ValueError(f"scenario must be one of {FAILED_SCENARIOS}, got {scenario!r}")
-    if not (isinstance(trial, str) and TRIAL_RE.fullmatch(trial)):
-        raise ValueError(f"trial must be t01..t10, got {trial!r}")
+    series = FAILED_SERIES.get(scenario, FAILED_DEFAULT_TRIALS)
+    if not (isinstance(trial, str) and TRIAL_RE.fullmatch(trial) and trial in series):
+        raise ValueError(f"trial must be {series[0]}..{series[-1]} for {scenario}, got {trial!r}")
     if not (type(attempt) is int and attempt > 0):
         raise ValueError(f"attempt must be a positive int, got {attempt!r}")
     return ArchiveSpec(f"x10_v2_failed_{scenario}_attempt_{attempt}", (scenario,), (trial,), V2_PREFIX,

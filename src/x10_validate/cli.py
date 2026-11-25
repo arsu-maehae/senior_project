@@ -26,7 +26,12 @@ REPO = Path(__file__).resolve().parents[2]
 TRIAL_RE = re.compile(r"^(s0\d)(q?)_(t\d\d)$")
 X10_SCENARIOS = ("s02", "s03", "s04", "s06", "s07")
 X10_TRIALS = tuple(f"t{n:02d}" for n in range(1, 11))
-X10_V2_SCENARIOS = ("s01", "s04", "s05", "s07")   # decision 034 / 052; S01 design: decision 036
+# decision 034 / 052; S01 design: decision 036; s06 from trial_11 (034/052 amended by 078, 2026-11-26)
+X10_V2_SCENARIOS = ("s01", "s04", "s05", "s06", "s07")
+# x10_v2 series that do not start at t01. s06 runs t11..t20 so its new test trials never collide with the old S06
+# ids t01..t10 (034 amendment). The retire tool keeps the same mapping (data_layout.archive.FAILED_SERIES; a test
+# checks they are equal). WHY a copy, not an import: this package is stdlib-only (test_stdlib_only).
+X10_V2_SERIES: dict[str, tuple[str, ...]] = {"s06": tuple(f"t{n:02d}" for n in range(11, 21))}
 X10_V2_MIN_ACCEPTED = 5                            # decision 052 item 3
 
 
@@ -46,6 +51,15 @@ X10 = Source("x10", X10_SCENARIOS, X10_TRIALS, "x10_validate", True)
 X10_V2 = Source("x10_v2", X10_V2_SCENARIOS, X10_TRIALS, "x10_validate_v2", False,
                 X10_V2_MIN_ACCEPTED, "data/incoming/x10_v2/")
 SOURCES: dict[str, Source] = {s.name: s for s in (X10, X10_V2)}
+
+
+def source_trials(source: Source, scenario: str) -> tuple[str, ...]:
+    """Trial numbers of ``scenario`` in ``source``: the per-scenario x10_v2 series (``X10_V2_SERIES``; s06 runs
+    ``t11``..``t20``, the others ``source.trials``) for x10_v2, ``source.trials`` for x10. The retire tool accepts the
+    same series (``data_layout.archive.FAILED_SERIES``)."""
+    if source.incoming_prefix is None:
+        return source.trials
+    return X10_V2_SERIES.get(scenario, source.trials)
 
 
 def parse_trial(trial_id: str) -> tuple[str, bool, str]:
@@ -126,8 +140,9 @@ def _safe_write(repo: Path, path: Path, text: str, source: Source = X10) -> None
 def discover(repo: Path, source: Source = X10) -> list[str]:
     """Trial ids with a DB (t00 and scenarios without a 029 design excluded).
 
-    x10: x10 and quarantine DBs, as before. x10_v2: only s01/s04/s05/s07 DBs that have an ingest report of
-    the x10_v2 source (the DB path is shared with the old trials), never quarantine."""
+    x10: x10 and quarantine DBs, as before. x10_v2: only DBs of the v2 scenarios whose
+    trial number is in the scenario's series (``source_trials``) and that have an ingest report of the x10_v2 source
+    (the DB path is shared with the old trials), never quarantine."""
     base = repo / "data" / "processed"
     ids = [p.stem for p in base.glob("s0?_t??.sqlite3")]
     if source.quarantine:
@@ -141,16 +156,18 @@ def discover(repo: Path, source: Source = X10) -> list[str]:
         if tr == "t00" or scen not in DESIGNS:
             continue
         if source.incoming_prefix is not None and (
-                scen not in source.scenarios or load_ingest(repo, t, source)[0] is None):
+                scen not in source.scenarios or tr not in source_trials(source, scen)
+                or load_ingest(repo, t, source)[0] is None):
             continue
         keep.append(t)
     return sorted(keep)
 
 
 def expected_trial_ids(source: Source) -> list[str]:
-    """Trials the report lists when they are not ingested: all 10 for x10; for x10_v2 only the minimum of 052."""
-    trials = source.trials[:source.minimum] if source.minimum else source.trials
-    ids = [f"{s}_{t}" for s in source.scenarios for t in trials]
+    """Trials the report lists when they are not ingested: all 10 for x10; for x10_v2 only the minimum of 052,
+    taken from each scenario's own series (s06: ``t11``..``t15``)."""
+    ids = [f"{s}_{t}" for s in source.scenarios
+           for t in (source_trials(source, s)[:source.minimum] if source.minimum else source_trials(source, s))]
     return ids + ([f"s05q_{t}" for t in source.trials] if source.quarantine else [])
 
 
@@ -215,6 +232,10 @@ def cmd_run(repo: Path, trials: Sequence[str], run_all: bool, no_ingest_check: b
         scen, _, tr = parse_trial(t)
         if no_ingest_check and tr != "t00":
             raise SystemExit(f"--no-ingest-check is allowed for t00 trials only, not {t}")
+        if source.incoming_prefix is not None and tr not in source_trials(source, scen):
+            series = source_trials(source, scen)
+            skipped.append((t, f"outside the {source.name} series of {scen} ({series[0]}..{series[-1]})"))
+            continue
         if not db_path(repo, t).is_file():
             skipped.append((t, "no DB"))
             continue

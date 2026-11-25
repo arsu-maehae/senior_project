@@ -205,8 +205,14 @@ def test_v1_report_on_empty_repo_still_lists_the_v1_expected_trials(tmp_path):
 def test_v2_report_on_empty_repo_names_no_v1_only_scenario(tmp_path):
     assert run_cli(tmp_path, "report", "--source", "x10_v2") == 0
     text = (tmp_path / "out/x10_validate_v2/report.md").read_text(encoding="utf-8")
-    for bad in ("s02_t", "s03_t", "s06_t", "s05q"):
+    for bad in ("s02_t", "s03_t", "s05q"):
         assert bad not in text, bad
+    # S06 joined x10_v2 numbered from trial_11 (034/052 amended by 078, 2026-11-26): only s06_t11..t15 are expected
+    for n in range(1, 11):
+        assert f"s06_t{n:02d}" not in text, n
+    for n in range(11, 16):
+        assert f"s06_t{n:02d}" in text, n
+    assert "s06_t16" not in text
     assert not (tmp_path / "out/x10_validate").exists()
 
 
