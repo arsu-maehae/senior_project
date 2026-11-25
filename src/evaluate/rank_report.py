@@ -920,8 +920,11 @@ _BESIDE_COLS: tuple[str, ...] = (
     "variant", "match_reading", "top1_optimistic", "top1_pessimistic", "mrr_expected", "mrr_optimistic",
     "mrr_pessimistic", "chance_mrr", "chance_pos_mrr", "mrr_rr_mean_expected", "chance_rr_mean",
     "chance_pos_rr_mean", "mrr_per_key_rr_mean", "score_gap_min", "trials_gap_positive")
+# No s06_held column in rank.md: H5 is a hypothesis about `full` only (065), and a held / not held cell on the b1 /
+# b2 rows reads like a verdict on variants that carry no hypothesis. The margin's sign is shown; the H5 dev_check is
+# in results.md. rank_totals.csv keeps s06_held (results.md cross-checks against it).
 _S06_COLS: tuple[str, ...] = ("variant", "match_reading", "s06_trials", "s06_max_score", "key_attack_score_min",
-                              "s06_margin", "s06_held", "share_attack_trials_above_s06", "s06_reason")
+                              "s06_margin", "share_attack_trials_above_s06", "s06_reason")
 _CONTESTED_COLS: tuple[str, ...] = (
     "variant", "match_reading", "contested_set", "attack_trials", "scope_trial_ids", "key_paths", "top1_expected",
     "chance_top1", "chance_pos_top1", "mrr_per_key_expected", "chance_per_key_mrr", "chance_pos_per_key_mrr",
@@ -947,8 +950,9 @@ def _primary_section(totals: Sequence[Mapping[str, str]]) -> list[str]:
     lines += _section(f"H4 labelled basis ({RECALL_BASIS_LABELLED}); chance line {CHANCE_NA_RECALL}",
                       ("attack_trials", "labelled_recall_trials", "full_recall_labelled_mean",
                        "b0_recall_labelled_mean", "trials_full_above_b0_labelled"), b0)
-    lines += _section(f"S06 check, H5 (highest S06 score vs lowest key attack score); chance line {CHANCE_NA_MARGIN}",
-                      _S06_COLS, ranking)
+    lines += _section(f"S06 check (highest S06 score vs lowest key attack score); H5 concerns `full` only, the b1 / "
+                      f"b2 rows are descriptive and carry no hypothesis; the H5 dev_check is in results.md; chance "
+                      f"line {CHANCE_NA_MARGIN}", _S06_COLS, ranking)
     return lines
 
 

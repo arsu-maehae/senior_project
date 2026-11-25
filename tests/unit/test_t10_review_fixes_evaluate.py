@@ -198,7 +198,8 @@ def test_atk_ev_16_rank_md_and_results_agree_with_rank_totals(unmatched_repo) ->
     assert reason in rank_md
     s06 = [r for r in md_section(rank_md, "S06 check") if r["variant"] == "full" and r["match_reading"] == NODE]
     assert len(s06) == 1
-    assert s06[0]["s06_margin"] in ("", "-") and s06[0]["s06_held"] in ("", "-") and s06[0]["s06_reason"] == reason
+    assert s06[0]["s06_margin"] in ("", "-") and s06[0]["s06_reason"] == reason
+    assert "s06_held" not in s06[0]          # no held / not held cell in rank.md (H5 concerns `full` only)
     results = csv_rows((summary(unmatched_repo) / "results.csv").read_text(encoding="utf-8"))
     h5 = primary(results, "H5")
     assert h5["dev_check"] == "not held" and h5["observed"] == "" and h5["note"] == reason

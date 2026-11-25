@@ -277,4 +277,5 @@ A summary block at the end of each big task. Newest at the bottom.
 ### T10 addendum D summary (2026-11-25)
 - **Built:** the rest of 10.2 (node P/R/F1/FNR, AUC, processing time per scenario); 10.5 development part (sweep table, fact-checked summary docs/results/T10-development-summary-2026-11-25.md); 10.6 development part (ablation without the command-line source method, scratch repo, control arm, no verdict).
 - **Decisions:** [076](decisions/076-t10-node-prf-auc-sweep-readings.md) metric readings · [077](decisions/077-t10-ablation-without-cmdline-method.md) ablation.
-- **Open:** owner review of spec 06 §10; test-set parts of 10.4–10.6 (need T5.7 and a test allowlist decision); minor: src/run_trial/ablation.py docstring says "proves" (should say "shows on the development trials"); rank.md carries T9's s06_held column for b1/b2 (reads like a verdict on non-hypothesis variants).
+- **Open:** owner review of spec 06 §10; test-set parts of 10.4–10.6 (need T5.7 and a test allowlist decision).
+- 2026-11-25 wording fixes: ablation.py docstring "proves" → "shows on the 9 development trials" (d136e62); rank.md S06 table drops the s06_held column and says H5 concerns `full` only, b1/b2 rows descriptive, dev_check in results.md (rank_totals.csv unchanged; only out/evaluate/development/rank.md regenerated).
