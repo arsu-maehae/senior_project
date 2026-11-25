@@ -14,7 +14,7 @@ decision 020):
    run_trial --development --repo <scratch>`` with no flag, then the dry run's comparison with the on-disk ``out/``
    (same normalisation list, chained proof, folder-set check: ``dryrun.compare_all`` / ``folder_problems``). Unless
    every file matches and the folder set is exact, the ablation stops: nothing is copied and nothing is swapped.
-   This proves, in the same invocation, that the default side is what the code reproduces.
+   This shows, in the same invocation and on the 9 development trials, that the code reproduces the default side.
 4. **Ablated arm**: a second scratch repo, ``... --stitch-disable-method cmdline_target`` (AB-02; the runner leaves
    out ``--results``, AB-09). Refuse if the scratch ``out/evaluate/development`` holds ``results.md`` /
    ``results.csv``. Copy the scratch ``out/{stitch,label,score,evaluate}/<t>/`` of the 9 trials and
